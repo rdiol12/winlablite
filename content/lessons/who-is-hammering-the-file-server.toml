@@ -1,0 +1,112 @@
+[lesson]
+id = "who-is-hammering-the-file-server"
+title = "Who is hammering the file server?"
+module = "operations"
+order = 22
+lab = "ad-ds-basics"
+node = "fs01"
+nodes = ["dc01", "fs01", "pc01"]
+exercise = "who-is-hammering"
+minutes = 45
+summary = "The file server is slow and the office is busy: read the load with Resource Monitor, Get-SmbSession, Get-SmbOpenFile and performance counters, then find the person and the job behind it."
+why = '''
+"The K: drive is slow today" is one of the calls every admin gets, and the
+answer is almost never "buy a bigger server". Something or someone is using
+it harder than usual: a scanner that saves every page as a new file, a
+recorded meeting copied to the department folder and then into a home
+folder, a sync tool stuck in a loop. The job is to go from "slow" to a name
+and a reason, with evidence, before anyone touches a setting.
+
+Windows has everything for that on the server itself. Resource Monitor shows
+which files are being read and written right now and who is connected to
+port 445. Get-SmbSession lists every client session with its account and
+computer, Get-SmbOpenFile every file held open and by whom. The SMB Server
+performance counters measure the bytes per share and per session, and a
+counter log keeps them so you can show what the afternoon looked like. The
+files themselves say the rest: their size, when they were written, and
+their owner, the account that created them.
+
+In this lab the load is real: the staff you onboarded work on the file
+server all day (the Office window), and on a busy afternoon some of them
+copy big scans and recordings to their department's folder and on into
+their home folder. You find out who, from the server, the way you would at
+work.
+'''
+concepts = [
+  "Resource Monitor (resmon): the Disk tab names the files being read and written (SMB writes show under System), the Network tab's TCP Connections list who is connected to port 445",
+  "Get-SmbSession: one row per client session with ClientUserName, ClientComputerName, NumOpens and how long it has been there",
+  "Get-SmbOpenFile: every file a client holds open on the server, with its Path and ClientUserName; Close-SmbOpenFile closes one, which is rarely the right first move",
+  "The SMB Server Shares and SMB Server Sessions counter sets: Data Bytes/sec, Read Bytes/sec and Write Bytes/sec per share and per session",
+  "A counter log (Data Collector Set) made with logman keeps the samples in a .blg file: the evidence of what the load looked like, read back with Import-Counter or Performance Monitor",
+  "A file's owner (Get-Acl ... .Owner) is the account that created it: big, recent files and their owners point at the person; the file's name and folder point at the job",
+]
+steps = [
+  "Before you start: the staff must be working on fs01 (the lesson onboard-new-starters: accounts, department folders in the Company share, home folders, first passwords typed in Office > Staff list). In the Office window turn the workday on and make it a busy afternoon: Busy day on, and the lab clock at the end-of-day saves (winlab clock jump 16:30 on a weekday). The big copies come in then.",
+  "On fs01, start the evidence first, a counter log of the file server's load every 15 seconds: logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" \"\\PhysicalDisk(*)\\Disk Bytes/sec\" \"\\Processor(_Total)\\% Processor Time\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, then logman start FileServerLoad. logman query FileServerLoad shows it Running.",
+  "Look live: Get-Counter -Counter '\\SMB Server Shares(*)\\Data Bytes/sec' -SampleInterval 5 -MaxSamples 6. The busiest instance is the share being hammered (Company, or Home$ when the copies go on into home folders).",
+  "Who is connected: Get-SmbSession | Sort-Object NumOpens -Descending | Format-Table ClientUserName, ClientComputerName, NumOpens, SecondsExists. Run it a few times during the busy minutes: sessions come and go as people work.",
+  "What they hold open: Get-SmbOpenFile | Format-Table ClientUserName, Path -AutoSize. A big copy in progress shows as one person holding one large file in their department's folder.",
+  "Resource Monitor: run resmon on fs01. On the Disk tab, Disk Activity sorted by Write (B/sec) names the files being written right now; on the Network tab, TCP Connections on local port 445 list the clients and how much each sends.",
+  "Let the files speak: Get-ChildItem -Path D:\\Shares -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round($_.Length / 1MB, 1)}}, LastWriteTime, @{n='Owner';e={(Get-Acl -LiteralPath $_.FullName).Owner}}. The big, recent ones and their owner are your person; the file's name says what the job is.",
+  "Match it up: the owner's account is in Get-SmbSession's ClientUserName, the client computer is the PC they sit at (Resolve-DnsName on its address if the session shows one), and the Office window's feed says what they were doing at that minute.",
+  "Write it down on fs01 in C:\\winlab\\hammering.txt, one fact per line: account <their sAMAccountName>, pc <the computer they work from>, file <the full path of the big file on fs01>, job <what they were doing, in a few words>.",
+  "Stop the log and read it back: logman stop FileServerLoad; Import-Counter -Path (Get-ChildItem C:\\PerfLogs -Recurse -Filter 'FileServerLoad*.blg' | Select-Object -First 1).FullName | ForEach-Object CounterSamples | Where-Object Path -like '*smb server shares*' | Sort-Object CookedValue -Descending | Select-Object -First 5 Timestamp, InstanceName, CookedValue. Or open the .blg in Performance Monitor. Then press Check my work.",
+]
+pitfalls = [
+  "Closing sessions or open files to make the server fast again: the person loses their work and does it again five minutes later. Find out first; the fix is a word with them, a quota, or moving the job, not Close-SmbSession.",
+  "One look is not evidence. Sessions and open files change every few seconds; a counter log over the busy period is what you show the manager.",
+  "Get-SmbSession run once, at the wrong moment, shows nothing: a copy of a few megabytes is over in seconds. Watch during the busy minutes, and use the files' owners and times for what already happened.",
+  "The owner of a file written by an administrator is Administrators, not the person: only files the staff wrote themselves name them.",
+  "Counter instances are only there while something uses them: an SMB Server Sessions instance appears with the session and goes with it.",
+]
+further = [
+  "Microsoft Learn: Get-SmbSession, Get-SmbOpenFile",
+  "Microsoft Learn: logman create counter, Import-Counter",
+  "Microsoft Learn: Performance tuning for SMB file servers",
+  "Next: disk-housekeeping puts quotas and file screens on the shares, so one person's copies cannot fill them",
+]
+
+[[verify]]
+label = "who is connected to the file server now"
+node = "fs01"
+cmd = "Get-SmbSession | Sort-Object NumOpens -Descending | Format-Table ClientUserName, ClientComputerName, NumOpens, SecondsExists -AutoSize"
+
+[[verify]]
+label = "the files held open"
+node = "fs01"
+cmd = "Get-SmbOpenFile | Format-Table ClientUserName, Path -AutoSize"
+
+[[verify]]
+label = "the biggest files on the shares and their owners"
+node = "fs01"
+cmd = "Get-ChildItem -Path D:\\Shares -Recurse -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 8 FullName, @{n='MB';e={[math]::Round($_.Length / 1MB, 1)}}, LastWriteTime, @{n='Owner';e={(Get-Acl -LiteralPath $_.FullName).Owner}} | Format-Table -AutoSize"
+
+[[verify]]
+label = "the counter log"
+node = "fs01"
+cmd = "logman query FileServerLoad"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "On the file server, which cmdlet lists every client session with its account and computer?"
+answer = "Get-SmbSession"
+wrong = ["Get-SmbShare", "Get-NetTCPConnection -LocalPort 3389", "Get-SmbMapping"]
+why = "Get-SmbSession shows ClientUserName and ClientComputerName per session; Get-SmbMapping is the client's view of its own drives."
+
+[[quiz]]
+q = "Which counter set measures the bytes per share on an SMB file server?"
+answer = "SMB Server Shares (Data Bytes/sec per share)"
+wrong = ["SMB Client Shares", "Network Adapter(*)\\Bytes Total/sec", "LogicalDisk(*)\\% Free Space"]
+why = "SMB Server Shares has one instance per share; SMB Client Shares is the client's side, and the adapter counters do not split by share."
+
+[[quiz]]
+q = "A 12 MB file appeared in the Finance folder ten minutes ago. What names the account that wrote it?"
+answer = "Its owner: (Get-Acl -LiteralPath <file>).Owner"
+wrong = ["Its LastAccessTime", "The share's permissions", "Get-SmbShare -Name Finance"]
+why = "The account that creates a file becomes its owner, unless it is an administrator, whose files are owned by Administrators."
+
+[[quiz]]
+q = "Why start a counter log before you go looking?"
+answer = "Sessions and open files change by the second; the log is the evidence of the whole busy period"
+wrong = ["Get-SmbSession only works while a log runs", "Without it the counters reset", "Resource Monitor needs it"]
+why = "A log made with logman keeps the samples in a .blg file you can read back with Import-Counter or show in Performance Monitor."

@@ -1,0 +1,80 @@
+[lesson]
+id = "join-a-member"
+title = "Join a member server to the domain"
+module = "identity"
+order = 20
+lab = "ad-ds-basics"
+node = "fs01"
+role = "domain-join"
+exercise = "join-a-member"
+minutes = 30
+summary = "Point a server's DNS at the domain controller, join it, and prove the secure channel."
+why = '''
+Joining a computer to the domain creates a computer account and a shared secret,
+the machine password, that the server uses to prove who it is from then on. Once
+joined, domain users can log on to it, Group Policy applies, and Kerberos works for
+every service it hosts. Almost every join failure is the same mistake: the server
+asks a DNS server that knows nothing about the domain, so it cannot find a DC.
+
+The secure channel is the thing to understand. It is renewed every thirty days,
+it breaks when a machine is restored from an old snapshot, and the symptom is the
+famous "the trust relationship between this workstation and the primary domain
+failed". Test-ComputerSecureChannel tells you in one line whether it is healthy.
+'''
+concepts = [
+  "DNS first: a member must resolve _ldap._tcp.dc._msdcs.<domain> before anything else can work",
+  "Computer account: an object in AD (default container CN=Computers) with its own password",
+  "Secure channel: the authenticated connection a member keeps with a DC; Test-ComputerSecureChannel checks it",
+  "Join permissions: by default any authenticated user may join ten computers; production delegates this to a group",
+]
+steps = [
+  "On fs01, find the interface: Get-NetAdapter. Then set DNS to the DC: Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10.",
+  "Prove resolution works before joining: Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab.",
+  "Join: Add-Computer -DomainName corp.lab -Credential (Get-Credential CORP\\Administrator) -Restart.",
+  "After the reboot, log on as CORP\\Administrator and run Test-ComputerSecureChannel -Verbose.",
+  "On dc01, find the new computer account: Get-ADComputer fs01 -Properties OperatingSystem, LastLogonDate.",
+  "Move it out of CN=Computers into an OU where policy can reach it later: Move-ADObject (Get-ADComputer fs01).DistinguishedName -TargetPath 'OU=Servers,...' once that OU exists.",
+]
+pitfalls = [
+  "Joining with the DC's IP as the domain name works by accident and breaks later; always use the DNS name.",
+  "Restoring a member from a snapshot older than the machine password resets the trust; Reset-ComputerMachinePassword or re-join.",
+  "A member that was cloned from a prepared image must have been sysprepped, or two machines share a SID.",
+]
+further = [
+  "Microsoft Learn: Join a computer to a domain",
+  "Microsoft Learn: Test-ComputerSecureChannel",
+]
+
+[[verify]]
+label = "member of the domain"
+node = "fs01"
+cmd = "(Get-CimInstance Win32_ComputerSystem).Domain"
+
+[[verify]]
+label = "secure channel healthy"
+node = "fs01"
+cmd = "Test-ComputerSecureChannel"
+
+[[verify]]
+label = "DNS points at the DC"
+node = "fs01"
+cmd = "(Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object ServerAddresses).ServerAddresses"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A join fails with 'domain could not be contacted'. What do you check first?"
+answer = "That the server's DNS points at a domain controller"
+wrong = ["The server's time zone", "The Windows edition", "That the firewall is off"]
+why = "A member that cannot resolve the domain's SRV records cannot find a DC."
+
+[[quiz]]
+q = "Which cmdlet tells you in one line whether a member's secure channel is healthy?"
+answer = "Test-ComputerSecureChannel"
+wrong = ["Get-ADDomain", "Test-NetConnection", "Get-ComputerInfo"]
+why = "It returns True or False for the channel to a DC."
+
+[[quiz]]
+q = "A member restored from an old snapshot reports a broken trust relationship. Why?"
+answer = "Its machine password is older than the one AD now has"
+wrong = ["Snapshots delete the computer account", "The DC's certificate expired", "Its SID changed"]
+why = "The machine password rotates every 30 days; an old disk holds an old password."

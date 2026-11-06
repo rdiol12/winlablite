@@ -1,0 +1,23 @@
+[topic]
+id = "admin-workstation"
+title = "Opening a device's own pages"
+category = "Using winlab"
+order = 50
+keywords = ["admin workstation", "browser", "firefox", "web interface", "management", "cups", "printer", "631", "device pages", "admin pc"]
+summary = "Devices are managed in their own web pages, from a browser on a PC of the lab."
+body = '''
+A printer, a NAS or a phone system in the lab runs the same management software as the real one, inside the device. Its window on the Workbench has a **Management** box: the software it runs, the address to type and who signs in.
+
+**Where to open it**
+
+You open those pages the way an admin does at work: from a browser on a PC of the same lab. The pages are served on the lab network only, never to this PC.
+
+- On a Windows PC of the lab, open Edge and type the address.
+- With no Windows PC, drag the **Admin workstation** from the shelf and cable it to the same network (or one the router reaches). It is a small Linux desktop: its screen opens on Firefox, signed in to its own user. Its panel at the bottom opens Firefox again and a terminal.
+
+**Manage from this PC** in the Management box only brings that PC's screen to the front. You type the address and sign in yourself; nothing is bookmarked or filled in for you.
+
+**The printer**
+
+The printer runs CUPS on port 631, for example `https://prn01:631/`: CUPS signs it with its own self-signed certificate, so accept the browser's warning once. When CUPS asks you to sign in, use root with the lab's password (Start > Lab password). It comes with no queue: add one under Administration > Add Printer on the **Output tray**, share it, then add it in Windows over IPP (`http://prn01:631/printers/` and the queue's name) or over TCP/IP to port 9100. The pages that come out are in the Output tray on the printer's window.
+'''

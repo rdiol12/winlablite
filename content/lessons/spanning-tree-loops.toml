@@ -1,0 +1,87 @@
+[lesson]
+id = "spanning-tree-loops"
+title = "Switching loops, spanning tree and the root bridge"
+module = "network"
+order = 45
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["pc01"]
+exercise = "spanning-tree-root"
+minutes = 45
+summary = "A spare cable between switches is a loop. Spanning tree blocks it; you decide which switch is the root."
+why = '''
+Offices cable switches twice on purpose, so one broken cable does not cut a
+floor off. Two ways between two switches are a loop, and Ethernet has no
+time-to-live: a broadcast that goes round a loop goes round for ever, copied
+at every switch, until the links and the switches' processors are full. That
+is a broadcast storm, and it takes the whole network down in seconds.
+
+Spanning tree (802.1D, and Cisco's per-VLAN PVST+ on top of it) is how
+switches live with spare cables. They elect a root bridge, the one with the
+lowest bridge ID (priority first, then its MAC address); every other switch
+keeps its cheapest way to the root (its root port), each cable gets one
+designated end, and every port left over blocks until it is needed. A new
+switch ships with spanning tree on at priority 32768, so left alone the root
+is whichever switch has the lowest address: often the oldest one in a
+cupboard. Choosing the root (the core switch, where the router is) is the
+first thing to set.
+
+In this lab the switches' cables are real kernel bridges on the router, and
+the kernel runs classic 802.1D for them: one tree for every VLAN, with VLAN
+1's settings. A loop with spanning tree off floods for real; winlab caps it
+so your PC stays usable.
+'''
+concepts = [
+  "Bridge ID: priority (32768 by default, steps of 4096) then MAC address; the lowest is the root bridge",
+  "Port roles: root port (best way to the root), designated port (forwards onto a cable), alternate or backup (blocking)",
+  "Path cost: 4 for a gigabit link, 19 for 100 Mbit; spanning-tree cost changes it on a port",
+  "Timers: hello 2 s, max age 20 s, forward delay 15 s: a port listens, then learns, then forwards, 30 s after its link comes up",
+  "One switch with spanning tree on in a loop is enough to block it: a switch with it off floods BPDUs like any frame, so the others still hear each other",
+  "PortFast and BPDU guard belong on ports to machines: forwarding at once, and shut (err-disabled) the moment a switch speaks there",
+]
+steps = [
+  "Open the Workbench. corp's switch is the one the router is cabled to. Add two switches from the shelf and drag each one's uplink (the port in the middle of its top edge, Gi0/1) onto corp's switch.",
+  "Make the loop: drag a free gigabit port of one new switch (top right, Gi0/2 to Gi0/4) onto the other. Small marks appear on the cable ends: R a root port, D a designated port, B a port spanning tree blocks.",
+  "Read the tree on each switch's console (double-click it): enable, show spanning-tree. Note the Root ID: which switch is root, and why (compare the priorities and addresses). show spanning-tree summary counts the blocking ports; show cdp neighbors shows which cable goes where.",
+  "Choose the root: on corp's switch, configure terminal, then spanning-tree vlan 1 priority 4096 (spanning-tree vlan 1 root primary does the same sum for you). On one of the others: spanning-tree vlan 1 root secondary. Watch the marks move, and show spanning-tree again on the switch that blocked before.",
+  "Steer the blocked cable: on a switch below, interface gi0/1, spanning-tree cost 100. Its uplink is now dearer than the way round through the spare cable, so the root port moves. no spanning-tree cost puts it back. spanning-tree port-priority 64 decides between two equal ways.",
+  "Time a change: pull the spare cable out and plug it back, then run show spanning-tree a few times on the switch that blocks: the port listens and learns for 30 s before it forwards. spanning-tree mode rapid-pvst shortens that here to 8 s (the router's kernel runs 802.1D with a 4 s forward delay; real Rapid PVST+ takes about a second).",
+  "Now see why it is there. Power on pc01, open its screen and leave ping -t 10.10.10.1 running. On both switches below corp's, configure terminal, no spanning-tree vlan 1. corp's switch still runs it and blocks: nothing happens. Then on corp's switch too: no spanning-tree vlan 1. The ring turns red: a broadcast storm. show processes cpu on any switch, and watch pc01's pings.",
+  "End it with one command on one switch: spanning-tree vlan 1. Then turn it back on everywhere: a switch with spanning tree off is a loop waiting for a cable.",
+  "Protect the access ports: on the switch pc01 is in, interface fa0/1, spanning-tree portfast, spanning-tree bpduguard enable (or for every access port at once: spanning-tree portfast default and spanning-tree portfast bpduguard default). Never on an uplink: a switch always speaks there.",
+  "Practise: click a switch, and under Practise choose Hide a loop in my switches, or Hide a BPDU guard fault. Find it with the canvas and the consoles, fix it, and Check my fix.",
+]
+pitfalls = [
+  "Turning spanning tree off to get rid of the 30 s wait: use spanning-tree portfast on the ports to machines instead, and leave the tree on.",
+  "Leaving the root to chance: a new switch with a lower address takes over as root and traffic takes a different, often worse, path.",
+  "BPDU guard on an uplink err-disables it at once; no spanning-tree bpduguard alone does not bring it back: shutdown, then no shutdown.",
+  "This lab runs one 802.1D tree for every VLAN: spanning-tree vlan 10 priority is kept and shown, but VLAN 1's settings decide.",
+]
+further = [
+  "IEEE 802.1D-2004: MAC bridges (spanning tree), and 802.1w (rapid spanning tree)",
+  "Cisco: Understanding and configuring Spanning Tree Protocol (STP) on Catalyst switches",
+]
+
+[[verify]]
+label = "the switch bridges on the router: spanning tree on, the root, each port's state"
+node = "fabric"
+shell = "sh"
+cmd = "for d in /sys/class/net/stp*; do [ -d $d/bridge ] && echo \"$(cat $d/ifalias) stp_state $(cat $d/bridge/stp_state) root $(cat $d/bridge/root_id) me $(cat $d/bridge/bridge_id)\"; done; for p in /sys/class/net/stp*/brif/*/state; do echo \"$p $(cat $p)\"; done"
+
+[[quiz]]
+q = "Which switch becomes the root bridge?"
+answer = "The one with the lowest bridge ID: the lowest priority, then the lowest MAC address"
+wrong = ["The one cabled to the router", "The one with the most ports", "The first one switched on"]
+why = "Priority first (32768 by default), then the address breaks the tie; that is why the root should be set by hand."
+
+[[quiz]]
+q = "Three switches in a ring; spanning tree is off on two of them. What happens?"
+answer = "Nothing bad: the third still runs it and blocks one of its ports"
+wrong = ["A broadcast storm", "The ring is split in two", "The router blocks the loop"]
+why = "A switch with spanning tree off floods BPDUs like any frame, so the one that runs it hears its own BPDUs come back round and blocks."
+
+[[quiz]]
+q = "Where do PortFast and BPDU guard belong?"
+answer = "On access ports, to machines"
+wrong = ["On uplinks between switches", "On the root bridge's ports", "Only on trunks"]
+why = "They say 'no switch here': a BPDU on such a port err-disables it, which is right for a desk port and fatal for an uplink."

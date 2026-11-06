@@ -1,0 +1,22 @@
+[topic]
+id = "system-requirements"
+title = "System requirements"
+category = "Start here"
+order = 20
+keywords = ["requirements", "ram", "memory", "disk", "cpu", "cores", "windows 10", "windows 11", "hardware", "pc"]
+summary = "What this PC needs to run a lab, and how many machines fit."
+body = '''
+- A 64-bit PC with virtualization turned on in its firmware (Intel VT-x or AMD-V).
+- **8 GB of memory** at least. 16 GB runs every lesson; 24 GB runs the biggest labs as they are defined.
+- About **40 GB of free disk** for a Windows Server base and a Windows client base (about 25 GB with the Server base alone). Each machine you boot adds 2 to 6 GB.
+- Windows 10 or 11, any edition, Home included. winlab uses the Windows Hypervisor Platform, an optional feature on all of them.
+- 4 processor cores or more for a lab with several machines.
+
+| Memory | What runs |
+|---|---|
+| 8 GB | every one- and two-machine lesson, and on a quiet PC the whole ad-ds-basics lab |
+| 16 GB | every lesson, and the enterprise-multisite lab trimmed for that run |
+| 24 GB | enterprise-multisite and every-role as defined |
+
+Setup checks all of this for you. From a command prompt, `winlab doctor` prints the same checks with more detail.
+'''

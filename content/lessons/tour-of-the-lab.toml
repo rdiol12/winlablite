@@ -1,0 +1,73 @@
+[lesson]
+id = "tour-of-the-lab"
+title = "Find your way around the lab"
+module = "start"
+order = 10
+lab = "ad-ds-basics"
+node = "dc01"
+minutes = 20
+summary = "Boot the lab, reach a machine three ways, and learn how a lesson is checked."
+why = '''
+A lab is only useful if getting to a machine is effortless, so before any
+Windows topic, learn the plumbing. winlab runs real virtual machines on an
+isolated network: they can see each other and nothing else. winlab only
+connects things: it powers machines on and off, plugs in their cables, disks,
+discs and USB sticks, and shows each machine's own screen. Everything else you
+do inside the machines, as you would at work.
+
+Every lesson ends with a check. For most lessons it is a graded exercise: winlab
+asks the machines themselves and compares the answer with what a correctly
+configured system returns. Nothing is graded on what you type into a form; the
+machines are the evidence. That is also how a real environment judges you.
+'''
+concepts = [
+  "Fabric: the Alpine switch/router every machine plugs into; it owns .1 on every network and is the default gateway",
+  "Serial agent: a channel the host uses to run commands inside a guest without any network path",
+  "Base image: the Windows install every machine is cloned from, so a fresh lab boots in minutes",
+  "Snapshot: a copy of a machine's disk you can return to, the undo button for an exercise",
+]
+steps = [
+  "Open Setup and make sure every step is green: the runtime fetched and the Windows base prepared.",
+  "Open Machines and start dc01 (or use the power button in the Start menu to start the whole lab). The first boot takes a few minutes; the row says ready when Windows is up.",
+  "Hover the key in the taskbar to see the Administrator password, click it to copy.",
+  "Double-click dc01 in Machines to open its screen, press Ctrl+Alt+Del from the window's menu and log on as Administrator with that password.",
+  "Open PowerShell inside dc01 and run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion. In a lesson, the Type it on dc01 button types a command into the machine's screen for you; you still press Enter.",
+  "In Machines, take a checkpoint of the whole lab named clean, so every later lesson can start over from here.",
+]
+pitfalls = [
+  "A machine that shows booting for a long time on first start is installing from the base image; give it time rather than restarting it.",
+  "The lab has no internet on purpose. Anything that needs a download (modules, updates) is staged by winlab over the agent.",
+]
+further = [
+  "README.md in this folder: the quick start and the command reference",
+  "CURRICULUM.md: everything the lessons cover and what is still planned",
+]
+
+[[verify]]
+label = "dc01 answers over the serial agent"
+node = "dc01"
+cmd = "hostname"
+
+[[verify]]
+label = "the OS is a real Windows Server"
+node = "dc01"
+cmd = "(Get-CimInstance Win32_OperatingSystem).Caption"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "What does every machine in the lab use as its default gateway?"
+answer = "The fabric router, which owns .1 on every network"
+wrong = ["The domain controller", "Your PC's own network adapter", "There is none: the lab has no routing"]
+why = "The Alpine fabric is the switch and router every machine plugs into; it holds .1 on each network."
+
+[[quiz]]
+q = "How does winlab run a command inside a machine that has no network path to your PC?"
+answer = "Over the serial agent channel"
+wrong = ["Over RDP from the host", "Through a shared folder", "Over SSH port forwarding"]
+why = "The serial agent is a channel that needs no network at all, which keeps the lab isolated."
+
+[[quiz]]
+q = "What is a checkpoint (snapshot) for in an exercise?"
+answer = "Returning a machine's disk to a known state: the undo button"
+wrong = ["Copying files from the PC into the machine", "Backing up the domain to the cloud", "Making the machine boot faster"]
+why = "A snapshot is a saved copy of the disk you can go back to."

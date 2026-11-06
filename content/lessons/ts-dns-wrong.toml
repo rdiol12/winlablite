@@ -1,0 +1,70 @@
+[lesson]
+id = "ts-dns-wrong"
+title = "The member that cannot find its domain"
+module = "troubleshoot"
+order = 10
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "dns-wrong"
+minutes = 25
+summary = "Group Policy stops applying and domain logons fail on one server; everything else is fine."
+why = '''
+This is the most common broken-AD cause there is: a machine whose DNS client
+points somewhere that does not know the domain. The symptom is never "DNS is
+wrong". It is "GPOs do not apply", "cannot find a domain controller", a slow logon,
+or a share that opens by IP and not by name. The habit to build is asking DNS the
+exact question the domain asks, the SRV lookup, before anything else.
+
+Once you see it, the fix is a one-liner. The lesson is the diagnostic path from
+the symptom to that line.
+'''
+concepts = [
+  "DC locator and SRV records: the query a member makes to find a DC",
+  "Resolve-DnsName and nslookup: ask a specific server a specific question",
+  "nltest /dsgetdc: what the locator actually returns right now",
+  "ipconfig /flushdns and klist purge: clear caches so your fix is tested, not the old answer",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 dns-wrong). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Pinging the DC by IP proves the network, not resolution; a working ping with a broken domain is the signature of this fault.",
+  "A second DNS entry that points at a public resolver fails intermittently: the client fails over to it under load.",
+]
+further = [
+  "Microsoft Learn: Troubleshooting DC locator",
+  "Microsoft Learn: Resolve-DnsName",
+]
+
+[[verify]]
+label = "which DNS servers the adapters use"
+node = "fs01"
+cmd = "Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object ServerAddresses | Select-Object InterfaceAlias, ServerAddresses | Format-Table -AutoSize"
+
+[[verify]]
+label = "can it find a DC"
+node = "fs01"
+cmd = "nltest /dsgetdc:corp.lab"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Ping to the DC by IP works but the domain is broken. What does that suggest?"
+answer = "Name resolution, not the network"
+wrong = ["A broken network cable", "An expired licence", "A full disk"]
+why = "Ping by IP proves the network only."
+
+[[quiz]]
+q = "Which command shows the DC the locator returns right now?"
+answer = "nltest /dsgetdc:<domain>"
+wrong = ["ipconfig /all", "Get-ADDomain", "net view"]
+why = "It asks the locator itself."
+
+[[quiz]]
+q = "Why flush caches (ipconfig /flushdns, klist purge) after a fix?"
+answer = "So you test the fix, not the old cached answer"
+wrong = ["The fix only applies after a flush", "Caches slow the network", "To log out users"]
+why = "Caches hide both failures and fixes."

@@ -1,0 +1,24 @@
+[topic]
+id = "free-play-load"
+title = "Put your network under load (free play)"
+category = "Using winlab"
+order = 44
+keywords = ["free play", "sandbox", "workbench", "load", "Start-OfficeLoad", "Stop-OfficeLoad", "Get-OfficeLoad", "OfficeLoad", "discover", "staff", "group", "rediscover", "load engine stick"]
+summary = "Start the office's working day from PowerShell inside the network you built: winlab looks around, read-only, and puts your staff to work on what it finds."
+body = '''
+In the sandbox and in networks you build yourself, winlab does not know which machine is your domain controller, which is your file server or who works there: you built all of it by hand. So you start the load from inside, where you work.
+
+**Get the module.** The first time a free-play lab opens, the **Load engine** stick is waiting on its media shelf (another one: **Office** > **Load and traffic** > **Load engine stick**, or `winlab load stick sandbox`). Plug the stick into a domain-joined machine of yours from the media shelf. In Windows PowerShell as administrator: `Set-ExecutionPolicy -Scope Process Bypass`, then `E:\Install.ps1` (your stick's letter). It copies the OfficeLoad module into Program Files, nothing else.
+
+**Start it.** `Start-OfficeLoad -StaffGroup G-Staff -Level normal`. It asks once for the first password you gave the staff accounts (press Enter to skip it if you already typed them into the staff list). That password goes only into this lab's folder on your PC, like `winlab staff password`. Other switches: `-StaffOU Staff` instead of a group (no group and no OU: every enabled ordinary user), `-Profile office|flat|round`, `-Pace busyday`, `-Shifts`, `-NoServerJobs`, `-NoWait`.
+
+**What winlab looks at.** Only reads, from the machine you typed on: the domain it is joined to and its domain controllers (the domain object, nltest, the _ldap._tcp SRV records), the computer accounts, the members of your group or OU, the printers published in the directory, SQL Server's service names, the MX record, the DNS names intranet, www and portal, and the WSUS server your Group Policy points at. Then from each running Windows machine: its own computer name, whether it is a workstation, a domain controller or a server, its shares, shared printers, web bindings, SQL Server instances, Remote Desktop session host and WSUS. The names map back to your machines, even ones you renamed inside Windows.
+
+**Then the office works** on what was found: the staff sign in at the domain PCs, save on your file server's shares, print to your shared printers, mail through your MX host, browse your intranet and run reports on your SQL Server. The servers' own night work runs only where there is a server for it. What is missing is simply not used. Broken things bring helpdesk calls as usual.
+
+**Nothing to load?** When the machine is not in a domain, no domain controller answers, the group has no enabled members, or no domain PC is running, nothing starts and Start-OfficeLoad says why.
+
+**Afterwards.** `Get-OfficeLoad` shows who started it, what was found and who is in. `Start-OfficeLoad -Rediscover` looks again after you add a share, a printer or a server (winlab also looks again by itself when a Windows machine it has not seen starts). `Stop-OfficeLoad` sends everyone home. The **Load and traffic** tab shows "Started from ... by ... at ..." with what was found, and **Look again** and **Forget** buttons.
+
+**How it reaches winlab.** The command only writes a request into C:\ProgramData\winlab\load on that machine (a folder only SYSTEM and administrators can open). winlab reads it through the machine's own agent while its desktop runs the lab, about every half minute, and writes its answer back into the same folder. Nothing in the lab connects to your PC. From a command prompt: `winlab load free sandbox`, `winlab load discover sandbox --from pc01`, `winlab load poll sandbox`, `winlab load forget sandbox`.
+'''

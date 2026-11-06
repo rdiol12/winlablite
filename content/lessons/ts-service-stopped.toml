@@ -1,0 +1,68 @@
+[lesson]
+id = "ts-service-stopped"
+title = "The server is up but the service is not"
+module = "troubleshoot"
+order = 20
+lab = "ad-ds-basics"
+node = "dc01"
+problem = "service-stopped"
+minutes = 20
+summary = "Clients report the DNS server is gone; the server pings and you can log on."
+why = '''
+"The server is down" usually means one service is down. The machine answers
+ping and RDP; what stopped is the process behind a port. The reflex to build:
+check the service, check its startup type, and read the System log for who stopped
+it, in that order. Starting a service that is set to Disabled fails, and a service
+set to Manual will not survive the next reboot, so the state after your fix
+matters as much as the fix.
+'''
+concepts = [
+  "Service state versus startup type: running now, versus what happens at boot",
+  "Dependencies: Get-Service -RequiredServices and -DependentServices",
+  "Event 7036 and 7040 in the System log: a service changed state, a startup type changed",
+  "Service recovery options: restart on failure, set on the Recovery tab or with sc failure",
+]
+steps = [
+  "Press Break above (or run winlab break dc01 service-stopped). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Start-Service on a disabled service errors with a message that hides the real cause; check StartType first.",
+  "On a DC, the DNS service stopping breaks every other machine within minutes as their caches expire; it is a priority-one event.",
+]
+further = [
+  "Microsoft Learn: Get-Service",
+  "Microsoft Learn: Configure service recovery",
+]
+
+[[verify]]
+label = "the DNS service"
+node = "dc01"
+cmd = "Get-Service DNS | Select-Object Status, StartType"
+
+[[verify]]
+label = "recent service events"
+node = "dc01"
+cmd = "Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'} -MaxEvents 8 | Select-Object TimeCreated, Id, Message | Format-Table -Wrap"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Start-Service fails with an unhelpful message. What do you check first?"
+answer = "The service's StartType: it may be Disabled"
+wrong = ["The event log size", "The DNS forwarders", "The page file"]
+why = "A disabled service cannot be started."
+
+[[quiz]]
+q = "Which System log events show a service changing state or startup type?"
+answer = "7036 and 7040"
+wrong = ["4624 and 4625", "1102 and 4688", "41 and 6008"]
+why = "They tell you when and, with 7040, that someone changed it."
+
+[[quiz]]
+q = "Why is the DNS service stopping on a DC a priority-one event?"
+answer = "Every machine fails within minutes as their caches expire"
+wrong = ["It deletes zones", "It demotes the DC", "It stops replication forever"]
+why = "Everything in AD depends on DNS."

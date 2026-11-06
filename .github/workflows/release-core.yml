@@ -1,0 +1,82 @@
+name: release-core
+
+# Builds and publishes winlab core (winlab/edition.py: one lab, its lessons
+# and drills, no licence) when a core tag is pushed: git tag core-v1.2.3,
+# git push origin core-v1.2.3. Never on pull requests or branch pushes.
+# No secrets are needed; a code-signing certificate is used when set
+# (WINLAB_SIGN_PFX_BASE64, WINLAB_SIGN_PASSWORD; see packaging/sign.ps1).
+on:
+  push:
+    tags: ["core-v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-core-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The tag matches winlab.__version__
+        id: ver
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#core-v}"
+          code="$(python -c 'import winlab; print(winlab.__version__)')"
+          if [ "$tag" != "$code" ]; then
+            echo "::error::tag core-v$tag does not match winlab/__init__.py __version__ = $code"
+            exit 1
+          fi
+          echo "version=$code" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests
+        run: python tests/test_winlab.py
+
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = @("${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe", "$env:ProgramFiles\Inno Setup 6\ISCC.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { choco install innosetup -y --no-progress; if ($LASTEXITCODE -ne 0) { throw 'Inno Setup install failed' } }
+
+      - name: Build winlab core and its installer
+        shell: pwsh
+        env:
+          WINLAB_SIGN_PFX_BASE64: ${{ secrets.WINLAB_SIGN_PFX_BASE64 }}
+          WINLAB_SIGN_PASSWORD: ${{ secrets.WINLAB_SIGN_PASSWORD }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build-exe.ps1 -Edition core
+
+      - name: The exe is winlab core
+        shell: pwsh
+        run: |
+          $d = Join-Path $env:RUNNER_TEMP 'core-smoke'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          Copy-Item dist\winlab.exe $d
+          $labs = & "$d\winlab.exe" lab list
+          $labs
+          if (-not ($labs -match 'ad-ds-basics')) { throw 'the core lab is missing' }
+          if (($labs | Select-String -Pattern '^\s+\S+\s+\d+ nodes').Count -ne 1) { throw 'core lists more than one lab' }
+
+      - name: Release notes from the tag message
+        shell: bash
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > release-notes.md
+          [ -s release-notes.md ] || echo "winlab core ${{ steps.ver.outputs.version }}" > release-notes.md
+
+      - name: GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" --title "winlab core $v" --notes-file release-notes.md \
+            "dist/winlab-core-$v-setup.exe" "dist/winlab-core-$v-win64.zip"

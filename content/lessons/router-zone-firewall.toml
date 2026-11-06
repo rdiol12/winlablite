@@ -1,0 +1,111 @@
+[lesson]
+id = "router-zone-firewall"
+title = "A zone-based firewall on the router: servers and users in their own zones"
+module = "security"
+order = 360
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "fs01", "pc01"]
+exercise = "router-zone-firewall"
+minutes = 60
+summary = "Split the office into a server LAN and a user LAN on the router, put each in a security zone, and let the users reach only the services a domain member needs, with return traffic tracked statefully."
+why = '''
+An access list on a router interface is a list of packets it lets through.
+It knows nothing about conversations: to let the replies back in you write a
+second list for the other direction, and keep the two in step by hand. On
+a router with more than two networks that turns into a maze nobody dares to
+touch.
+
+Cisco's zone-based policy firewall (ZBF) thinks in zones instead. Each
+interface is put into a zone (SERVERS, USERS, the DMZ), and traffic between
+two zones is dropped unless a zone-pair, one direction, carries a policy
+that allows it. Traffic inside one zone passes; an interface in a zone never
+talks to one in no zone. The policy is built from the same three parts as
+QoS: a class-map says which traffic, a policy-map says what to do with each
+class (inspect, pass or drop), and the zone-pair applies it. Inspect is the
+point: it remembers the conversation, so the server's answer comes back
+without a rule of its own, and nothing the server starts by itself does.
+
+In this lab the router is a real Linux router (an Alpine VM) and the
+console turns what you type into its nftables rules: the zones become
+interface sets, inspect marks the connection in the kernel's connection
+tracking (conntrack), and the return traffic of marked connections is what
+comes back. show policy-map type inspect zone-pair sessions reads those
+connections from the router. Nothing is set up for you: you build the second
+LAN, the zones and the policy yourself.
+'''
+concepts = [
+  "Zones: interfaces in the same zone talk freely; between two zones everything is dropped until a zone-pair allows it; a zoned interface never talks to an unzoned one",
+  "The self zone is the router itself (its own addresses): traffic to and from it is free until a zone-pair names self, then only what that policy allows",
+  "A zone-pair has a direction: source USERS destination SERVERS judges only what users start; the replies to inspected traffic come back on their own",
+  "class-map type inspect match-any (any one match line) or match-all (every match line): match protocol <name> or match access-group <list>",
+  "policy-map type inspect: inspect (stateful, return traffic allowed), pass (one way, no state: the reply needs its own pass), drop (the default for class-default), drop log",
+  "On IOS the protocol names come from the inspection engine; here match protocol is by well-known port (http 80, dns 53, microsoft-ds 445): for anything else use an access list",
+  "A Windows domain member needs DNS (53), Kerberos (88), LDAP (389), SMB (445), the RPC endpoint mapper (135) and the dynamic RPC ports (49152 to 65535), Kerberos password change (464), the global catalog (3268) and time (123) from its domain controller",
+]
+steps = [
+  "Finish the lab's first lessons first: dc01 is the domain controller with DNS and DHCP, fs01 and pc01 are domain members. Open the Workbench and power on the router, dc01, fs01 and pc01.",
+  "Build the user LAN. On the Workbench add a switch and drag its uplink (Gi0/1) into a free router port, then drag pc01's cable from corp's switch onto the new switch. On the router's console: enable, show ip interface brief tells you which port the new switch is in (GigabitEthernet0/0/1 if it is the second).",
+  "Address it and hand out leases from the router: configure terminal, interface g0/0/1, ip address 10.10.20.1 255.255.255.0, no shutdown, exit, ip dhcp excluded-address 10.10.20.1 10.10.20.49, ip dhcp pool USERS, network 10.10.20.0 255.255.255.0, default-router 10.10.20.1, dns-server 10.10.10.10, domain-name corp.lab, end.",
+  "On pc01: ipconfig /release, ipconfig /renew, then ipconfig /all: an address in 10.10.20.0/24, gateway 10.10.20.1, DNS 10.10.10.10. Sign in with a domain account and open \\\\fs01\\c$ as an administrator: everything works because nothing filters yet.",
+  "The zones: configure terminal, zone security SERVERS, description dc01 and fs01, exit, zone security USERS, exit. Do not put interfaces in them yet: the moment one interface is in a zone and the other is not, they stop talking.",
+  "The list of what a domain member needs, as an extended access list: ip access-list extended DOMAIN-SVCS, then permit udp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq 88, permit udp any host 10.10.10.10 eq 88, permit tcp any host 10.10.10.10 eq 389, permit udp any host 10.10.10.10 eq 389, permit tcp any host 10.10.10.10 eq 135, permit tcp any host 10.10.10.10 range 49152 65535, permit tcp any host 10.10.10.10 eq 3268, permit tcp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq ntp, permit tcp any 10.10.10.0 0.0.0.255 eq 445, exit.",
+  "The classes: class-map type inspect match-any DOMAIN, match access-group name DOMAIN-SVCS, exit. class-map type inspect match-any PING, match protocol icmp, exit.",
+  "The policy: policy-map type inspect USERS-TO-SERVERS, class type inspect DOMAIN, inspect, class type inspect PING, inspect, class class-default, drop log, exit, exit.",
+  "The zone-pair, one direction only: zone-pair security U2S source USERS destination SERVERS, service-policy type inspect USERS-TO-SERVERS, exit. There is no pair the other way: the servers may answer, never start.",
+  "Now the interfaces: interface g0/0/0, zone-member security SERVERS, interface g0/0/1, zone-member security USERS, end. show zone security lists both zones with their members; show zone-pair security shows U2S and its policy.",
+  "Test from pc01: Test-NetConnection fs01 -Port 445 (True), gpupdate /force (both policies update), ping dc01 (answers). Sign out and in again: the domain logon works across the firewall.",
+  "Read the state on the router: show policy-map type inspect zone-pair sessions. Each inspected connection is a line: pc01's address and port to dc01's on 88, 389, 445. Run it again after a minute: the finished ones are gone, open ones stay.",
+  "Try the other direction: on dc01, Test-Connection pc01 -Count 2 fails, and Test-NetConnection pc01 -Port 445 fails. show policy-map type inspect zone-pair still shows only U2S: nothing allows SERVERS to USERS, so the router drops it, and the drop counter in winlab's verify below (no-zone-pair SERVERS USERS) climbs.",
+  "Try something the policy does not name: on pc01, Test-NetConnection 10.10.10.10 -Port 80 fails; class-default drop log dropped it. Change drop log to pass log once (policy-map type inspect USERS-TO-SERVERS, class class-default, pass log): the SYN now leaves, but no answer comes back, because pass keeps no state and there is no pair for the reply. Put drop log back.",
+  "Save it: write memory. show running-config shows the class-maps, the policy-map, the zones, the zone-pair and zone-member security on each interface.",
+]
+pitfalls = [
+  "Putting one interface in a zone before the other cuts the two networks apart at once: create the zones and the policy first, add the members last.",
+  "pass is not inspect: it allows one direction and keeps no state, so the replies need a pass of their own in a zone-pair the other way. Use inspect for anything with an answer.",
+  "A zone-pair with no service-policy drops everything in its direction; the policy must exist before service-policy type inspect names it.",
+  "A Windows domain member uses dynamic RPC ports (49152 to 65535) towards its DC; leave them out and Group Policy and the logon fail in ways that look like DNS problems.",
+  "The DHCP pool on the router is the self zone: it keeps working with the zones in place because no zone-pair names self. Add a pair from USERS to self and DHCP needs a class for it (udp 67).",
+  "match protocol here is by well-known port, not deep inspection: a web server on port 8080 is not http to this router. Name the port with an access list instead.",
+]
+further = [
+  "Cisco: Zone-Based Policy Firewall Design and Application Guide",
+  "Cisco IOS Security Configuration Guide: Zone-Based Policy Firewall",
+  "Microsoft Learn: Service overview and network port requirements for Windows",
+  "Lesson router-ipsec-vti: a site-to-site tunnel that the zones must also let through",
+]
+
+[[verify]]
+label = "the firewall's rules on the router: zone sets, zone-pair chains and their counters"
+node = "fabric"
+shell = "sh"
+cmd = "nft list table ip wlzbf 2>/dev/null || echo 'no zone firewall yet'"
+
+[[verify]]
+label = "inspected connections in the router's connection tracking (marked by inspect)"
+node = "fabric"
+shell = "sh"
+cmd = "conntrack -L 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i ~ /^mark=/) { split($i,m,\"=\"); if (int(m[2]/1048576) == 1441) print }}' | head -20"
+
+[[verify]]
+label = "pc01 reaches fs01 on SMB through the firewall"
+node = "pc01"
+cmd = "Test-NetConnection fs01 -Port 445 -WarningAction SilentlyContinue | Select-Object ComputerName, RemoteAddress, TcpTestSucceeded"
+
+[[quiz]]
+q = "GigabitEthernet0/0/0 is in zone SERVERS and GigabitEthernet0/1/0 is in no zone. What passes between them?"
+answer = "Nothing: a zoned interface and an unzoned one never talk"
+wrong = ["Everything, until a zone-pair names them", "Only what an access list on the unzoned interface allows", "Only return traffic"]
+why = "ZBF's default: inside one zone everything passes, between zones only what a zone-pair allows, and a member never talks to a non-member."
+
+[[quiz]]
+q = "The zone-pair USERS to SERVERS inspects SMB. What lets fs01's answer come back to pc01?"
+answer = "The inspection: it tracks the connection and lets its return traffic through"
+wrong = ["A second zone-pair SERVERS to USERS that inspects SMB", "class-default pass", "Nothing, the answer is dropped"]
+why = "inspect is stateful. Only what fs01 starts by itself needs a pair the other way."
+
+[[quiz]]
+q = "A class in a ZBF policy-map uses pass instead of inspect. What breaks?"
+answer = "The replies: pass keeps no state, so they are dropped unless a pair the other way passes them too"
+wrong = ["Nothing, pass and inspect are the same", "The first packet is dropped", "Logging stops"]
+why = "pass is a one-way, stateless permit, like an access list entry."

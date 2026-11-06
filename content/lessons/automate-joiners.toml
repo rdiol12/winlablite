@@ -1,0 +1,89 @@
+[lesson]
+id = "automate-joiners"
+title = "Automate joiners from HR's CSV"
+module = "identity"
+order = 32
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01"]
+problem = "hr-joiners-drop"
+exercise = "joiners-from-hr-csv"
+minutes = 50
+summary = "Turn the one-off Import-Csv loop into a script HR's weekly sheet runs through on its own: checked, logged, safe to run twice."
+why = '''
+The first time new starters arrive, a loop at the console is fine (the
+onboard-new-starters lesson). By the third week it is a chore that goes wrong
+on the day you are away: HR sends the same person twice, a department nobody
+told IT about, a typo in a user name. A joiner script is the same loop with
+the checks a careful admin does by eye: does the account exist already, does
+the department have a group, is every column there. What passes is created;
+what fails is written to a log in words HR can act on; the sheet is moved so
+it is never processed twice; and a scheduled task runs it every morning.
+
+Press Break and HR's sheet for this week lands in C:\HR\Joiners on dc01, the
+drop folder their share points at. Six rows: one department has no group yet,
+and one person is on the sheet twice.
+'''
+concepts = [
+  "A drop folder: HR writes, IT's script reads, a Processed folder keeps what was done and a Logs folder says why something was not",
+  "Idempotence: a second run of the same sheet changes nothing, because the script skips accounts that exist (Get-ADUser -Filter on SamAccountName)",
+  "Validation before creation: the department's G- group must exist, the SamAccountName must be free, the required columns must be filled",
+  "A first password nobody types: generated per person, set with -ChangePasswordAtLogon, handed over out of band (never in the log)",
+  "Running unattended: a scheduled task as SYSTEM on the DC (or a gMSA with delegated rights), Start-Transcript or a log file per run, LastTaskResult to watch",
+]
+steps = [
+  "Press Break (or winlab break dc01 hr-joiners-drop). Read the sheet: Import-Csv C:\\HR\\Joiners\\joiners-*.csv | Format-Table DisplayName, Department, SamAccountName.",
+  "Compare it with the directory: Get-ADGroup -Filter \"Name -like 'G-*'\" | Select-Object Name. Note the department with no group and the person who appears twice.",
+  "Make the folders the script uses: New-Item -ItemType Directory C:\\Scripts, C:\\HR\\Joiners\\Processed, C:\\HR\\Joiners\\Logs -Force.",
+  "Write C:\\Scripts\\New-Starters.ps1 in an editor (notepad or PowerShell ISE). Its shape: $log = Join-Path C:\\HR\\Joiners\\Logs ('run-' + (Get-Date -Format yyyyMMdd-HHmm) + '.log'); foreach ($file in Get-ChildItem C:\\HR\\Joiners -Filter *.csv -File) { foreach ($r in Import-Csv $file.FullName) { ... }; Move-Item $file.FullName C:\\HR\\Joiners\\Processed -Force }.",
+  "Inside the row loop, check before you create: if (Get-ADUser -Filter \"SamAccountName -eq '$($r.SamAccountName)'\") { Add-Content $log \"skip $($r.SamAccountName): exists\"; continue }; $g = 'G-' + ($r.Department -replace ' ', ''); if (-not (Get-ADGroup -Filter \"Name -eq '$g'\")) { Add-Content $log \"refuse $($r.SamAccountName): no group $g\"; continue }.",
+  "Create the account with a first password made at random for each person ($first = ConvertTo-SecureString -AsPlainText -Force ([guid]::NewGuid().ToString('N').ToUpper() + '-' + [guid]::NewGuid().ToString('N'))); New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $first -ChangePasswordAtLogon $true -Enabled $true; Add-ADGroupMember $g -Members $r.SamAccountName; Add-Content $log \"created $($r.SamAccountName)\".",
+  "Run it once by hand: powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1. Read the log, check the accounts with Get-ADUser -Filter * -SearchBase 'OU=Staff,DC=corp,DC=lab' -Properties Department | Format-Table SamAccountName, Department, Enabled.",
+  "Prove it is safe twice: copy the processed sheet back into C:\\HR\\Joiners and run the script again. The log says skip for every row; nothing new appears.",
+  "Schedule it: Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM -RunLevel Highest. Start-ScheduledTask 'New starters', then (Get-ScheduledTaskInfo 'New starters').LastTaskResult is 0.",
+  "Tell HR about Marketing in their own words (the log line), then press Check my work.",
+]
+pitfalls = [
+  "A script without the 'exists' check fails halfway through the second run, or worse, makes tbecker2 because someone 'fixed' the error with a counter.",
+  "Writing the first passwords into the log or a CSV: logs are read by more people than you think. Hand the password over by phone or in person, and make the person change it at the first sign-in.",
+  "A department name with a space (Front desk) becomes G-Frontdesk in one place and G-FrontDesk in another; normalise it in one line of the script and use that everywhere.",
+  "Never let the scheduled task run a script anyone can edit: C:\\Scripts must be writable by admins only, or whoever can change the script runs code as SYSTEM on a DC.",
+]
+further = [
+  "Microsoft Learn: New-ADUser, Import-Csv, Register-ScheduledTask",
+  "Microsoft Learn: about_Try_Catch_Finally (stopping one bad row from stopping the run)",
+]
+
+[[verify]]
+label = "this week's joiners"
+node = "dc01"
+cmd = "Get-ADUser -Filter \"SamAccountName -eq 'nokafor' -or SamAccountName -eq 'tbecker' -or SamAccountName -eq 'lferreira' -or SamAccountName -eq 'amehta' -or SamAccountName -eq 'glin'\" -Properties Department, pwdLastSet | Format-Table SamAccountName, Enabled, Department, pwdLastSet"
+
+[[verify]]
+label = "the drop folder, the processed sheets and the logs"
+node = "dc01"
+cmd = "Get-ChildItem C:\\HR\\Joiners -Recurse -File | Format-Table FullName, LastWriteTime; Get-Content C:\\HR\\Joiners\\Logs\\*.log -Tail 20"
+
+[[verify]]
+label = "the task and its last result"
+node = "dc01"
+cmd = "Get-ScheduledTask | Where-Object { $_.Actions.Arguments -match 'New-Starters' } | Get-ScheduledTaskInfo | Format-List TaskName, LastRunTime, LastTaskResult, NextRunTime"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "HR sends the same person on two sheets. What keeps the joiner script from failing or making a duplicate?"
+answer = "It checks whether the SamAccountName exists and skips the row if it does"
+wrong = ["New-ADUser overwrites the existing account", "Import-Csv removes duplicate rows", "The scheduled task runs only once per sheet"]
+why = "Checking before creating makes the script idempotent: running it twice changes nothing the second time."
+
+[[quiz]]
+q = "A row names a department that has no group. What should the script do?"
+answer = "Refuse the row and log why, so HR or IT can fix the cause"
+wrong = ["Create the user without a group", "Create the missing group on the fly", "Stop the whole run"]
+why = "Inventing groups from a spreadsheet grows the directory by accident; a refused row with a reason is a question for a human."
+
+[[quiz]]
+q = "Where does a joiner's first password belong?"
+answer = "Handed over out of band, with must-change-at-next-logon set"
+wrong = ["In the run log, so the helpdesk can read it", "In the CSV HR sends", "In the account's Description"]
+why = "Logs and descriptions are readable by many; the first password lives only until the person signs in and picks their own."

@@ -1,0 +1,54 @@
+[exercise]
+id = "promote-first-dc"
+title = "Promote the first domain controller"
+lab = "ad-ds-basics"
+reset_nodes = ["dc01"]
+brief = """
+dc01 is a fresh Windows Server with a static address but no roles. Turn it into
+the forest root domain controller for corp.lab, running DNS. Everything else in
+the lab depends on this, so it is exercise one.
+"""
+tasks = [
+  "On dc01, install the AD-Domain-Services role",
+  "Promote dc01 to a new forest named corp.lab (NetBIOS CORP)",
+  "Let it install DNS during promotion",
+  "After the reboot, confirm the domain and the DNS service are up",
+]
+
+[[check]]
+name = "AD DS role installed"
+node = "dc01"
+script = "(Get-WindowsFeature AD-Domain-Services).Installed"
+expect = "True"
+weight = 1
+hint = "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools"
+
+[[check]]
+name = "forest corp.lab exists"
+node = "dc01"
+script = "(Get-ADDomain).DNSRoot"
+expect = "corp.lab"
+weight = 2
+hint = "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP"
+
+[[check]]
+name = "this host is a domain controller"
+node = "dc01"
+script = "(Get-ADDomainController -Identity $env:COMPUTERNAME).Enabled"
+expect = "True"
+weight = 2
+
+[[check]]
+name = "DNS service running"
+node = "dc01"
+script = "(Get-Service DNS).Status"
+expect = "Running"
+weight = 1
+hint = "DNS is installed automatically if you pass -InstallDns to Install-ADDSForest"
+
+[[check]]
+name = "forward lookup zone for corp.lab"
+node = "dc01"
+script = "Get-DnsServerZone -Name corp.lab | Select-Object -Expand ZoneName"
+expect = "corp.lab"
+weight = 1

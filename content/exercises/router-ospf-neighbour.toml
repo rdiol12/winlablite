@@ -1,0 +1,85 @@
+[exercise]
+id = "router-ospf-neighbour"
+title = "The lab router and rtr-edge: OSPF neighbours, the router is DR, the workshop reachable"
+lab = "router-protocols"
+reset_nodes = []
+nodes = ["rtr-edge", "pc-office", "pc-edge"]
+brief = """
+The office's router (the lab router, configured at its console) and the
+workshop's router (rtr-edge, Ubuntu with FRRouting) share the office LAN.
+Make them OSPF neighbours in area 0 so the lab router learns the workshop's
+network by itself, make the lab router the designated router on purpose, and
+keep hellos off every interface where no router belongs. The checks read
+FRRouting on both routers and ping across.
+"""
+tasks = [
+  "rtr-edge: FRRouting installed from the frr pack stick, forwarding on, ospfd running",
+  "On the router's console: router ospf 1, router-id 2.2.2.2, network 10.80.0.0 0.0.0.255 area 0",
+  "On rtr-edge: router ospf, ospf router-id 3.3.3.3, the office and workshop networks in area 0",
+  "The lab router is the DR on the office LAN (ip ospf priority 200 on g0/1/0, then clear ip ospf process)",
+  "passive-interface default on the lab router, with the office interface still active",
+  "pc-office pings pc-edge",
+]
+
+[[check]]
+name = "rtr-edge runs FRRouting's OSPF and forwards packets"
+node = "rtr-edge"
+shell = "sh"
+script = "pgrep -x ospfd >/dev/null && [ \"$(sysctl -n net.ipv4.ip_forward)\" = 1 ] && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "Install frr from the stick, ospfd=yes in /etc/frr/daemons, sudo systemctl restart frr; echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf and sudo sysctl --system"
+
+[[check]]
+name = "the lab router runs OSPF as 2.2.2.2"
+node = "fabric"
+shell = "sh"
+script = "vtysh -c 'show ip ospf' 2>/dev/null | grep -o 'Router ID: [0-9.]*' | head -n 1"
+expect = "Router ID: 2.2.2.2"
+weight = 1
+hint = "On the router's console: configure terminal, router ospf 1, router-id 2.2.2.2. If it had another ID before, clear ip ospf process makes the new one count."
+
+[[check]]
+name = "the lab router has rtr-edge (3.3.3.3) as a Full neighbour"
+node = "fabric"
+shell = "sh"
+script = "vtysh -c 'show ip ospf neighbor' 2>/dev/null | grep -qE '^3\\.3\\.3\\.3 .*Full/' && echo yes || echo no"
+expect = "yes"
+weight = 3
+hint = "show ip ospf neighbor on the console. No line at all: is network 10.80.0.0 0.0.0.255 area 0 there, is rtr-edge's ospfd running with its router-id 3.3.3.3 and the office network in area 0? Stuck before FULL: compare show ip ospf interface on both ends."
+
+[[check]]
+name = "the lab router is the designated router on the office LAN"
+node = "fabric"
+shell = "sh"
+script = "vtysh -c 'show ip ospf neighbor' 2>/dev/null | grep -qE '^3\\.3\\.3\\.3 .*Full/Backup' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "interface g0/1/0, ip ospf priority 200 on the console, then clear ip ospf process: the election is only held again when the adjacency restarts. rtr-edge then reads FULL/BDR on the console."
+
+[[check]]
+name = "the lab router learned the workshop's network from OSPF"
+node = "fabric"
+shell = "sh"
+script = "ip route show 10.81.0.0/24 2>/dev/null | grep -qE 'via 10\\.80\\.0\\.3 .*proto (ospf|188)' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "show ip route on the console should have O 10.81.0.0/24 via 10.80.0.3. rtr-edge must have network 10.81.0.0/24 area 0 under router ospf."
+
+[[check]]
+name = "the lab router sends no hellos where no router belongs"
+node = "fabric"
+shell = "sh"
+script = "c=$(cat /etc/frr/frr.conf 2>/dev/null); echo \"$c\" | grep -q '^ passive-interface default' && echo \"$c\" | grep -q '^ no ip ospf passive' && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "router ospf 1, passive-interface default, no passive-interface g0/1/0 on the console; show ip protocols lists the passive interfaces"
+
+[[check]]
+name = "pc-office reaches pc-edge in the workshop"
+node = "pc-office"
+shell = "sh"
+script = "ping -c 2 -W 2 10.81.0.10 >/dev/null 2>&1 && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "traceroute -n 10.81.0.10 from pc-office: it should go 10.80.0.2, 10.80.0.3, then the PC. Stops at 10.80.0.2: the lab router has no route yet. Stops after 10.80.0.3: rtr-edge does not forward."

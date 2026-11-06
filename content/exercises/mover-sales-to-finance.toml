@@ -1,0 +1,76 @@
+[exercise]
+id = "mover-sales-to-finance"
+title = "Move Dan Price from Sales to Finance without leaving Sales access behind"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01"]
+brief = """
+Dan Price (dprice) becomes a Finance analyst on Monday. Press Break in the
+lesson first: it sets him up in Sales on dc01. Keep his account; change what
+hangs on it. He must reach what Finance reaches and nothing Sales has, and his
+home folder moves to Finance's share, HomeFinance$, with its files and his
+permission on it.
+"""
+tasks = [
+  "Department Finance, Title 'Finance analyst', on the same account",
+  "Out of G-Sales and Sales Team, into G-Finance and Finance Team",
+  "No permission for dprice left on any Sales folder",
+  "Home folder moved to C:\\Shares\\HomeFinance\\dprice with its permissions, the old one gone, HomeDirectory pointing at \\\\dc01\\HomeFinance$\\dprice",
+]
+
+[[check]]
+name = "the same account, now in Finance"
+node = "dc01"
+script = '''
+$u = Get-ADUser -Filter "SamAccountName -eq 'dprice'" -Properties Department, Title
+$was = (Get-ItemProperty -Path 'HKLM:\SOFTWARE\winlab\scenario' -ErrorAction SilentlyContinue).'mover-guid'
+if (-not $u) { 'no dprice: press Break in the lesson first' }
+elseif ($was -and [string]$u.ObjectGUID -ne [string]$was) { 'dprice was deleted and made again' }
+elseif ($u.Department -ne 'Finance' -or $u.Title -ne 'Finance analyst') { 'Department or Title still say ' + $u.Department + ' / ' + $u.Title }
+else { 'True' }
+'''
+expect = "True"
+weight = 2
+hint = "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; never delete and recreate a mover"
+
+[[check]]
+name = "groups swapped, not added"
+node = "dc01"
+script = '''
+$m = @((Get-ADUser -Filter "SamAccountName -eq 'dprice'" -Properties MemberOf).MemberOf | ForEach-Object { ($_ -split ',')[0] -replace '^CN=', '' })
+$bad = @()
+foreach ($g in 'G-Finance', 'Finance Team') { if ($m -notcontains $g) { $bad += ('not in ' + $g) } }
+foreach ($g in 'G-Sales', 'Sales Team') { if ($m -contains $g) { $bad += ('still in ' + $g) } }
+if ($bad.Count) { $bad -join '; ' } else { 'True' }
+'''
+expect = "True"
+weight = 2
+hint = "Remove-ADGroupMember G-Sales and 'Sales Team', Add-ADGroupMember G-Finance and 'Finance Team'"
+
+[[check]]
+name = "no direct permission left on Sales folders"
+node = "dc01"
+script = '''
+$dirs = @(Get-Item -Path 'C:\Shares\Sales' -ErrorAction SilentlyContinue) + @(Get-ChildItem -Path 'C:\Shares\Sales' -Recurse -Directory -ErrorAction SilentlyContinue)
+$left = @($dirs | Where-Object { (Get-Acl -Path $_.FullName).Access | Where-Object { [string]$_.IdentityReference -match '\\dprice$' } })
+if ($left.Count) { 'dprice is still on ' + (($left | ForEach-Object { $_.FullName }) -join ', ') } else { 'True' }
+'''
+expect = "True"
+weight = 2
+hint = "(Get-Acl <folder>).Access | Where-Object { -not $_.IsInherited } shows grants to people; icacls '<folder>' /remove CORP\\dprice"
+
+[[check]]
+name = "home folder moved with its files and permission"
+node = "dc01"
+script = '''
+$u = Get-ADUser -Filter "SamAccountName -eq 'dprice'" -Properties HomeDirectory
+$new = 'C:\Shares\HomeFinance\dprice'
+if (@(Get-ChildItem -Path $new -File -ErrorAction SilentlyContinue).Count -lt 2) { 'his files are not in ' + $new }
+elseif (Test-Path -Path 'C:\Shares\Home\dprice') { 'the old home folder is still there' }
+elseif (-not ((Get-Acl -Path $new).Access | Where-Object { [string]$_.IdentityReference -match '\\dprice$' -and [string]$_.FileSystemRights -match 'Modify|FullControl' })) { 'dprice cannot write ' + $new }
+elseif ([string]$u.HomeDirectory -notmatch '\\HomeFinance\$\\dprice$') { 'HomeDirectory is ' + $u.HomeDirectory }
+else { 'True' }
+'''
+expect = "True"
+weight = 3
+hint = "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL, then Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:"

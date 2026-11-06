@@ -1,0 +1,20 @@
+[topic]
+id = "helpdesk-queue"
+title = "The helpdesk queue"
+category = "Using winlab"
+order = 45
+keywords = ["helpdesk", "ticket", "queue", "sla", "priority", "caller", "service desk", "incident", "first-time fix", "business hours", "work log"]
+summary = "Tickets from the lab's staff, each a real problem on a running machine, with response and resolve targets on the lab clock."
+body = '''
+Open **Helpdesk** from the Start menu or the desktop. While it is **taking calls**, the people who work in the lab's office ring when something breaks on a machine that is running, and it really is broken. They say what they see, never what it is.
+
+- **Pace**: a quiet, normal or busy day decides how often a call comes in. Calls arrive on the lab clock, so moving the clock ahead moves the day.
+- **Priority** follows impact: a server everyone uses is P1 or P2, one person's problem P3 or P4. Each priority has a respond target and a resolve target; the SLA column counts down and turns amber, then red.
+- **Take** a ticket to make it yours (that meets its respond target), **Add note** to the work log, **Waiting on user** to ask the caller something (the resolve clock stops until they answer) and **Resolve** with a note of what you did.
+- Resolving a ticket with a real problem behind it checks the machine. If it is still broken the caller says so, the ticket reopens and it no longer counts as a first-time fix.
+- **Business hours** (Settings): P3 and P4 targets then count Monday to Friday working hours only, and no calls come in outside them.
+- The caller card shows the person's department, extension and desk PC; click the PC to open its screen.
+- **Stop taking calls** undoes the problems that are still open and keeps the shift's report (handled, SLA met, first-time fix, mean time to resolve, breaches) with your progress and on your transcript.
+
+From a command prompt: `winlab helpdesk start --pace normal`, `winlab helpdesk list`, `winlab helpdesk show <id>`, `winlab helpdesk take <id>`, `winlab helpdesk note <id> <text>`, `winlab helpdesk resolve <id> <note>`, `winlab helpdesk tick`, `winlab helpdesk report` and `winlab helpdesk stop`.
+'''

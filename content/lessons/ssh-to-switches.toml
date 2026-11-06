@@ -1,0 +1,90 @@
+[lesson]
+id = "ssh-to-switches"
+title = "SSH to the switch: keys, local users and the vty lines"
+module = "network"
+order = 332
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["pc01"]
+exercise = "ssh-to-the-switch"
+minutes = 40
+summary = "Give corp's switch a management address, an RSA key and a local admin, allow only SSH on its vty lines, and log in from pc01 with ssh instead of the console cable."
+why = '''
+The console cable is how a switch is set up the first time; nobody walks to
+the comms room for every change after that. Switches are managed over the
+network, and telnet, the old way, sends the password and every command in
+clear text for anyone on the LAN to read. SSH encrypts the session and proves
+the switch is the switch (its host key).
+
+On IOS, SSH takes five things: a hostname other than the factory one and an
+ip domain-name (together they name the key pair), an RSA key pair (crypto key
+generate rsa; its size matters: SSH version 2 needs at least 768 bits and
+today's clients want 2048), a local user with a secret (username), and the
+vty lines (the switch's virtual terminals, line vty 0 4) told to use them:
+login local, transport input ssh. ip ssh version 2 turns the old protocol
+off. And the switch needs an address to be reached at: interface vlan 1 and
+ip default-gateway.
+
+In this lab the switch's SSH server is Dropbear on the router, inside the
+switch's own management address, and the session it opens is the same
+console you type into with the cable. One difference from a real switch:
+the password is asked by the switch inside the session (Password:) rather
+than by your ssh client, because the user list it checks is the switch's own.
+'''
+concepts = [
+  "Telnet sends the password in clear; SSH encrypts the whole session and authenticates the server with its host key",
+  "The key pair is named hostname.domain: crypto key generate rsa refuses until both are set",
+  "Key size: 768 bits is SSH version 2's minimum, 2048 is what to use; show ip ssh says 1.99 (both versions) until ip ssh version 2",
+  "line vty 0 4 are the five network logins; login local checks the username list, transport input ssh refuses telnet",
+  "username admin privilege 15 lands straight in privileged mode (#); a user at level 1 needs the enable secret, and without one a vty line answers % No password set",
+  "The first connection asks you to confirm the host key's fingerprint; show ip ssh prints the one to compare it with. A changed key later is a warning to stop, not to click through",
+  "The keys live with the configuration: generated but never written, they are gone after a reload",
+]
+steps = [
+  "Give the switch an address. On corp's switch console (double-click it on the Workbench, or the console cable): enable, configure terminal, interface vlan 1, ip address 10.10.10.2 255.255.255.0, no shutdown, exit, ip default-gateway 10.10.10.1. From pc01, ping 10.10.10.2 answers.",
+  "Try for a key straight away: crypto key generate rsa modulus 2048. The switch refuses: % Please define a hostname other than Switch. hostname CORP-SW1, then again: % Please define a domain-name first. ip domain-name corp.lab.",
+  "Now the key: crypto key generate rsa (without the size, it asks: How many bits in the modulus [512]: answer 2048). The name for the keys will be: CORP-SW1.corp.lab, and %SSH-5-ENABLED: SSH 1.99 has been enabled. do show ip ssh, and do show crypto key mypubkey rsa to see the public half.",
+  "Turn version 1 off: ip ssh version 2. Then a user and a privileged secret: username admin privilege 15 secret, then a password of your own; and enable secret with another one (show running-config shows both as type 9 hashes, never the words).",
+  "The vty lines: line vty 0 4, login local, transport input ssh, end. Then copy running-config startup-config: the key pair is kept with it, and an unsaved one is gone after a reload.",
+  "Log in from pc01: open PowerShell and run ssh admin@10.10.10.2 (the OpenSSH client is part of Windows 11). The first time it shows the switch's host key fingerprint: compare it with the one show ip ssh prints, and answer yes. Then the switch asks Password:, and you land at CORP-SW1#.",
+  "It is the same switch: show running-config | include hostname, and show ssh (your session, version 2.0). Make a change over SSH (interface fa0/1, description pc01) and see it on the console too. exit ends the session.",
+  "See the vty rules bite: on the console, line vty 0 4, transport input telnet. ssh from pc01 now closes at once: the line takes no SSH. Put back transport input ssh. Then try username admin privilege 1 (same secret): your SSH login lands at CORP-SW1>, and enable without an enable secret would answer % No password set.",
+  "Do the same on the router if you like: it has addresses on every VLAN already (10.10.10.1 here): hostname, ip domain-name, crypto key generate rsa modulus 2048, username, line vty 0 4 login local transport input ssh; then ssh admin@10.10.10.1 from pc01.",
+]
+pitfalls = [
+  "crypto key generate rsa with the default 512 bits: SSH version 2 needs 768, and current ssh clients refuse keys under 1024. Use 2048.",
+  "Forgetting copy running-config startup-config: after a reload the keys are gone and SSH is off again.",
+  "login on the vty lines with no line password: % Password required, but none set. login local wants a username; without one nobody gets in.",
+  "transport input all leaves telnet on: on a real switch anyone on the LAN can read a telnet password. Use ssh alone.",
+  "A real Catalyst on old IOS offers only old key exchange and cipher algorithms, and a current ssh client needs -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa to talk to it. The lab's SSH server is newer and does not need them.",
+  "This lab runs no telnet server: transport input telnet is kept and shown, but only SSH listens.",
+]
+further = [
+  "Cisco: Configuring Secure Shell (Catalyst 2960 software configuration guide)",
+  "RFC 4251: The Secure Shell (SSH) protocol architecture",
+  "Microsoft Learn: OpenSSH for Windows overview (the ssh client built into Windows)",
+]
+
+[[verify]]
+label = "the SSH servers on the router: which device, on which address, and its vty lines"
+node = "fabric"
+shell = "sh"
+cmd = "for f in /run/winlab-ssh/*.line; do [ -e $f ] && echo \"${f##*/}: $(cat $f)\"; done; ps | grep '[d]ropbear -r' | sed 's/.*dropbear/dropbear/'; tail -n 5 /var/log/winlab-vty.log 2>/dev/null"
+
+[[quiz]]
+q = "crypto key generate rsa answers % Please define a domain-name first. Why does the switch need one?"
+answer = "The key pair is named hostname.domain-name, so both must be set first"
+wrong = ["SSH looks the switch up in DNS", "The domain controller signs the key", "The domain name is the SSH password"]
+why = "IOS names the general-purpose key pair after the device's fully qualified name."
+
+[[quiz]]
+q = "What do login local and transport input ssh under line vty 0 4 do?"
+answer = "Network logins ask for a user from the switch's username list, and only SSH may log in"
+wrong = ["The console asks for a user", "SSH keys replace passwords", "Telnet is encrypted"]
+why = "login local checks the local username list; transport input says which protocols the vty lines accept."
+
+[[quiz]]
+q = "You generated the RSA key and logged in over SSH, then reloaded the switch without saving. What happens?"
+answer = "SSH is off again: the key pair was never written with the configuration"
+wrong = ["Nothing: keys are always kept", "The switch makes a new key at boot", "SSH falls back to telnet"]
+why = "The keys are kept in NVRAM with the configuration; write memory (copy running-config startup-config) keeps them."

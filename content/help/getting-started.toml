@@ -1,0 +1,28 @@
+# Help topics: one file per topic, shown in the Help window (winlab/helptopics.py).
+# body is Markdown: paragraphs, "- " lists, `code`, **bold**, ``` blocks and | tables.
+# Edit or add a file here and the Help window shows it the next time it opens.
+[topic]
+id = "getting-started"
+title = "Getting started"
+category = "Start here"
+order = 10
+keywords = ["first", "start", "quick start", "setup", "begin", "new", "how"]
+summary = "From a new install to your first graded lesson."
+body = '''
+winlab gives you a network of real Windows and Linux machines on this PC. You do the work inside them, the way you would at a desk, and winlab grades it.
+
+- **Setup**, once: open Setup from the desktop. It checks this PC, then downloads and prepares everything a lab needs except Windows itself. You download the free evaluation ISO from Microsoft and import it there. Preparing a Windows base then runs on its own for about 45 minutes.
+- **Turn the machines on** with the power button in the Start menu, or one at a time in Machines. They boot like real PCs.
+- **Open a machine's screen** by double-clicking it in Machines. The Administrator password is behind the key in the taskbar.
+- **Follow the Lab guide.** Each lesson says why and what to do. You do it inside the machines, then press Check my work. winlab never sets anything up for you.
+- **Practise fixing things** in Troubleshooting, or take on a scenario day.
+- **Take a checkpoint** in Machines before you try something risky, and go back to it if it goes wrong.
+
+The same steps work from a command prompt:
+
+```
+winlab setup
+winlab lab up ad-ds-basics
+winlab gui ad-ds-basics
+```
+'''

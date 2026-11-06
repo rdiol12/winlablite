@@ -1,0 +1,81 @@
+[exercise]
+id = "router-qos-mqc"
+title = "A 20 Mbit/s line to the users, shared out by class"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "fs01", "pc01"]
+brief = """
+The users' LAN behind the router is to behave like a 20 Mbit/s branch line,
+and on it voice must go first and file copies must get a fair share, marked
+so the rest of the network knows them. Build it with the router's Modular
+QoS CLI: class-maps, a child policy that shares the line, a parent that
+shapes it, attached on the way out to the users. Then copy a large file from
+fs01 to pc01 through it. The checks read the router's own queues and its
+classification counters.
+"""
+tasks = [
+  "The user LAN on its own router port, with pc01 on it (as in lesson router-zone-firewall)",
+  "class-map VOICE (match dscp ef) and FILES (an access list for SMB, tcp port 445)",
+  "A child policy-map: priority for VOICE, bandwidth and set dscp af11 for FILES, fair-queue in class-default",
+  "A parent policy-map whose class-default shapes to 20000000 bit/s with the child under it, as service-policy output on the users' port",
+  "Copy a file of 100 MB or more from a share on fs01 to pc01",
+]
+
+[[check]]
+name = "an output policy queues on a router interface"
+node = "fabric"
+shell = "sh"
+script = '''
+if tc qdisc show 2>/dev/null | grep -q 'qdisc htb 1: '; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 1
+hint = "interface g0/0/1 (the users' port), service-policy output with a policy that has priority, bandwidth or shape in it."
+
+[[check]]
+name = "the line is shaped, with a child policy sharing it"
+node = "fabric"
+shell = "sh"
+script = '''
+if nft list table ip wlqos 2>/dev/null | grep -q 'meta priority set .* jump qp_'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 2
+hint = "policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT."
+
+[[check]]
+name = "a class has a priority or a bandwidth guarantee"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in $(cat /run/winlab-qos-devs 2>/dev/null); do tc class show dev $d 2>/dev/null | grep -Eq ' prio (0|1) ' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 1
+hint = "In the child policy-map: class VOICE, priority 1000; class FILES, bandwidth 5000."
+
+[[check]]
+name = "file traffic was classified and marked"
+node = "fabric"
+shell = "sh"
+script = '''
+if nft list table ip wlqos 2>/dev/null | grep 'ip dscp set' | grep -q 'packets [1-9]'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 2
+hint = "class FILES needs set dscp af11 and a class-map that matches SMB from fs01 (permit tcp any eq 445 any: the server's packets come from port 445). show policy-map interface counts what it marked."
+
+[[check]]
+name = "a large copy went through the shaped line"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in $(cat /run/winlab-qos-devs 2>/dev/null); do tc -s class show dev $d 2>/dev/null | grep -Eq 'Sent [0-9]{8,} bytes' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "Copy a file of 100 MB or more from \\\\fs01 to pc01 (fsutil file createnew makes one) after the service-policy is on."

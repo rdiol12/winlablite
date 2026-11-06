@@ -1,0 +1,52 @@
+[exercise]
+id = "dns-forwarders-aging-records"
+title = "A partner domain, aging on, and one static record"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01"]
+brief = """
+A partner company's names live at partner.lab, served by their DNS server at
+10.10.10.99; your users must resolve them without asking the Internet. Your
+own zone collects stale records from machines that left years ago, and the
+intranet needs a name that never ages out.
+"""
+tasks = [
+  "Add a conditional forwarder for partner.lab to 10.10.10.99",
+  "Turn on aging for the corp.lab zone (the server-wide scavenging setting is up to you)",
+  "Create a static A record intranet.corp.lab pointing at 10.10.10.20",
+]
+
+[[check]]
+name = "partner.lab is a conditional forwarder"
+node = "dc01"
+script = "(Get-DnsServerZone -Name partner.lab -ErrorAction SilentlyContinue).ZoneType"
+expect = "Forwarder"
+weight = 1
+hint = "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99"
+
+[[check]]
+name = "it forwards to the partner's server"
+node = "dc01"
+script = "@((Get-DnsServerZone -Name partner.lab -ErrorAction SilentlyContinue).MasterServers | ForEach-Object { $_.IPAddressToString }) -contains '10.10.10.99'"
+expect = "True"
+weight = 1
+hint = "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99"
+
+[[check]]
+name = "aging is on for corp.lab"
+node = "dc01"
+script = "(Get-DnsServerZoneAging -Name corp.lab).AgingEnabled"
+expect = "True"
+weight = 1
+hint = "Set-DnsServerZoneAging -Name corp.lab -Aging $true (no-refresh and refresh default to 7 days each)"
+
+[[check]]
+name = "intranet is a static record for 10.10.10.20"
+node = "dc01"
+script = '''
+$r = Get-DnsServerResourceRecord -ZoneName corp.lab -Name intranet -RRType A -ErrorAction SilentlyContinue
+[bool]($r -and -not $r.Timestamp -and (@($r | ForEach-Object { $_.RecordData.IPv4Address.IPAddressToString }) -contains '10.10.10.20'))
+'''
+expect = "True"
+weight = 2
+hint = "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; a static record has no Timestamp, so scavenging never removes it"

@@ -1,0 +1,62 @@
+[exercise]
+id = "finance-folder-permissions"
+title = "A Finance folder only Finance can open, invisible to everyone else"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "fs01", "pc01"]
+brief = """
+Finance keeps its files inside the Company share. Only the finance team may
+read or change them, and other staff should not even see the folder. Do it
+with a group on the folder's NTFS ACL and access-based enumeration on the
+share, not with a second share.
+"""
+tasks = [
+  "On dc01, create the global security group G-Finance",
+  "On fs01, create D:\\Shares\\Company\\Finance, disable inheritance and remove the inherited entries",
+  "Grant G-Finance Modify on the folder; keep Administrators and SYSTEM Full Control; no Users, Domain Users, Authenticated Users or Everyone",
+  "Make sure access-based enumeration is on for the Company share",
+]
+
+[[check]]
+name = "G-Finance exists"
+node = "dc01"
+script = "[bool](Get-ADGroup -Filter \"Name -eq 'G-Finance'\" -ErrorAction SilentlyContinue)"
+expect = "True"
+weight = 1
+hint = "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security"
+
+[[check]]
+name = "Finance does not inherit from Company"
+node = "fs01"
+script = "(Get-Acl -Path 'D:\\Shares\\Company\\Finance').AreAccessRulesProtected"
+expect = "True"
+weight = 1
+hint = "icacls D:\\Shares\\Company\\Finance /inheritance:r removes inherited entries; the Security tab's Advanced > Disable inheritance does the same"
+
+[[check]]
+name = "G-Finance has Modify"
+node = "fs01"
+script = "[bool]((Get-Acl -Path 'D:\\Shares\\Company\\Finance').Access | Where-Object { \"$($_.IdentityReference)\" -match '\\\\G-Finance$' -and $_.AccessControlType -eq 'Allow' -and $_.FileSystemRights -match 'Modify|FullControl' })"
+expect = "True"
+weight = 2
+hint = "icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'"
+
+[[check]]
+name = "nobody else is let in"
+node = "fs01"
+script = '''
+$a = @((Get-Acl -Path 'D:\Shares\Company\Finance').Access)
+$broad = $a | Where-Object { $_.AccessControlType -eq 'Allow' -and "$($_.IdentityReference)" -match '(\\Users|Domain Users|Authenticated Users|Everyone|DL-Sales-Share)$' }
+($a.Count -gt 0) -and -not $broad
+'''
+expect = "True"
+weight = 2
+hint = "icacls lists every entry; remove the broad ones with icacls <folder> /remove:g Users (and Authenticated Users, Everyone)"
+
+[[check]]
+name = "access-based enumeration is on"
+node = "fs01"
+script = "(Get-SmbShare -Name Company).FolderEnumerationMode"
+expect = "AccessBased"
+weight = 1
+hint = "Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force"

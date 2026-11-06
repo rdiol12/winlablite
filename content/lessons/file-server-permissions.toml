@@ -1,0 +1,81 @@
+[lesson]
+id = "file-server-permissions"
+title = "A file server: share and NTFS permissions, access-based enumeration"
+module = "workloads"
+order = 10
+lab = "ad-ds-basics"
+node = "fs01"
+nodes = ["fs01", "pc01"]   # what 'Start these machines' boots; the forest root DC comes along
+role = "file"
+exercise = "finance-folder-permissions"
+minutes = 40
+summary = "Two permission layers decide what a user sees and can do; learn which one to touch."
+why = '''
+A Windows share has two gates. The share permission is checked when a user
+connects over the network; the NTFS permission is checked when they touch a file.
+The effective right is the more restrictive of the two. The convention that keeps
+this sane: open the share wide (Authenticated Users: Change), and do all the real
+control in NTFS where it also applies to local access and can be inherited down a
+tree.
+
+Access-based enumeration hides what a user cannot open, so Finance does not see
+that an HR folder exists. It is a property of the share, costs almost nothing, and
+answers half the "why can I see this" tickets before they are raised.
+'''
+concepts = [
+  "Share permission versus NTFS permission: connection gate versus file gate; most restrictive wins",
+  "Inheritance: permissions flow down from a folder; breaking inheritance makes a folder an island",
+  "AGDLP in practice: grant NTFS Modify to DL-Sales-Share, put G-Sales in it, never grant to users",
+  "ABE: access-based enumeration, set per share, hides folders the user cannot read",
+  "Effective access: the Advanced Security tab or Get-NTFSEffectiveAccess computes the result for one user",
+]
+steps = [
+  "On fs01, list the shares and their permissions: Get-SmbShare | Get-SmbShareAccess.",
+  "Read the NTFS ACL of the Company share's folder: Get-Acl D:\\Shares\\Company | Format-List.",
+  "Create D:\\Shares\\Company\\Finance and break inheritance so only G-Finance (create it on dc01) has Modify, with Administrators and SYSTEM keeping Full Control: icacls, or the Security tab.",
+  "Log on to pc01 as jdoe (Sales) and open \\\\fs01\\Company: with ABE on, Finance is invisible; turn ABE off (Set-SmbShare -Name Company -FolderEnumerationMode Unrestricted) and it appears but cannot be opened.",
+  "Turn ABE back on. Compare share permission Read with NTFS Modify for a user and show which one wins.",
+  "Enable access auditing on the folder (SACL) and find the resulting 4663 events in the Security log after a user opens a file.",
+]
+pitfalls = [
+  "Full Control on a share for Everyone is not the problem people think, if NTFS is right; Full Control in NTFS for Everyone is.",
+  "Deny entries are evaluated first and stack up over years; prefer removing an allow to adding a deny.",
+]
+further = [
+  "Microsoft Learn: File and Storage Services",
+  "Microsoft Learn: Access-based enumeration",
+]
+
+[[verify]]
+label = "shares and ABE"
+node = "fs01"
+cmd = "Get-SmbShare | Where-Object Name -notlike '*$' | Select-Object Name, Path, FolderEnumerationMode | Format-Table -AutoSize"
+
+[[verify]]
+label = "share permissions"
+node = "fs01"
+cmd = "Get-SmbShareAccess -Name Company | Select-Object AccountName, AccessControlType, AccessRight | Format-Table -AutoSize"
+
+[[verify]]
+label = "NTFS ACL on the folder"
+node = "fs01"
+cmd = "(Get-Acl (Get-SmbShare -Name Company).Path).Access | Select-Object IdentityReference, FileSystemRights, IsInherited | Format-Table -AutoSize"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Share says Full Control for Everyone, NTFS says Read for Sales. What can Sales do over the network?"
+answer = "Read"
+wrong = ["Full Control", "Nothing", "Modify"]
+why = "The most restrictive of share and NTFS wins."
+
+[[quiz]]
+q = "What does access-based enumeration do?"
+answer = "Hides folders the user cannot read"
+wrong = ["Encrypts the share", "Blocks executable files", "Logs every access"]
+why = "ABE is set per share."
+
+[[quiz]]
+q = "Prefer which change when a user has too much access?"
+answer = "Remove the allow entry that grants it"
+wrong = ["Add a deny entry", "Break inheritance on the whole share", "Move the user to Domain Users"]
+why = "Deny entries stack up over the years and become unreadable."

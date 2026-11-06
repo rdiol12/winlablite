@@ -1,0 +1,38 @@
+[exercise]
+id = "join-a-member"
+title = "Join a member server to the domain"
+lab = "ad-ds-basics"
+reset_nodes = ["fs01"]
+brief = """
+fs01 is a standalone server. Point its DNS at the domain controller and join it
+to corp.lab. The DNS step is the one everyone forgets: a member that cannot
+resolve the domain's SRV records cannot find a DC to join.
+"""
+tasks = [
+  "On fs01, set the preferred DNS server to dc01 (10.10.10.10)",
+  "Join fs01 to the corp.lab domain",
+  "Reboot and confirm membership",
+]
+
+[[check]]
+name = "DNS points at the DC"
+node = "fs01"
+script = "@(Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { (Get-DnsClientServerAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4).ServerAddresses } | Select-Object -Unique) -join ','"
+expect = "10.10.10.10"
+weight = 1
+hint = "Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10"
+
+[[check]]
+name = "joined to corp.lab"
+node = "fs01"
+script = "(Get-CimInstance Win32_ComputerSystem).Domain"
+expect = "corp.lab"
+weight = 3
+hint = "Add-Computer -DomainName corp.lab -Credential (Get-Credential) -Restart"
+
+[[check]]
+name = "secure channel to the domain is healthy"
+node = "fs01"
+script = "Test-ComputerSecureChannel"
+expect = "True"
+weight = 2

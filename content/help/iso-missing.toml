@@ -1,0 +1,23 @@
+[topic]
+id = "iso-missing"
+title = "The Windows ISO is missing"
+category = "Common problems"
+order = 40
+keywords = ["iso", "windows", "download", "evaluation", "missing", "no prepared base", "installer", "import", "image", "media", "server 2025", "windows 11"]
+summary = "winlab cannot ship Windows. You download it from Microsoft once."
+body = '''
+Windows belongs to Microsoft, so winlab does not include it. You download the free evaluation ISO from Microsoft's evaluation center and give it to winlab once; winlab then prepares a reusable base from it.
+
+**Setup shows the link** for each Windows the lab uses. After the download:
+
+```
+winlab images import ws2025 C:\Users\you\Downloads\server2025.iso
+winlab images prepare ws2025
+```
+
+Setup also looks in your Downloads folder and offers ISOs it finds there.
+
+**"no prepared base and no installer for image"** means a machine needs a Windows that has not been imported yet. Import it as above.
+
+**"the attached ISO is not in the image store"** means a disc in a machine's DVD drive was removed from Images. Eject it from the machine's Media menu, or add the ISO again.
+'''

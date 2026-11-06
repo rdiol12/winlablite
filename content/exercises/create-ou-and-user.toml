@@ -1,0 +1,58 @@
+[exercise]
+id = "create-ou-and-user"
+title = "Create an OU, a user and a global group"
+lab = "ad-ds-basics"
+reset_nodes = ["dc01"]
+brief = """
+Everything in the flat default containers is a policy and delegation dead end:
+GPOs cannot link to CN=Users. Give the Sales department a proper home. Create
+an OU, put a user in it, and give the department a global security group, the
+"G" in AGDLP that permissions are later granted through.
+"""
+tasks = [
+  "On dc01, create an organizational unit named Sales at the root of corp.lab",
+  "Create an enabled user John Doe, logon name jdoe, inside OU=Sales",
+  "Create a global security group G-Sales inside OU=Sales",
+  "Make jdoe a member of G-Sales",
+]
+
+[[check]]
+name = "OU=Sales exists at the domain root"
+node = "dc01"
+script = "Get-ADOrganizationalUnit -Filter \"Name -eq 'Sales'\" | Select-Object -Expand DistinguishedName"
+expect = "OU=Sales,DC=corp,DC=lab"
+weight = 2
+hint = "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'"
+
+[[check]]
+name = "jdoe lives in OU=Sales"
+node = "dc01"
+script = "(Get-ADUser jdoe).DistinguishedName"
+match = "regex"
+expect = '^CN=[^,]+,OU=Sales,DC=corp,DC=lab$'
+weight = 2
+hint = "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true"
+
+[[check]]
+name = "jdoe is enabled"
+node = "dc01"
+script = "(Get-ADUser jdoe).Enabled"
+expect = "True"
+weight = 1
+hint = "An account created without a password is disabled: Enable-ADAccount jdoe"
+
+[[check]]
+name = "G-Sales is a global security group"
+node = "dc01"
+script = "$g = Get-ADGroup G-Sales; \"$($g.GroupScope)/$($g.GroupCategory)\""
+expect = "Global/Security"
+weight = 2
+hint = "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'"
+
+[[check]]
+name = "jdoe is in G-Sales"
+node = "dc01"
+script = "@(Get-ADGroupMember G-Sales | ForEach-Object SamAccountName) -contains 'jdoe'"
+expect = "True"
+weight = 1
+hint = "Add-ADGroupMember G-Sales -Members jdoe"

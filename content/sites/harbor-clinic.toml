@@ -1,0 +1,991 @@
+# A client job (winlab/campus.py): a small medical practice of two buildings
+# across a car park. Coordinates are metres; a building's rooms, points,
+# closets and tray are measured from its own top-left corner.
+
+[job]
+id = "harbor-clinic"
+title = "Harbor Street Clinic"
+client = "Harbor Street Family Clinic"
+contact = "Tom Weiss, practice manager"
+level = 1
+domain = "clinic.lab"
+summary = "A family practice and its lab annex across the car park: cabling, fibre, switches, VLANs, Wi-Fi, cameras, a domain controller, users, shares and policies."
+label_scheme = "{closet}-{panel}-{port:02}"
+budget = 22000
+width = 150
+height = 100
+brief = """
+Hello,
+
+We have bought the old insurance office on Harbor Street and the small
+building across the car park, and we open in three weeks. Nothing is wired:
+the walls have empty jack plates and the ceilings have mounting plates, the
+comms room is an empty rack, and there is a duct under the car park to the
+annex's plant room.
+
+What we need from you:
+
+Cabling. Every wall jack in both buildings cabled back to its building's
+comms room, tested and patched in. Our insurer wants a test result for every
+cable. The annex is joined to the main building by fibre, not copper.
+
+Network. Two networks kept apart: STAFF (VLAN 10, 10.10.10.0/24) for our
+PCs, printer, Wi-Fi and the server, and CCTV (VLAN 20, 10.10.20.0/24) for the
+cameras only. The router is the gateway on .1 of each. The cameras get their
+addresses from the router; the staff network's addresses come from our
+server's DHCP.
+
+Wi-Fi. Staff Wi-Fi called Harbor-Staff (WPA2) in every room of both buildings.
+
+Cameras. The front door, the back door, the car park and the annex door.
+Cameras are powered from the switch (PoE); we do not want power bricks.
+
+Server. One Windows Server called DC01 in the comms room, 10.10.10.10. It is
+the domain controller of clinic.lab, our DNS and DHCP server, and the file
+server. Back it up every night, system state included.
+
+People. Our staff, each with their own account (first.last), in an OU
+called Staff:
+  Dr Maya Levin (doctor), Noa Peretz (reception), Tom Weiss (practice
+  manager), Lior Katz (lab technician).
+Groups Doctors, Reception, Management and Lab, one person each for now.
+
+Files. A Records share only doctors can change and reception can read (no
+one else), and a Lab share the lab group can change. Doctors get the
+Records share as their R: drive automatically.
+
+PCs. PC01 at reception, PC02 in my office, PC03 in the annex lab, all in the
+domain, in an OU called Clinic PCs. Screens lock after 5 minutes of no use
+(a policy, not a setting on each PC). The reception printer is PRN01, known
+by that name in DNS, and installed on PC01.
+
+Passwords at least 12 characters; an account locks after 5 wrong tries.
+
+Addresses and names. The PCs take their addresses from DHCP, never typed
+in. Keep 10.10.10.1 to 10.10.10.20 out of the pool for fixed addresses, and
+give the printer a reservation so it keeps its address. The DHCP options
+give the router, DC01 as DNS and the domain name clinic.lab. In DNS we want
+the router as gw.clinic.lab, the file server also known as files.clinic.lab,
+and a reverse lookup zone so our addresses look up to names.
+
+Share and folder rights. Give the shares themselves no Everyone Full Control:
+the folder (NTFS) rights decide who does what. Records hides what a person
+cannot open (access-based enumeration).
+
+Thanks,
+Tom Weiss, practice manager
+"""
+
+# ---- the site around the buildings
+[[area]]
+kind = "road"
+name = "Harbor Street"
+x = 0
+y = 88
+w = 150
+h = 12
+
+[[area]]
+kind = "parking"
+name = "Car park"
+x = 20
+y = 56
+w = 112
+h = 26
+
+[[area]]
+kind = "path"
+name = ""
+x = 100
+y = 38
+w = 4
+h = 18
+
+# ---- the main building
+[[building]]
+id = "main"
+name = "Main clinic"
+x = 10
+y = 8
+w = 64
+h = 38
+tray = [[1, 19], [63, 19]]
+door = [[9, 0], [60, 38]]
+
+  [[building.room]]
+  id = "reception"
+  name = "Reception"
+  x = 0
+  y = 0
+  w = 18
+  h = 16
+  [[building.room]]
+  id = "waiting"
+  name = "Waiting room"
+  x = 18
+  y = 0
+  w = 16
+  h = 16
+  [[building.room]]
+  id = "exam1"
+  name = "Exam room 1"
+  x = 34
+  y = 0
+  w = 15
+  h = 16
+  [[building.room]]
+  id = "exam2"
+  name = "Exam room 2"
+  x = 49
+  y = 0
+  w = 15
+  h = 16
+  [[building.room]]
+  id = "corridor"
+  name = "Corridor"
+  x = 0
+  y = 16
+  w = 64
+  h = 6
+  [[building.room]]
+  id = "office"
+  name = "Practice manager"
+  x = 0
+  y = 22
+  w = 14
+  h = 16
+  [[building.room]]
+  id = "comms"
+  name = "Comms room"
+  x = 14
+  y = 22
+  w = 7
+  h = 8
+  [[building.room]]
+  id = "staff"
+  name = "Staff room"
+  x = 21
+  y = 22
+  w = 15
+  h = 16
+  [[building.room]]
+  id = "records"
+  name = "Records"
+  x = 36
+  y = 22
+  w = 14
+  h = 16
+  [[building.room]]
+  id = "treatment"
+  name = "Treatment room"
+  x = 50
+  y = 22
+  w = 14
+  h = 16
+
+  [[building.closet]]
+  id = "mdf"
+  name = "Comms room (MDF)"
+  kind = "mdf"
+  room = "comms"
+  x = 17.5
+  y = 26
+
+  [[building.point]]
+  id = "rec-j1"
+  kind = "jack"
+  room = "reception"
+  x = 0.5
+  y = 6
+  [[building.point]]
+  id = "rec-j2"
+  kind = "jack"
+  room = "reception"
+  x = 17.5
+  y = 6
+  [[building.point]]
+  id = "rec-j3"
+  kind = "jack"
+  room = "reception"
+  x = 13
+  y = 15.5
+  [[building.point]]
+  id = "rec-c1"
+  kind = "ceiling"
+  room = "reception"
+  x = 9
+  y = 8
+  [[building.point]]
+  id = "front-o1"
+  kind = "outdoor"
+  room = "reception"
+  x = 12
+  y = -0.5
+  [[building.point]]
+  id = "wait-j1"
+  kind = "jack"
+  room = "waiting"
+  x = 33.5
+  y = 8
+  [[building.point]]
+  id = "wait-c1"
+  kind = "ceiling"
+  room = "waiting"
+  x = 26
+  y = 8
+  [[building.point]]
+  id = "ex1-j1"
+  kind = "jack"
+  room = "exam1"
+  x = 35
+  y = 0.5
+  [[building.point]]
+  id = "ex1-c1"
+  kind = "ceiling"
+  room = "exam1"
+  x = 41.5
+  y = 8
+  [[building.point]]
+  id = "ex2-j1"
+  kind = "jack"
+  room = "exam2"
+  x = 63.5
+  y = 4
+  [[building.point]]
+  id = "ex2-c1"
+  kind = "ceiling"
+  room = "exam2"
+  x = 56.5
+  y = 8
+  [[building.point]]
+  id = "cor-c1"
+  kind = "ceiling"
+  room = "corridor"
+  x = 32
+  y = 18
+  [[building.point]]
+  id = "off-j1"
+  kind = "jack"
+  room = "office"
+  x = 0.5
+  y = 30
+  [[building.point]]
+  id = "off-j2"
+  kind = "jack"
+  room = "office"
+  x = 7
+  y = 37.5
+  [[building.point]]
+  id = "off-c1"
+  kind = "ceiling"
+  room = "office"
+  x = 7
+  y = 30
+  [[building.point]]
+  id = "stf-j1"
+  kind = "jack"
+  room = "staff"
+  x = 28
+  y = 37.5
+  [[building.point]]
+  id = "stf-c1"
+  kind = "ceiling"
+  room = "staff"
+  x = 28.5
+  y = 30
+  [[building.point]]
+  id = "rcd-j1"
+  kind = "jack"
+  room = "records"
+  x = 43
+  y = 37.5
+  [[building.point]]
+  id = "rcd-c1"
+  kind = "ceiling"
+  room = "records"
+  x = 43
+  y = 30
+  [[building.point]]
+  id = "trt-j1"
+  kind = "jack"
+  room = "treatment"
+  x = 63.5
+  y = 30
+  [[building.point]]
+  id = "trt-c1"
+  kind = "ceiling"
+  room = "treatment"
+  x = 57
+  y = 30
+  [[building.point]]
+  id = "back-o1"
+  kind = "outdoor"
+  room = "treatment"
+  x = 56
+  y = 38.5
+
+# ---- the annex across the car park
+[[building]]
+id = "annex"
+name = "Lab annex"
+x = 104
+y = 14
+w = 34
+h = 24
+tray = [[1, 12], [33, 12]]
+door = [[0, 12]]
+
+  [[building.room]]
+  id = "lab"
+  name = "Laboratory"
+  x = 0
+  y = 0
+  w = 22
+  h = 24
+  [[building.room]]
+  id = "store"
+  name = "Store"
+  x = 22
+  y = 0
+  w = 12
+  h = 14
+  [[building.room]]
+  id = "plant"
+  name = "Plant room"
+  x = 22
+  y = 14
+  w = 12
+  h = 10
+
+  [[building.closet]]
+  id = "idf-annex"
+  name = "Plant room (IDF)"
+  kind = "idf"
+  room = "plant"
+  x = 28
+  y = 19
+
+  [[building.point]]
+  id = "lab-j1"
+  kind = "jack"
+  room = "lab"
+  x = 0.5
+  y = 5
+  [[building.point]]
+  id = "lab-j2"
+  kind = "jack"
+  room = "lab"
+  x = 0.5
+  y = 19
+  [[building.point]]
+  id = "lab-j3"
+  kind = "jack"
+  room = "lab"
+  x = 14
+  y = 23.5
+  [[building.point]]
+  id = "lab-c1"
+  kind = "ceiling"
+  room = "lab"
+  x = 11
+  y = 12
+  [[building.point]]
+  id = "str-c1"
+  kind = "ceiling"
+  room = "store"
+  x = 28
+  y = 7
+  [[building.point]]
+  id = "annex-o1"
+  kind = "outdoor"
+  room = "lab"
+  x = -0.5
+  y = 8
+
+# ---- the duct under the car park
+[[conduit]]
+id = "duct-annex"
+name = "Duct under the car park"
+from = "mdf"
+to = "idf-annex"
+path = [[27.5, 34], [27.5, 52], [98, 52], [98, 38], [118, 33], [132, 33]]
+
+# ---- what the cameras must watch
+[[target]]
+id = "front-door"
+name = "Front door"
+building = "main"
+x = 9
+y = -3
+[[target]]
+id = "back-door"
+name = "Back door"
+building = "main"
+x = 60
+y = 41
+[[target]]
+id = "car-park"
+name = "Car park"
+x = 76
+y = 69
+[[target]]
+id = "annex-door"
+name = "Annex door"
+building = "annex"
+x = -3
+y = 12
+
+# ---- the machines the client names
+
+# ---- shares, DHCP and DNS done as a network admin would
+[[check]]
+section = "Files"
+name = "Records share: share rights leave Everyone no Full Control; the folder's NTFS rights decide"
+node = "dc01"
+script = '''
+$a = Get-SmbShareAccess -Name Records -ErrorAction SilentlyContinue
+if (-not $a) { 'no share Records' } else {
+  $wide = $a | Where-Object { $_.AccountName -match '^Everyone$' -and $_.AccessRight -eq 'Full' -and $_.AccessControlType -eq 'Allow' }
+  $in = $a | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.AccessRight -in 'Change','Full' }
+  if ($wide) { 'Everyone has Full Control on the share' } elseif (-not $in) { 'no one can change through the share: give the groups (or Authenticated Users) Change' } else { 'True' }
+}
+'''
+hint = "Advanced Sharing > Permissions: remove Everyone, give Authenticated Users (or Doctors and Reception) Change; the Security tab does the rest."
+[[check]]
+section = "Files"
+name = "Records folder: its own rights (inheritance off), Doctors Modify but not Full Control"
+node = "dc01"
+script = '''
+$s = Get-SmbShare -Name Records -ErrorAction SilentlyContinue
+if (-not $s) { 'no share Records' } else {
+  $acl = Get-Acl $s.Path
+  $full = $acl.Access | Where-Object { $_.IdentityReference -match '\\Doctors$' -and $_.FileSystemRights -match 'FullControl' }
+  if (-not $acl.AreAccessRulesProtected) { 'the folder still inherits from the drive (disable inheritance)' }
+  elseif ($full) { 'Doctors have Full Control: they could change the rights themselves; Modify is enough' } else { 'True' }
+}
+'''
+[[check]]
+section = "Files"
+name = "Records hides what a person cannot open (access-based enumeration)"
+node = "dc01"
+script = "[string](Get-SmbShare -Name Records -ErrorAction SilentlyContinue).FolderEnumerationMode"
+expect = "AccessBased"
+[[check]]
+section = "Server"
+name = "DHCP option 15: the domain name clinic.lab"
+node = "dc01"
+script = '''
+$v = @(Get-DhcpServerv4OptionValue -ScopeId 10.10.10.0 -OptionId 15 -ErrorAction SilentlyContinue) + @(Get-DhcpServerv4OptionValue -OptionId 15 -ErrorAction SilentlyContinue)
+if (($v.Value -join ',') -match '^clinic\.lab$|(^|,)clinic\.lab(,|$)') { 'True' } else { 'no option 15 (DNS domain name) clinic.lab' }
+'''
+[[check]]
+section = "Server"
+name = "DHCP keeps 10.10.10.1 to 10.10.10.20 out of the pool"
+node = "dc01"
+script = '''
+$s = Get-DhcpServerv4Scope -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue
+$ex = Get-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue
+$n = { param($ip) $b = ([ipaddress]$ip).GetAddressBytes(); [array]::Reverse($b); [BitConverter]::ToUInt32($b, 0) }
+$lo = & $n '10.10.10.1'; $hi = & $n '10.10.10.20'
+$pool = $s -and (& $n $s.StartRange) -gt $hi
+$cut = $ex | Where-Object { (& $n $_.StartRange) -le $lo -and (& $n $_.EndRange) -ge $hi }
+if (-not $s) { 'no scope 10.10.10.0' } elseif ($pool -or $cut) { 'True' } else { 'the pool still hands out addresses in .1 to .20' }
+'''
+[[check]]
+section = "Server"
+name = "PRN01 has a DHCP reservation, and DNS agrees with it"
+node = "dc01"
+script = '''
+$r = Get-DhcpServerv4Reservation -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue
+$a = (Resolve-DnsName prn01.clinic.lab -Type A -ErrorAction SilentlyContinue | Where-Object Type -eq 'A').IPAddress
+if (-not $r) { 'no reservation in the scope' } elseif (-not $a) { 'prn01.clinic.lab does not resolve' }
+elseif (-not ($r.IPAddress.IPAddressToString -contains $a)) { "no reservation for prn01's address $a" } else { 'True' }
+'''
+[[check]]
+section = "Server"
+name = "DNS: a reverse lookup zone for 10.10.10.0/24; 10.10.10.10 looks up to DC01"
+node = "dc01"
+script = '''
+$z = Get-DnsServerZone -Name '10.10.10.in-addr.arpa' -ErrorAction SilentlyContinue
+$p = Resolve-DnsName 10.10.10.10 -Type PTR -ErrorAction SilentlyContinue | Where-Object Type -eq 'PTR'
+if (-not $z) { 'no reverse lookup zone 10.10.10.in-addr.arpa' } elseif ($p.NameHost -notmatch '^dc01\.') { 'no PTR record for 10.10.10.10' } else { 'True' }
+'''
+[[check]]
+section = "Server"
+name = "DNS: gw.clinic.lab is the router (10.10.10.1), files.clinic.lab an alias of DC01"
+node = "dc01"
+script = '''
+$gw = (Resolve-DnsName gw.clinic.lab -Type A -ErrorAction SilentlyContinue | Where-Object Type -eq 'A').IPAddress
+$c = Get-DnsServerResourceRecord -ZoneName clinic.lab -Name files -RRType CName -ErrorAction SilentlyContinue
+if ($gw -ne '10.10.10.1') { 'gw.clinic.lab is not 10.10.10.1' } elseif (-not $c -or $c.RecordData.HostNameAlias -notmatch '^dc01\.') { 'no CNAME files pointing to dc01' } else { 'True' }
+'''
+[[check]]
+section = "Desktops"
+name = "PC01 takes its address from DHCP, on the staff network"
+node = "pc01"
+script = "[bool](Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -like '10.10.10.*' })"
+[[check]]
+section = "Desktops"
+name = "PC02 reaches the file server by name: files.clinic.lab answers on SMB"
+node = "pc02"
+script = "[bool](Test-NetConnection files.clinic.lab -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue)"
+
+# ---- what the client asks for once the work is under way
+[[change]]
+id = "exam2-pc"
+after = 0.5
+from = "Tom Weiss"
+letter = "Our second doctor starts next month: can you put a PC in Exam room 2 as well? Call it PC04, on the staff network like the others."
+
+  [[change.need]]
+  id = "exam2-pc"
+  kind = "devices"
+  device = "pc"
+  rooms = ["exam2"]
+  ids = ["pc04"]
+  text = "Change order: PC04 in Exam room 2, connected"
+
+  [[change.need]]
+  id = "exam2-vlan"
+  kind = "vlan"
+  tag = 10
+  name = "STAFF"
+  ids = ["pc04"]
+  text = "Change order: PC04 on VLAN 10 (STAFF)"
+
+[[change]]
+id = "rename-reception"
+after = 0.8
+from = "Tom Weiss"
+letter = "Our insurer's audit wants PC names that say where a PC is. Please rename PC01 at reception to RECEP-01, in Windows and everywhere else, so nothing still knows it by its old name. The printer stays on it."
+
+  [[change.check]]
+  replaces = "PC01 is called PC01 in Windows, and is in clinic.lab"
+  section = "Change order"
+  name = "Change order: the reception PC is called RECEP-01 in Windows, still in clinic.lab and trusted by it"
+  node = "pc01"
+  script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'RECEP-01') { "Windows calls this PC $($c.Name): the client's name is RECEP-01" }
+elseif ($c.Domain -ne 'clinic.lab') { "it is in $($c.Domain), not clinic.lab" }
+elseif (-not (Test-ComputerSecureChannel)) { 'its trust with the domain is broken: rename a domain member with Rename-Computer -DomainCredential, not offline' }
+else { 'True' }
+'''
+  hint = "Rename-Computer -NewName RECEP-01 -DomainCredential CLINIC\\Administrator -Restart renames the computer account in AD too."
+
+  [[change.check]]
+  replaces = "AD and DNS know each PC by its name, once; nothing left of an old name"
+  section = "Change order"
+  name = "Change order: AD and DNS know RECEP-01, PC02 and PC03, once each; nothing left of PC01"
+  node = "dc01"
+  script = '''
+$z = 'clinic.lab'
+$bad = @(foreach ($n in 'RECEP-01','PC02','PC03') {
+  $a = @(Get-DnsServerResourceRecord -ZoneName $z -Name $n -RRType A -ErrorAction SilentlyContinue)
+  if (-not (Get-ADComputer -Filter "Name -eq '$n'" -ErrorAction SilentlyContinue)) { "$n has no computer account" }
+  elseif ($a.Count -eq 0) { "no A record for $n" }
+  elseif ($a.Count -gt 1) { "$n has $($a.Count) A records (" + (($a | ForEach-Object { $_.RecordData.IPv4Address }) -join ', ') + ')' }
+})
+$old = @(Get-ADComputer -Filter "Name -like 'DESKTOP-*' -or Name -like 'WIN-*' -or Name -eq 'PC01'" -ErrorAction SilentlyContinue | ForEach-Object Name) +
+       @(Get-DnsServerResourceRecord -ZoneName $z -RRType A -ErrorAction SilentlyContinue | Where-Object { $_.HostName -match '^(DESKTOP|WIN)-|^PC01$' } | ForEach-Object HostName)
+$old = @($old | Where-Object { $_ } | Sort-Object -Unique)
+if ($old) { $bad += 'names left over from before a rename: ' + ($old -join ', ') }
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+  hint = "After a rename the old A record stays until scavenging removes it: delete pc01 from the clinic.lab zone (and its PTR) by hand, or turn on aging and scavenging."
+
+  [[change.check]]
+  replaces = "PC01, PC02 and PC03 joined, in OU Clinic PCs"
+  section = "Change order"
+  name = "Change order: RECEP-01, PC02 and PC03 joined, in OU Clinic PCs"
+  node = "dc01"
+  script = '''
+$bad = foreach ($c in 'RECEP-01','PC02','PC03') {
+  $a = Get-ADComputer -Filter "Name -eq '$c'" -ErrorAction SilentlyContinue
+  if (-not $a) { "$c not joined" } elseif ($a.DistinguishedName -notmatch 'OU=Clinic PCs,') { "$c not in OU Clinic PCs" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+
+[[machine]]
+id = "dc01"
+what = "Windows Server: domain controller, DNS, DHCP, file server; 10.10.10.10"
+where = "Comms room (MDF), racked"
+[[machine]]
+id = "pc01"
+what = "Windows PC, reception"
+where = "Reception"
+[[machine]]
+id = "pc02"
+what = "Windows PC, practice manager"
+where = "Practice manager's office"
+[[machine]]
+id = "pc03"
+what = "Windows PC, lab"
+where = "Laboratory (annex)"
+[[machine]]
+id = "prn01"
+what = "Network printer"
+where = "Reception"
+
+# ---- the client's staff: the help desk's callers once the site runs
+[[person]]
+first = "Maya"
+last = "Levin"
+account = "maya.levin"
+department = "Doctors"
+title = "Doctor"
+[[person]]
+first = "Noa"
+last = "Peretz"
+account = "noa.peretz"
+department = "Reception"
+title = "Receptionist"
+pc = "pc01"
+[[person]]
+first = "Tom"
+last = "Weiss"
+account = "tom.weiss"
+department = "Management"
+title = "Practice manager"
+pc = "pc02"
+manager = true
+[[person]]
+first = "Lior"
+last = "Katz"
+account = "lior.katz"
+department = "Lab"
+title = "Lab technician"
+pc = "pc03"
+
+# ---- the work order, graded from the lab
+[[need]]
+id = "jacks"
+section = "Cabling"
+kind = "jacks"
+rooms = "all"
+weight = 3
+text = "Every wall jack in both buildings cabled to its comms room, tested and patched"
+hint = "Pull each jack's cable in the building view, test it, then patch its panel port to a switch port in the closet."
+[[need]]
+id = "fibre"
+section = "Cabling"
+kind = "backbone"
+weight = 2
+text = "The annex on fibre to the main comms room, trunked between the switches"
+hint = "Pull fibre through the duct on the site map, then patch it into a gigabit port of a switch at each end (Gi0/1 on the annex switch)."
+[[need]]
+id = "router"
+section = "Cabling"
+kind = "uplink"
+text = "The router patched into the main switch"
+[[need]]
+id = "poe"
+section = "Cabling"
+kind = "poe"
+text = "Cameras and access points powered from the switch (PoE), no power bricks"
+hint = "A camera or AP on a switch with no PoE stays dark: fit a PoE+ switch."
+[[need]]
+id = "names"
+section = "Network"
+kind = "names"
+ids = ["dc01", "pc01", "pc02", "pc03", "prn01"]
+text = "Machines named to the client's list (DC01, PC01-PC03, PRN01)"
+[[need]]
+id = "vlan10"
+section = "Network"
+kind = "vlan"
+tag = 10
+name = "STAFF"
+devices = ["pc", "printer", "ap"]
+ids = ["dc01"]
+weight = 2
+text = "VLAN 10 named STAFF on the switches, with the PCs, printer, access points and DC01 in it"
+[[need]]
+id = "vlan20"
+section = "Network"
+kind = "vlan"
+tag = 20
+name = "CCTV"
+devices = ["camera"]
+weight = 2
+text = "VLAN 20 named CCTV with the cameras, and only them"
+[[need]]
+id = "gw10"
+section = "Network"
+kind = "routed"
+tag = 10
+gateway = "10.10.10.1/24"
+text = "The router is 10.10.10.1/24 on VLAN 10"
+[[need]]
+id = "gw20"
+section = "Network"
+kind = "routed"
+tag = 20
+gateway = "10.10.20.1/24"
+text = "The router is 10.10.20.1/24 on VLAN 20"
+[[need]]
+id = "pool20"
+section = "Network"
+kind = "dhcp-pool"
+tag = 20
+text = "The router hands the cameras their addresses (a DHCP pool on VLAN 20)"
+[[need]]
+id = "helper10"
+section = "Network"
+kind = "helper"
+tag = 10
+text = "The router relays VLAN 10's DHCP requests to DC01 (ip helper-address)"
+[[need]]
+id = "reception"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["reception"]
+ids = ["pc01"]
+text = "PC01 at reception, connected"
+[[need]]
+id = "printer"
+section = "Devices"
+kind = "devices"
+device = "printer"
+rooms = ["reception"]
+ids = ["prn01"]
+text = "PRN01 at reception, connected"
+[[need]]
+id = "office"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["office"]
+ids = ["pc02"]
+text = "PC02 in the practice manager's office, connected"
+[[need]]
+id = "labpc"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["lab"]
+ids = ["pc03"]
+text = "PC03 in the annex lab, connected"
+[[need]]
+id = "wifi"
+section = "Wi-Fi"
+kind = "wifi"
+rooms = ["reception", "waiting", "exam1", "exam2", "office", "staff", "records", "treatment", "lab", "store"]
+weight = 2
+text = "Wi-Fi signal in every room of both buildings"
+hint = "An AP on a ceiling point covers about 18 m around it."
+[[need]]
+id = "ssid"
+section = "Wi-Fi"
+kind = "ssid"
+ssid = "Harbor-Staff"
+security = "wpa2"
+text = "Every access point broadcasts Harbor-Staff with WPA2"
+hint = "Set it in each AP's own pages (LuCI) from a lab PC, then read the AP's settings on its panel."
+[[need]]
+id = "cameras"
+section = "Cameras"
+kind = "cameras"
+weight = 2
+text = "Cameras watch the front door, the back door, the car park and the annex door"
+hint = "Outdoor points take an outdoor camera; it sees about 35 m."
+
+# ---- inside the machines
+[[check]]
+section = "Server"
+name = "DC01 is the domain controller of clinic.lab"
+node = "dc01"
+script = "(Get-ADDomain -ErrorAction SilentlyContinue).DNSRoot"
+expect = "clinic.lab"
+weight = 2
+hint = "Install AD DS and promote DC01 to a new forest clinic.lab."
+[[check]]
+section = "Server"
+name = "DC01 has the static address 10.10.10.10"
+node = "dc01"
+script = "[bool](Get-NetIPAddress -AddressFamily IPv4 -IPAddress 10.10.10.10 -ErrorAction SilentlyContinue | Where-Object PrefixOrigin -eq 'Manual')"
+[[check]]
+section = "Server"
+name = "DHCP on DC01: a scope 10.10.10.0 with the router and DC01 as DNS, authorized in AD"
+node = "dc01"
+script = '''
+$s = Get-DhcpServerv4Scope -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue
+if (-not $s) { 'no scope 10.10.10.0' } elseif ($s.State -ne 'Active') { 'the scope is not active' } else {
+  $o = @{}; Get-DhcpServerv4OptionValue -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue | ForEach-Object { $o[$_.OptionId] = $_.Value -join ',' }
+  $srv = Get-DhcpServerv4OptionValue -ErrorAction SilentlyContinue | Where-Object OptionId -eq 6
+  $dns = if ($o[6]) { $o[6] } else { ($srv.Value -join ',') }
+  if ($o[3] -notmatch '10\.10\.10\.1$') { 'option 3 (router) is not 10.10.10.1' }
+  elseif ($dns -notmatch '10\.10\.10\.10') { 'option 6 (DNS) does not name 10.10.10.10' }
+  elseif (-not (Get-DhcpServerInDC -ErrorAction SilentlyContinue)) { 'the DHCP server is not authorized in AD' }
+  else { 'True' }
+}
+'''
+weight = 2
+[[check]]
+section = "Server"
+name = "PRN01 is known in DNS (prn01.clinic.lab)"
+node = "dc01"
+script = "[bool](Resolve-DnsName prn01.clinic.lab -Type A -ErrorAction SilentlyContinue)"
+[[check]]
+section = "Server"
+name = "Nightly Windows Server Backup of DC01 with system state"
+node = "dc01"
+script = "$p = Get-WBPolicy -ErrorAction SilentlyContinue; [bool]($p -and $p.Schedule -and (Get-WBSystemState -Policy $p))"
+hint = "Install Windows Server Backup, give it a backup disk (a data disk from the machine's parts), and schedule a daily backup with system state."
+[[check]]
+section = "Active Directory"
+name = "OUs Staff and Clinic PCs"
+node = "dc01"
+script = "[bool](Get-ADOrganizationalUnit -Filter \"Name -eq 'Staff'\") -and [bool](Get-ADOrganizationalUnit -Filter \"Name -eq 'Clinic PCs'\")"
+[[check]]
+section = "Active Directory"
+name = "maya.levin, noa.peretz, tom.weiss and lior.katz: enabled, in OU Staff"
+node = "dc01"
+script = '''
+$bad = foreach ($u in 'maya.levin','noa.peretz','tom.weiss','lior.katz') {
+  $a = Get-ADUser -Filter "SamAccountName -eq '$u'" -ErrorAction SilentlyContinue
+  if (-not $a) { "$u missing" } elseif (-not $a.Enabled) { "$u disabled" } elseif ($a.DistinguishedName -notmatch 'OU=Staff,') { "$u not in OU Staff" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+[[check]]
+section = "Active Directory"
+name = "Groups Doctors, Reception, Management and Lab with the right person in each"
+node = "dc01"
+script = '''
+$want = @{ Doctors = 'maya.levin'; Reception = 'noa.peretz'; Management = 'tom.weiss'; Lab = 'lior.katz' }
+$bad = foreach ($g in $want.Keys) {
+  $m = Get-ADGroupMember -Identity $g -ErrorAction SilentlyContinue | Select-Object -ExpandProperty SamAccountName
+  if ($null -eq $m) { "group $g missing or empty" } elseif ($m -notcontains $want[$g]) { "$($want[$g]) not in $g" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+[[check]]
+section = "Active Directory"
+name = "PC01, PC02 and PC03 joined, in OU Clinic PCs"
+node = "dc01"
+script = '''
+$bad = foreach ($c in 'PC01','PC02','PC03') {
+  $a = Get-ADComputer -Filter "Name -eq '$c'" -ErrorAction SilentlyContinue
+  if (-not $a) { "$c not joined" } elseif ($a.DistinguishedName -notmatch 'OU=Clinic PCs,') { "$c not in OU Clinic PCs" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+[[check]]
+section = "Files"
+name = "Records share: Doctors change, Reception read, nobody else"
+node = "dc01"
+script = '''
+$s = Get-SmbShare -Name Records -ErrorAction SilentlyContinue
+if (-not $s) { 'no share Records' } else {
+  $acl = (Get-Acl $s.Path).Access | Where-Object AccessControlType -eq 'Allow'
+  $d = $acl | Where-Object { $_.IdentityReference -match '\\Doctors$' -and $_.FileSystemRights -match 'Modify|FullControl' }
+  $r = $acl | Where-Object { $_.IdentityReference -match '\\Reception$' }
+  $rw = $r | Where-Object { $_.FileSystemRights -match 'Modify|FullControl|Write' }
+  $other = $acl | Where-Object { $_.IdentityReference -match '^(Everyone|BUILTIN\\Users|NT AUTHORITY\\Authenticated Users)$' }
+  if (-not $d) { 'Doctors cannot change it' } elseif (-not $r) { 'Reception cannot read it' } elseif ($rw) { 'Reception can change it' }
+  elseif ($other) { 'others still have access: ' + (($other.IdentityReference | Select-Object -Unique) -join ', ') } else { 'True' }
+}
+'''
+weight = 2
+hint = "Turn off inheritance on the folder, remove Users, and grant Doctors Modify and Reception Read & execute."
+[[check]]
+section = "Files"
+name = "Lab share: the Lab group can change it"
+node = "dc01"
+script = '''
+$s = Get-SmbShare -Name Lab -ErrorAction SilentlyContinue
+if (-not $s) { 'no share Lab' } else {
+  [bool]((Get-Acl $s.Path).Access | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.IdentityReference -match '\\Lab$' -and $_.FileSystemRights -match 'Modify|FullControl' })
+}
+'''
+[[check]]
+section = "Policies"
+name = "A GPO linked to Clinic PCs locks the screen after 5 minutes"
+node = "dc01"
+script = '''
+$ou = Get-ADOrganizationalUnit -Filter "Name -eq 'Clinic PCs'" -ErrorAction SilentlyContinue
+if (-not $ou) { 'no OU Clinic PCs' } else {
+  $hit = foreach ($l in (Get-GPInheritance -Target $ou.DistinguishedName).InheritedGpoLinks) {
+    $v = Get-GPRegistryValue -Guid $l.GpoId -Key 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System' -ValueName InactivityTimeoutSecs -ErrorAction SilentlyContinue
+    if ($v -and [int]$v.Value -gt 0 -and [int]$v.Value -le 300) { $l.DisplayName }
+  }
+  if ($hit) { 'True' } else { 'no GPO applying to Clinic PCs sets Interactive logon: Machine inactivity limit to 300 seconds or less' }
+}
+'''
+weight = 2
+[[check]]
+section = "Policies"
+name = "A GPO maps R: to the Records share"
+node = "dc01"
+script = '''
+$f = Get-ChildItem "C:\Windows\SYSVOL\domain\Policies" -Recurse -Filter Drives.xml -ErrorAction SilentlyContinue | Where-Object { (Get-Content -Raw $_.FullName) -match 'letter="R"' -and (Get-Content -Raw $_.FullName) -match '\\Records' }
+[bool]$f
+'''
+hint = "Group Policy Preferences: User Configuration > Preferences > Windows Settings > Drive Maps, R: to \\\\dc01\\Records, targeted at the Doctors group."
+[[check]]
+section = "Policies"
+name = "Domain passwords at least 12 characters, lockout after 5 tries"
+node = "dc01"
+script = "$p = Get-ADDefaultDomainPasswordPolicy; [bool]($p.MinPasswordLength -ge 12 -and $p.LockoutThreshold -ge 1 -and $p.LockoutThreshold -le 5)"
+[[check]]
+section = "Desktops"
+name = "PC01 is called PC01 in Windows, and is in clinic.lab"
+node = "pc01"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'PC01') { "Windows calls this PC $($c.Name): the client's name is PC01" }
+elseif ($c.Domain -ne 'clinic.lab') { "it is in $($c.Domain), not clinic.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+[[check]]
+section = "Desktops"
+name = "PC02 is called PC02 in Windows, and is in clinic.lab"
+node = "pc02"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'PC02') { "Windows calls this PC $($c.Name): the client's name is PC02" }
+elseif ($c.Domain -ne 'clinic.lab') { "it is in $($c.Domain), not clinic.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+[[check]]
+section = "Desktops"
+name = "PC03 is called PC03 in Windows, and is in clinic.lab"
+node = "pc03"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'PC03') { "Windows calls this PC $($c.Name): the client's name is PC03" }
+elseif ($c.Domain -ne 'clinic.lab') { "it is in $($c.Domain), not clinic.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+[[check]]
+section = "Active Directory"
+name = "AD and DNS know each PC by its name, once; nothing left of an old name"
+node = "dc01"
+script = '''
+$z = 'clinic.lab'
+$bad = @(foreach ($n in 'PC01','PC02','PC03') {
+  $a = @(Get-DnsServerResourceRecord -ZoneName $z -Name $n -RRType A -ErrorAction SilentlyContinue)
+  if (-not (Get-ADComputer -Filter "Name -eq '$n'" -ErrorAction SilentlyContinue)) { "$n has no computer account" }
+  elseif ($a.Count -eq 0) { "no A record for $n" }
+  elseif ($a.Count -gt 1) { "$n has $($a.Count) A records (" + (($a | ForEach-Object { $_.RecordData.IPv4Address }) -join ', ') + ')' }
+})
+$old = @(Get-ADComputer -Filter "Name -like 'DESKTOP-*' -or Name -like 'WIN-*'" -ErrorAction SilentlyContinue | ForEach-Object Name) +
+       @(Get-DnsServerResourceRecord -ZoneName $z -RRType A -ErrorAction SilentlyContinue | Where-Object { $_.HostName -match '^(DESKTOP|WIN)-' } | ForEach-Object HostName)
+$old = @($old | Where-Object { $_ } | Sort-Object -Unique)
+if ($old) { $bad += 'names left over from before a rename: ' + ($old -join ', ') }
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+hint = "A PC installed by hand comes up as DESKTOP-something: rename it before it joins (or with Rename-Computer after), then delete what the old name left behind: its computer account in AD and its A record in DNS."
+[[check]]
+section = "Desktops"
+name = "PC01 prints to PRN01"
+node = "pc01"
+script = "[bool](Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'prn01' -or $_.PortName -match 'prn01' -or $_.ShareName -match 'prn01' })"

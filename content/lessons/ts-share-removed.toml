@@ -1,0 +1,71 @@
+[lesson]
+id = "ts-share-removed"
+title = "The share that vanished"
+module = "troubleshoot"
+order = 60
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "share-removed"
+minutes = 20
+summary = "Every Sales user's S: drive shows a red cross; the files are still on the server."
+why = '''
+"Network path not found" with the server up and reachable means the share is
+gone, not the data. A share is a name mapped to a folder with its own permission
+layer; deleting it leaves the folder and the NTFS ACL untouched. Re-creating it
+with the right share permission restores access instantly, and the mapped drives
+reconnect on the next refresh.
+
+The deeper lesson is knowing which of the two permission layers you are looking
+at when access fails, and that the share layer is the one that disappears with
+the share.
+'''
+concepts = [
+  "Get-SmbShare and Get-SmbShareAccess: what is published and who may connect",
+  "Share versus NTFS: the share ACL is recreated with the share; the NTFS ACL lives on the folder",
+  "Mapped-drive behaviour: a failed reconnect shows a red cross and retries on access",
+  "Change log: the Microsoft-Windows-SMBServer/Operational log records share creation and deletion",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 share-removed). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Re-creating a share with Full Control for Everyone to make it work fast leaves it that way for years.",
+  "The desired-state engine can put the share back exactly as defined: Test for drift on the Roles tab shows it missing, Apply restores it.",
+]
+further = [
+  "Microsoft Learn: New-SmbShare",
+  "Microsoft Learn: SMB share permissions",
+]
+
+[[verify]]
+label = "shares on the server"
+node = "fs01"
+cmd = "Get-SmbShare | Where-Object Name -notlike '*$' | Select-Object Name, Path | Format-Table -AutoSize"
+
+[[verify]]
+label = "the folder is still there"
+node = "fs01"
+cmd = "Test-Path D:\\Shares\\Company; (Get-ChildItem D:\\Shares\\Company -ErrorAction SilentlyContinue | Measure-Object).Count"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A share was deleted and re-created. Which permissions came back with it?"
+answer = "None of the share ACL: it is recreated with the share; NTFS lives on the folder and is unchanged"
+wrong = ["Both share and NTFS reset to Everyone", "Only share permissions", "Nothing changes at all"]
+why = "Set the share ACL again, carefully."
+
+[[quiz]]
+q = "Which log records share creation and deletion?"
+answer = "Microsoft-Windows-SMBServer/Operational"
+wrong = ["System", "Application", "Security only"]
+why = "It is the change log for shares."
+
+[[quiz]]
+q = "Which winlab tool puts the share back exactly as defined?"
+answer = "Test for drift and Apply in the Services (Roles) window"
+wrong = ["Rebuilding the VM", "A checkpoint of the DC", "Network faults"]
+why = "Desired state restores it."

@@ -1,0 +1,57 @@
+[lesson]
+id = "ts-rdp-rule-disabled"
+title = "RDP times out, and there is no block rule"
+module = "troubleshoot"
+order = 73
+lab = "ad-ds-basics"
+node = "fs01"
+nodes = ["dc01", "fs01", "pc01"]
+problem = "rdp-rule-disabled"
+minutes = 20
+summary = "Remote Desktop is allowed on the server, it is listening, and the connection still times out."
+why = '''
+Windows Firewall blocks inbound traffic that no rule allows. Remote Desktop
+works because a group of allow rules, Remote Desktop, lets 3389 in. Switch
+those rules off and nothing has to be added for RDP to fail: no block rule to
+find, the System Properties check box still ticked, the service listening.
+The answer is in the allow rules, and in whether they are enabled.
+'''
+concepts = [
+  "Default inbound action: block what no rule allows",
+  "Rule groups: Get-NetFirewallRule -DisplayGroup 'Remote Desktop'",
+  "Present is not enabled: a disabled rule does nothing",
+  "System Properties > Remote sets fDenyTSConnections and turns the group on; a script can turn the group off behind it",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 rdp-rule-disabled). Do not read the hints yet.",
+  "Reproduce the symptom from pc01, the way an administrator would meet it: mstsc /v:fs01 and Test-NetConnection fs01 -Port 3389.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "A new allow rule for 3389 hides the cause; the next person still finds the group off.",
+  "Turning the firewall off to test proves the firewall is involved and nothing else.",
+]
+further = [
+  "Microsoft Learn: Windows Firewall rules",
+  "Microsoft Learn: Enable Remote Desktop on your PC",
+]
+
+[[verify]]
+label = "the Remote Desktop rules"
+node = "fs01"
+cmd = "Get-NetFirewallRule -DisplayGroup 'Remote Desktop' | Select-Object DisplayName, Enabled, Profile"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "RDP times out, the service listens, and there is no block rule. Where do you look?"
+answer = "Whether the Remote Desktop allow rules are enabled"
+wrong = ["The DNS record", "The Remote Desktop Users group", "The RDP certificate"]
+why = "Inbound traffic with no enabled allow rule is blocked."
+
+[[quiz]]
+q = "Which cmdlet lists the rules of one group?"
+answer = "Get-NetFirewallRule -DisplayGroup"
+wrong = ["Get-NetFirewallProfile", "Get-NetTCPConnection", "Get-NetFirewallSetting"]
+why = "Then Enable-NetFirewallRule with the same group."

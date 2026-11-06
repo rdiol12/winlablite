@@ -1,0 +1,60 @@
+[exercise]
+id = "helpdesk-shift"
+title = "Work the helpdesk queue"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "fs01", "pc01"]
+brief = """
+You are on the service desk for the morning. Switch the Helpdesk queue on and
+work the calls that come in from the office's staff: take them, find the
+cause, fix it on the machines, prove it from the caller's side and resolve
+each one with a note. When your shift ends, the office must be working again
+(the domain's DNS, the file server and its company share, Noah's PC at the
+front desk) and the next person on the desk needs your handover note.
+"""
+tasks = [
+  "Start dc01, fs01 and pc01; open the Helpdesk window and press Start taking calls (Normal day)",
+  "Work at least three tickets: highest priority and closest breach first, Take, notes in the work log, Waiting on user only when you need the caller, Resolve with a resolution note",
+  "On pc01 write C:\\Users\\Public\\Documents\\handover.txt: one line per ticket you touched, with its INC number, what it was and its state",
+  "Stop taking calls when the shift is over, then grade: the checks read the machines' end state",
+]
+
+[[check]]
+name = "the domain's DNS service runs on dc01"
+node = "dc01"
+script = "$s = Get-Service -Name DNS -ErrorAction SilentlyContinue; [bool]($s -and [string]$s.Status -eq 'Running' -and [string]$s.StartType -ne 'Disabled')"
+expect = "True"
+weight = 2
+hint = "Without it nobody signs in. Get-Service DNS on dc01; if it was stopped and disabled, set it back to Automatic and start it."
+
+[[check]]
+name = "fs01 serves the company share"
+node = "fs01"
+script = "$s = Get-Service -Name LanmanServer -ErrorAction SilentlyContinue; [bool]($s -and [string]$s.Status -eq 'Running' -and (Get-SmbShare -Name Company -ErrorAction SilentlyContinue))"
+expect = "True"
+weight = 2
+hint = "Get-SmbShare on fs01 must list Company, and the Server service (LanmanServer) must run. A share removed is shared again from its folder, with the permissions it had."
+
+[[check]]
+name = "pc01 asks the domain's DNS server"
+node = "pc01"
+script = "$a = @(Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | ForEach-Object { $_.ServerAddresses }); [bool]($a.Count -gt 0 -and $a[0] -eq '10.10.10.10')"
+expect = "True"
+weight = 1
+hint = "ipconfig /all on pc01: the first DNS server must be dc01 (10.10.10.10). Set it back on the adapter, or let DHCP give it."
+
+[[check]]
+name = "pc01 still trusts the domain"
+node = "pc01"
+script = "[bool](Test-ComputerSecureChannel -ErrorAction SilentlyContinue)"
+expect = "True"
+weight = 1
+hint = "Test-ComputerSecureChannel on pc01; a broken one is repaired with Test-ComputerSecureChannel -Repair -Credential and a domain admin."
+
+[[check]]
+name = "a handover note names the tickets"
+node = "pc01"
+script = "$f = 'C:\\Users\\Public\\Documents\\handover.txt'; [bool]((Test-Path $f) -and ([regex]::Matches((Get-Content -Path $f -Raw), 'INC\\d{5}').Count -ge 3))"
+expect = "True"
+weight = 2
+hint = "C:\\Users\\Public\\Documents\\handover.txt on pc01, one line per ticket you touched with its number (INC00001 and so on): at least three."

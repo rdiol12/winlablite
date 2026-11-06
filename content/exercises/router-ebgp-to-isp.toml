@@ -1,0 +1,74 @@
+[exercise]
+id = "router-ebgp-to-isp"
+title = "The lab router peers with the ISP: eBGP Established, the Internet reachable from the office and the workshop"
+lab = "router-protocols"
+reset_nodes = []
+nodes = ["rtr-isp", "rtr-edge", "pc-office", "pc-edge", "inet01"]
+brief = """
+The company (AS 65000, the lab router) gets its Internet link from an ISP
+(AS 65100, rtr-isp, which you also run). Bring up eBGP between them over the
+handoff link, announce the office and workshop networks, learn the Internet's,
+and give the workshop's router a default route through OSPF. Both PCs then
+fetch the web server on the Internet with their own addresses.
+"""
+tasks = [
+  "rtr-isp: FRRouting installed, forwarding on, router bgp 65100 with neighbor 198.51.100.1 remote-as 65000 and network 203.0.113.0/24",
+  "On the router's console: router bgp 65000, neighbor 198.51.100.2 remote-as 65100",
+  "The lab router announces 10.80.0.0/24 and 10.81.0.0/24 with network ... mask ...",
+  "router ospf 1 on the console: default-information originate always",
+  "pc-office and pc-edge fetch http://203.0.113.80/",
+]
+
+[[check]]
+name = "the lab router is AS 65000 and its session to the ISP is Established"
+node = "fabric"
+shell = "sh"
+script = "vtysh -c 'show ip bgp neighbors 198.51.100.2' 2>/dev/null | grep -q 'remote AS 65100, local AS 65000' && vtysh -c 'show ip bgp neighbors 198.51.100.2' 2>/dev/null | grep -q 'BGP state = Established' && echo yes || echo no"
+expect = "yes"
+weight = 3
+hint = "show ip bgp summary on the console. Active: is rtr-isp's bgpd running with neighbor 198.51.100.1 remote-as 65000? Idle with a NOTIFICATION: an AS number is wrong on one side."
+
+[[check]]
+name = "the lab router learned the Internet's network from BGP"
+node = "fabric"
+shell = "sh"
+script = "ip route show 203.0.113.0/24 2>/dev/null | grep -qE 'via 198\\.51\\.100\\.2 .*proto (bgp|186)' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "network 203.0.113.0/24 under rtr-isp's address-family ipv4 unicast, and no bgp ebgp-requires-policy there (or a route-map out): show bgp summary on rtr-isp says (Policy) otherwise"
+
+[[check]]
+name = "the ISP learned exactly the office and workshop networks"
+node = "rtr-isp"
+shell = "sh"
+script = "vtysh -c 'show ip route bgp' 2>/dev/null | grep -oE ' 10\\.[0-9.]+/[0-9]+' | tr -d ' ' | sort -u | paste -sd, -"
+expect = "10.80.0.0/24,10.81.0.0/24"
+weight = 2
+hint = "router bgp 65000, address-family ipv4, network 10.80.0.0 mask 255.255.255.0 and network 10.81.0.0 mask 255.255.255.0 on the console; show ip bgp there lists what it announces"
+
+[[check]]
+name = "rtr-edge has a default route from OSPF"
+node = "rtr-edge"
+shell = "sh"
+script = "vtysh -c 'show ip route 0.0.0.0/0' 2>/dev/null | grep -q 'Known via \"ospf\"' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "router ospf 1, default-information originate always on the console; rtr-edge's show ip route then has O>* 0.0.0.0/0 via 10.80.0.2"
+
+[[check]]
+name = "pc-office fetches the web server with its own address"
+node = "pc-office"
+shell = "sh"
+script = "curl -s -m 5 http://203.0.113.80/ | grep -q 'from 10\\.80\\.0\\.10$' && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "traceroute -n 203.0.113.80 from pc-office shows how far it gets; the way back needs rtr-isp to know 10.80.0.0/24, and rtr-isp to forward"
+
+[[check]]
+name = "pc-edge fetches the web server with its own address"
+node = "pc-edge"
+shell = "sh"
+script = "curl -s -m 5 http://203.0.113.80/ | grep -q 'from 10\\.81\\.0\\.10$' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "pc-edge's gateway is rtr-edge: it needs the default from OSPF to send it to the lab router, and rtr-isp needs 10.81.0.0/24 from BGP for the reply"

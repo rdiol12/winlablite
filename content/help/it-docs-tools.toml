@@ -1,0 +1,31 @@
+[topic]
+id = "it-docs-tools"
+title = "The inventory, the wiki and the vault"
+category = "Using winlab"
+order = 52
+keywords = ["glpi", "inventory", "agent", "dokuwiki", "wiki", "runbook", "vaultwarden", "bitwarden", "vault", "password manager", "admin tools server", "staff directory"]
+summary = "The IT department's own tools run on the Admin tools server: you install them, then use them from a lab PC."
+body = '''
+The **Admin tools server** on the device shelf is a plain Debian 12 server for the IT department's own paperwork. Nothing is installed on it: you build the three tools yourself, the way you would at work.
+
+**What to fetch first**
+
+Setup lists them for a lab that has the server, or run `winlab docs fetch` on this PC. The packs need the Debian 12 image to be fetched first.
+
+- the **glpi** pack: Apache, PHP, MariaDB and GLPI, the asset inventory
+- the **dokuwiki** pack: DokuWiki, the wiki for runbooks
+- the **vaultwarden** pack: Docker and the Vaultwarden image, the password vault
+- the **GLPI Agent**: the Windows installer, for the GLPI Agent stick
+
+Everything comes from the projects' own releases. Nothing is shipped with winlab.
+
+**Getting them into the lab**
+
+In the server's Settings, plug in each package stick and install from it. Each stick has a README.txt and an INSTALL.txt. On the media shelf, **GLPI Agent stick** writes the agent for the PCs, and **Staff directory stick** writes HR's list of who works here and at which PC.
+
+**Using them**
+
+The server's window has a Management box for each tool, with the address to type. **Manage from this PC** only brings a lab PC's screen to the front: you open Edge there, type the address and sign in. The vault works only over https, so it needs a certificate. The lesson shows how.
+
+Grading reads what the tools stored inside the server. It never asks for your passwords.
+'''

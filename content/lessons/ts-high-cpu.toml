@@ -1,0 +1,68 @@
+[lesson]
+id = "ts-high-cpu"
+title = "The server that is suddenly slow"
+module = "troubleshoot"
+order = 90
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "high-cpu"
+minutes = 15
+summary = "Everything on one server crawls; the CPU is pinned at 100 percent."
+why = '''
+Slow is a measurement, not a feeling. Get-Counter puts a number on it, and
+Get-Process sorted by CPU names the process. Before killing it, find out what
+started it and with which command line, because the question in production is
+not "how do I stop it" but "will it come back, and should it". A runaway process
+is a symptom of a bug, a loop, a scan, or an attacker; the parent process tells
+you which.
+'''
+concepts = [
+  "Get-Counter: processor time, queue length, the numbers behind the feeling",
+  "Get-Process sorted by CPU; the CPU column is cumulative seconds, so compare twice",
+  "Win32_Process: command line and parent process id for any process",
+  "Stop-Process versus fixing the cause: the second is the job",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 high-cpu). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Killing the wrong powershell.exe can kill the agent winlab uses to talk to the machine; check the command line first.",
+  "A process at 100 percent of one core on a four-core server shows 25 percent total; read per-process, not just the total.",
+]
+further = [
+  "Microsoft Learn: Get-Counter",
+  "Microsoft Learn: Get-Process",
+]
+
+[[verify]]
+label = "CPU now"
+node = "fs01"
+cmd = "(Get-Counter '\\Processor(_Total)\\% Processor Time').CounterSamples.CookedValue"
+
+[[verify]]
+label = "top processes by CPU time"
+node = "fs01"
+cmd = "Get-Process | Sort-Object CPU -Descending | Select-Object -First 5 Name, Id, @{n='CPUs';e={[int]$_.CPU}} | Format-Table -AutoSize"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "What is the CPU column of Get-Process?"
+answer = "Cumulative CPU seconds, so compare two samples"
+wrong = ["Percent right now", "Memory in MB", "Number of threads"]
+why = "The difference between samples is the load."
+
+[[quiz]]
+q = "Which class gives a process's command line and parent?"
+answer = "Win32_Process"
+wrong = ["Win32_Service", "Win32_ComputerSystem", "Win32_Thread"]
+why = "Check before killing anything."
+
+[[quiz]]
+q = "One process uses a full core on a four-core server. What does the total show?"
+answer = "About 25 percent"
+wrong = ["100 percent", "4 percent", "400 percent"]
+why = "Read per-process numbers."

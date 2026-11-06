@@ -1,0 +1,57 @@
+[lesson]
+id = "ts-winrm-stopped"
+title = "Server Manager cannot get data"
+module = "troubleshoot"
+order = 72
+lab = "ad-ds-basics"
+node = "fs01"
+nodes = ["dc01", "fs01", "pc01"]
+problem = "winrm-stopped"
+minutes = 20
+summary = "PowerShell remoting and Server Manager stop reaching a server that pings and takes RDP."
+why = '''
+Server Manager, Enter-PSSession, Invoke-Command and Windows Admin Center all
+ride on one service: WinRM, listening on TCP 5985. When it stops, every one
+of them fails at once while Remote Desktop and file shares carry on, which is
+the clue. Test-WSMan asks the service itself, and a refused connection tells
+you the machine answered and nothing listens, which is not a firewall.
+'''
+concepts = [
+  "Test-WSMan: is a WS-Management service answering on that machine",
+  "Refused versus timed out: nothing listening versus something filtering",
+  "Service start type: Disabled survives a reboot, Stopped does not",
+  "Enable-PSRemoting: the service, the listener and the firewall rule in one command",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 winrm-stopped). Do not read the hints yet.",
+  "Reproduce the symptom from pc01, the way an administrator would meet it: Enter-PSSession -ComputerName fs01, and Server Manager on dc01 showing fs01 as cannot get data.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Restarting the service without changing its start type brings it back until the next reboot.",
+  "Adding a firewall rule for 5985 changes nothing when nothing listens on it.",
+]
+further = [
+  "Microsoft Learn: Installation and configuration for Windows Remote Management",
+  "Microsoft Learn: Test-WSMan",
+]
+
+[[verify]]
+label = "WinRM service and listener"
+node = "fs01"
+cmd = "Get-Service WinRM | Select-Object Status, StartType; Get-NetTCPConnection -LocalPort 5985 -State Listen -ErrorAction SilentlyContinue"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "What does Test-WSMan tell you?"
+answer = "Whether the WinRM service on that machine answers"
+wrong = ["Whether the machine pings", "Whether RDP is allowed", "Whether DNS resolves the name"]
+why = "It asks the service, not the network."
+
+[[quiz]]
+q = "A port test is refused at once. What does that mean?"
+answer = "The machine answered and nothing listens on the port"
+wrong = ["A firewall drops the packets", "The machine is off", "DNS is wrong"]
+why = "A firewall drop looks like a timeout."

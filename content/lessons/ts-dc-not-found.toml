@@ -1,0 +1,64 @@
+[lesson]
+id = "ts-dc-not-found"
+title = "Nobody can find the domain controller"
+module = "troubleshoot"
+order = 106
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01", "fs01"]
+problem = "srv-records-missing"
+minutes = 30
+summary = "The DC is up, DNS answers, and members say no domain controller could be contacted."
+why = '''
+Members do not find a domain controller by name: they ask DNS for service
+(SRV) records such as _ldap._tcp.dc._msdcs.corp.lab, which every DC registers
+for itself through the Netlogon service. Delete those records and stop Netlogon
+from putting them back, and the DC is invisible to the domain while being
+perfectly healthy. dcdiag's DNS tests and one nslookup query find it in
+minutes.
+'''
+concepts = [
+  "The DC locator: SRV records under _msdcs and the domain zone",
+  "Netlogon registers them, from netlogon.dns, at start and every 24 hours",
+  "nslookup -type=SRV, nltest /dsgetdc, dcdiag /test:dns",
+  "Netlogon parameters that switch registration off",
+]
+steps = [
+  "Press Break above (or run winlab break dc01 srv-records-missing). Do not read the hints yet.",
+  "Reproduce it from fs01: nltest /dsgetdc:corp.lab /force, and sign in with a domain account that has not signed in there before.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Cached credentials let existing users keep signing in for a while, which hides the fault from the people who would report it.",
+  "Re-creating the records by hand works until the next Netlogon cycle; fix the registration.",
+]
+further = [
+  "Microsoft Learn: How domain controllers are located in Windows",
+  "Microsoft Learn: dcdiag",
+]
+
+[[verify]]
+label = "the DC's SRV record"
+node = "dc01"
+cmd = "Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab -Server 127.0.0.1"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which service registers a DC's SRV records?"
+answer = "Netlogon"
+wrong = ["DNS Client", "DHCP Server", "Kerberos KDC"]
+why = "From netlogon.dns, at start and every 24 hours."
+
+[[quiz]]
+q = "Why does re-creating the SRV records by hand not last?"
+answer = "The next Netlogon cycle undoes it; fix the registration"
+wrong = ["DNS rejects manual records", "Records expire in a minute", "It does last"]
+why = "Find the parameter that turned registration off."
+
+[[quiz]]
+q = "Why do users report this fault late?"
+answer = "Cached credentials let existing users keep signing in for a while"
+wrong = ["The DC sends no errors", "Logons are slower only", "It only affects admins"]
+why = "New logons and new machines fail first."

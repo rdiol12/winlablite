@@ -1,0 +1,85 @@
+[lesson]
+id = "ad-recycle-bin"
+title = "The AD Recycle Bin: bring back a deleted OU with its people and groups"
+module = "identity"
+order = 89
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01"]
+problem = "ou-deleted"
+minutes = 30
+summary = "Turn the Recycle Bin on before you need it, then restore a whole deleted OU, parent first, with every attribute and group membership."
+why = '''
+Somebody deletes an OU. With it go the user accounts inside, a group that
+lived there, and every membership those users had in groups elsewhere. Before
+Windows Server 2008 R2 the way back was a system state restore in Directory
+Services Restore Mode and an authoritative restore with ntdsutil (the
+ad-authoritative-restore lesson), with the DC offline and the back-links
+restored by hand.
+
+The Recycle Bin keeps a deleted object whole for its lifetime (180 days by
+default): every attribute, its SID, its password, and its links, so a restored
+user is back in the groups it was in, and can sign in again with the password
+it had. It has to be turned on first, it cannot be turned off, and it only
+saves what is deleted after that.
+
+Turn it on, press Break, and OU=Contractors disappears from dc01 with the two
+contractors in it and the VPN group that lived there.
+'''
+concepts = [
+  "Deleted objects: with the Recycle Bin, isDeleted and a move into CN=Deleted Objects, attributes and links kept; without it, a tombstone that keeps almost nothing",
+  "msDS-deletedObjectLifetime and tombstoneLifetime: how long a deleted object can come back (180 days each, by default)",
+  "lastKnownParent: where an object lived; a child can only be restored into a parent that exists, so restore top down",
+  "Linked attributes (member and memberOf) come back with the object, which an authoritative restore has to fix by hand",
+  "ProtectedFromAccidentalDeletion: a deny-delete entry on the OU that the console and PowerShell honour",
+]
+steps = [
+  "Turn the Recycle Bin on (forest-wide, one way): Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target corp.lab. Check: (Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes.",
+  "Press Break (or winlab break dc01 ou-deleted). In Active Directory Users and Computers (refresh), Corp has no Contractors OU.",
+  "Look in the bin: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent, whenChanged | Format-Table Name, ObjectClass, lastKnownParent, whenChanged -AutoSize.",
+  "Restore the OU first: Get-ADObject -Filter \"isDeleted -eq `$true -and Name -like 'Contractors*'\" -IncludeDeletedObjects | Restore-ADObject.",
+  "Then everything that lived in it: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent | Where-Object { $_.lastKnownParent -like 'OU=Contractors,*' } | Restore-ADObject.",
+  "Check the links came back: Get-ADUser mnovak -Properties MemberOf | Select-Object -ExpandProperty MemberOf, and Get-ADGroupMember G-Contractors-VPN.",
+  "Make it harder next time: Set-ADOrganizationalUnit 'OU=Contractors,OU=Corp,DC=corp,DC=lab' -ProtectedFromAccidentalDeletion $true.",
+  "Find out who did it: on dc01, Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5141} (with Directory Service Changes auditing on) names the account. Then press Verify my fix.",
+]
+pitfalls = [
+  "Restoring the users before the OU fails: their lastKnownParent is still deleted. Top down, always.",
+  "Creating the users again by hand makes new objects with new SIDs: files, mailbox rights and group memberships do not know them.",
+  "The Recycle Bin is not a backup: a wrong attribute change, a corrupted database or a deletion older than its lifetime still needs the system state backup.",
+  "Enabling the Recycle Bin cannot be undone, and the forest functional level must be 2008 R2 or later (every new forest is).",
+]
+further = [
+  "Microsoft Learn: Active Directory Recycle Bin step-by-step guide",
+  "Microsoft Learn: Restore-ADObject",
+  "Microsoft Learn: 5141(S) A directory service object was deleted",
+]
+
+[[verify]]
+label = "the Recycle Bin and what is in it"
+node = "dc01"
+cmd = "(Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes; Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent | Format-Table Name, ObjectClass, lastKnownParent -AutoSize"
+
+[[verify]]
+label = "the Contractors OU, its people and their groups"
+node = "dc01"
+cmd = "Get-ADObject -SearchBase 'OU=Contractors,OU=Corp,DC=corp,DC=lab' -Filter * -Properties memberOf, ProtectedFromAccidentalDeletion | Format-Table Name, ObjectClass, ProtectedFromAccidentalDeletion, memberOf -AutoSize"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A deleted OU held users. In which order do you restore?"
+answer = "The OU first, then the objects whose lastKnownParent is that OU"
+wrong = ["The users first, then the OU", "All at once in any order", "The groups first, then the OU"]
+why = "An object can only come back into a parent that exists."
+
+[[quiz]]
+q = "With the Recycle Bin on, what comes back with a restored user?"
+answer = "Its attributes, SID, password and group memberships"
+wrong = ["Only its name and SID", "Everything except its group memberships", "Only what was in the last backup"]
+why = "The Recycle Bin keeps the whole object and its links; a tombstone without it keeps almost nothing."
+
+[[quiz]]
+q = "Can the AD Recycle Bin be turned off once it is on?"
+answer = "No, enabling it is permanent for the forest"
+wrong = ["Yes, with Disable-ADOptionalFeature", "Yes, by lowering the forest functional level", "Only on the PDC emulator"]
+why = "Turn it on early; it only helps for deletions made after it was enabled."

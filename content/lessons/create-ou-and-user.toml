@@ -1,0 +1,85 @@
+[lesson]
+id = "create-ou-and-user"
+title = "Create an OU, a user and a global group"
+module = "identity"
+order = 30
+lab = "ad-ds-basics"
+node = "dc01"
+role = "users-groups"
+answer_lab = "every-role"
+answer_node = "dc01"
+exercise = "create-ou-and-user"
+minutes = 35
+summary = "Give a department a home in the directory and the group that permissions flow through."
+why = '''
+The default containers (CN=Users, CN=Computers) are not organizational units:
+you cannot link Group Policy to them or delegate them, so anything left there is a
+dead end. An OU structure is how a directory stays manageable at a thousand users:
+policy and delegation follow the tree. Design it around how things are
+administered, not around the org chart.
+
+Groups are where permissions live. The pattern that scales is AGDLP: put Accounts
+in Global groups by role, put global groups into Domain Local groups per resource,
+and grant Permissions to the domain-local group. Then a new hire gets one group
+membership and inherits every permission that role needs, and an audit answers
+"who can read Finance" by reading one group.
+'''
+concepts = [
+  "OU versus container: both hold objects; only an OU takes GPO links and delegation",
+  "Global group: members from its own domain, usable anywhere in the forest; the role group",
+  "Domain-local group: members from anywhere, usable only in its domain; the resource group",
+  "Universal group: forest-wide membership, replicated to global catalogs; use sparingly",
+  "Security versus distribution: only a security group can appear in an ACL",
+  "AGDLP: Accounts into Global, Global into Domain Local, Domain Local gets the Permission",
+]
+steps = [
+  "On dc01, create the OU: New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'.",
+  "Create the user: New-ADUser -Name 'John Doe' -GivenName John -Surname Doe -SamAccountName jdoe -UserPrincipalName jdoe@corp.lab -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true.",
+  "Create the role group: New-ADGroup -Name G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'.",
+  "Add the member: Add-ADGroupMember -Identity G-Sales -Members jdoe.",
+  "Look at what you built: Get-ADUser jdoe -Properties MemberOf | Select-Object DistinguishedName, Enabled, MemberOf.",
+  "Open dsa.msc (Active Directory Users and Computers) on dc01 and find the same objects in the tree.",
+]
+pitfalls = [
+  "An OU is protected from accidental deletion by default; that is a feature, clear the flag only when you mean it.",
+  "Granting NTFS permissions to a global group directly works until the second resource; the domain-local layer is what keeps it tidy.",
+  "A user created disabled stays disabled until you set a password that meets policy; check Enabled explicitly.",
+]
+further = [
+  "Microsoft Learn: Active Directory security groups",
+  "Microsoft Learn: Designing an OU structure",
+]
+
+[[verify]]
+label = "the OU exists"
+node = "dc01"
+cmd = "Get-ADOrganizationalUnit -Identity 'OU=Sales,DC=corp,DC=lab' | Select-Object -ExpandProperty DistinguishedName"
+
+[[verify]]
+label = "jdoe is enabled and in Sales"
+node = "dc01"
+cmd = "Get-ADUser jdoe | Select-Object Enabled, DistinguishedName | Format-List"
+
+[[verify]]
+label = "G-Sales scope and members"
+node = "dc01"
+cmd = "Get-ADGroup G-Sales -Properties Members | Select-Object GroupScope, GroupCategory, Members | Format-List"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "What can an OU do that a plain container like CN=Users cannot?"
+answer = "Take Group Policy links and delegation"
+wrong = ["Hold user objects", "Replicate to other DCs", "Have a name"]
+why = "Only OUs can be the target of a GPO link or delegated permissions."
+
+[[quiz]]
+q = "In AGDLP, which group gets the permission on the resource?"
+answer = "The domain-local group"
+wrong = ["The global group", "The user account", "The universal group"]
+why = "Accounts go into Global groups, those into Domain Local, and the Domain Local group gets the Permission."
+
+[[quiz]]
+q = "Which kind of group can appear in an access control list?"
+answer = "A security group"
+wrong = ["A distribution group", "Any group, both kinds work", "Only universal groups"]
+why = "Distribution groups are for mail and cannot be granted permissions."

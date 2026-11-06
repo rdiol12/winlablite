@@ -1,0 +1,9 @@
+# Check text out with LF on every platform. winlab's shell scripts run in
+# Linux guests and much of its text is written into guests or compared byte
+# for byte; a Windows checkout with core.autocrlf (the GitHub runner's and
+# Git for Windows' default) would turn content/agent/fabric-agent.sh and the
+# roles into CRLF, which sh in the guest cannot run, and the exe is built
+# from that checkout.
+* text=auto eol=lf
+# Batch files keep the platform's line ends (CRLF on Windows), as cmd.exe wants.
+*.cmd text=auto !eol

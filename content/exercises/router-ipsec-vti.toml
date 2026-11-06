@@ -1,0 +1,87 @@
+[exercise]
+id = "router-ipsec-vti"
+title = "The branch joined over IKEv2 and IPsec, routed through Tunnel0"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "pc01"]
+brief = """
+A branch office (br01, a Linux server you add on the Workbench, its LAN
+10.50.0.0/24) is to be reached from the office only through an encrypted
+tunnel over the provider's network (203.0.113.0/24, the router at .1, the
+branch at .2). Build IKEv2 with a pre-shared key and an IPsec-protected
+tunnel interface on the router, the branch's end with strongSwan, and route
+the branch's LAN into the tunnel. The checks read the router's own IPsec
+state and ping the branch from pc01.
+"""
+tasks = [
+  "On the Workbench: a switch for the provider in a free router port, the router at 203.0.113.1/24; a Linux server br01 at 203.0.113.2 with strongSwan from the strongswan pack stick and a dummy LAN 10.50.0.1/24",
+  "On the router: crypto ikev2 proposal, policy, keyring (a pre-shared key for 203.0.113.2), profile; crypto ipsec transform-set (AES-256) and profile",
+  "interface Tunnel0 (10.255.0.1/30) with tunnel mode ipsec ipv4, its source and destination and tunnel protection; ip route 10.50.0.0 255.255.255.0 Tunnel0",
+  "On br01: swanctl's connection and secret, an XFRM interface with the same if_id as the child, and the route back to 10.10.10.0/24 through it",
+]
+
+[[check]]
+name = "the router has an IPsec tunnel interface (an XFRM interface built from interface Tunnel)"
+node = "fabric"
+shell = "sh"
+script = '''
+if ip -d link show type xfrm 2>/dev/null | grep -q 'wltun'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 1
+hint = "interface Tunnel0 with an ip address, tunnel source, tunnel destination and tunnel mode ipsec ipv4; show ip interface brief lists it."
+
+[[check]]
+name = "an IKEv2 SA with the branch is established"
+node = "fabric"
+shell = "sh"
+script = '''
+if swanctl --list-sas 2>/dev/null | grep -q 'ESTABLISHED, IKEv2'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 3
+hint = "show crypto ikev2 sa should say READY. If not, read br01's sudo journalctl -u strongswan: NO_PROPOSAL_CHOSEN means the proposals differ, AUTHENTICATION_FAILED the keys or the identities."
+
+[[check]]
+name = "the IPsec SA is installed and encrypts with AES-256"
+node = "fabric"
+shell = "sh"
+script = '''
+if swanctl --list-sas 2>/dev/null | grep 'INSTALLED, TUNNEL' | grep -Eq 'ESP:AES_(CBC|GCM_16)-256'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 2
+hint = "crypto ipsec transform-set with esp-aes 256 (or esp-gcm 256), named in the IPsec profile with set transform-set; the branch's esp_proposals must offer the same."
+
+[[check]]
+name = "the branch LAN is routed into the tunnel"
+node = "fabric"
+shell = "sh"
+script = '''
+if ip route show proto 186 2>/dev/null | grep -q '^10\.50\.0\.0/24 dev wltun'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 1
+hint = "ip route 10.50.0.0 255.255.255.0 Tunnel0 in configure terminal."
+
+[[check]]
+name = "traffic crossed the tunnel both ways"
+node = "fabric"
+shell = "sh"
+script = '''
+s=$(swanctl --list-sas 2>/dev/null)
+i=$(echo "$s" | sed -n 's/^ *in .* \([0-9][0-9]*\) packets.*/\1/p' | awk '{n+=$1} END{print n+0}')
+o=$(echo "$s" | sed -n 's/^ *out .* \([0-9][0-9]*\) packets.*/\1/p' | awk '{n+=$1} END{print n+0}')
+if [ "$i" -gt 0 ] && [ "$o" -gt 0 ]; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 2
+hint = "show crypto ipsec sa: if encaps climbs and decaps stays 0, the branch sends its answers in clear (no route back through its XFRM interface, or a different if_id)."
+
+[[check]]
+name = "pc01 reaches the branch LAN"
+node = "pc01"
+script = "Test-Connection 10.50.0.1 -Count 3 -Quiet"
+expect = "True"
+weight = 2
+hint = "With the SAs up, the remaining parts are routes: Tunnel0 for 10.50.0.0/24 on the router, xfrm-hq for 10.10.10.0/24 on br01; with zones on the router, Tunnel0 in a zone with its zone-pairs."
