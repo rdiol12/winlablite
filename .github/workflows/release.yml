@@ -6,7 +6,8 @@ name: release
 #     files are added to that release when the build finishes;
 #   - or push a tag core-v<version>: the release is created with them;
 #   - or run it by hand (Actions > release > Run workflow): the files are
-#     kept as the run's artifact, no release is touched.
+#     kept as the run's artifact, and attached to the release whose tag you
+#     type, if you type one (to rebuild a release from the latest main).
 # No secrets are needed; a code-signing certificate is used when set
 # (WINLAB_SIGN_PFX_BASE64, WINLAB_SIGN_PASSWORD; see packaging/sign.ps1).
 on:
@@ -15,6 +16,11 @@ on:
   push:
     tags: ["core-v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Attach the files to this existing release (its tag, e.g. v0.2.0); empty: artifact only"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -84,13 +90,14 @@ jobs:
           if-no-files-found: error
 
       - name: Attach to the release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release != ''
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.ref_name || inputs.release }}
         run: |
           v="${{ steps.ver.outputs.version }}"
-          gh release upload "$GITHUB_REF_NAME" --clobber "dist/winlab-core-$v-setup.exe" "dist/winlab-core-$v-win64.zip"
+          gh release upload "$TAG" --clobber "dist/winlab-core-$v-setup.exe" "dist/winlab-core-$v-win64.zip"
 
       - name: Release notes from the tag message
         if: github.event_name == 'push'
