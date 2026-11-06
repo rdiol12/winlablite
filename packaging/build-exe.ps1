@@ -63,7 +63,9 @@ Write-Host "  repo: $root"
 
 # 1. PyInstaller, installed into the build environment only (never shipped
 #    as a module; its bootloader is what wraps the exe).
-& $Python -m PyInstaller --version *> $null
+# find_spec prints nothing: a probe that fails on stderr would end the build
+# under $ErrorActionPreference = 'Stop' in Windows PowerShell.
+& $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  installing PyInstaller into the build environment...'
     & $Python -m pip install --upgrade pyinstaller
