@@ -1,0 +1,67 @@
+[lesson]
+id = "ts-firewall-blocks-rdp"
+title = "Ping works, RDP does not"
+module = "troubleshoot"
+order = 70
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "firewall-blocks-rdp"
+minutes = 20
+summary = "Administrators cannot Remote Desktop to a server that is otherwise fine."
+why = '''
+When a port does not answer there are three possibilities: the service is
+not listening, something between you and it filters the port, or the host's own
+firewall drops it. Test-NetConnection from outside and Get-NetTCPConnection on
+the host separate them in two commands. Then the firewall rule list, where a
+block rule always beats an allow rule, so adding another allow changes nothing.
+'''
+concepts = [
+  "Test-NetConnection -Port: a TCP connect test from the client side",
+  "Get-NetTCPConnection -State Listen: is anything bound to the port on the host",
+  "Rule precedence: block beats allow; look for block rules before adding allow rules",
+  "Get-NetFirewallPortFilter: find rules by port rather than by name",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 firewall-blocks-rdp). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Disabling the firewall to test is a test that cannot be undone cleanly in production; find the rule instead.",
+  "A rule can be scoped to a profile; the same rule is harmless on Domain and blocking on Public.",
+]
+further = [
+  "Microsoft Learn: Test-NetConnection",
+  "Microsoft Learn: Firewall rule precedence",
+]
+
+[[verify]]
+label = "is the port listening"
+node = "fs01"
+cmd = "(Get-NetTCPConnection -LocalPort 3389 -State Listen -ErrorAction SilentlyContinue | Measure-Object).Count"
+
+[[verify]]
+label = "block rules that mention 3389"
+node = "fs01"
+cmd = "Get-NetFirewallRule -Direction Inbound -Action Block -Enabled True | Get-NetFirewallPortFilter | Where-Object LocalPort -match 3389 | Get-NetFirewallRule | Select-Object DisplayName, Profile"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which cmdlet tests a TCP port from the client side?"
+answer = "Test-NetConnection -Port"
+wrong = ["Get-NetAdapter", "Resolve-DnsName", "Get-NetIPAddress"]
+why = "Then check the listener on the host."
+
+[[quiz]]
+q = "How do you find firewall rules by port rather than by name?"
+answer = "Get-NetFirewallPortFilter"
+wrong = ["Get-NetFirewallProfile", "Get-NetTCPConnection", "netstat -b"]
+why = "Pipe to Get-NetFirewallRule to see the rule."
+
+[[quiz]]
+q = "Why not disable the firewall to test?"
+answer = "It cannot be undone cleanly in production and hides the actual rule"
+wrong = ["It is impossible on servers", "It reboots the server", "It disables RDP"]
+why = "Find the rule instead."

@@ -1,0 +1,63 @@
+[lesson]
+id = "ts-dhcp-scope-full"
+title = "New PCs get no address"
+module = "troubleshoot"
+order = 110
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01", "pc01"]
+problem = "dhcp-scope-full"
+minutes = 25
+summary = "Machines on the network work; a rebuilt PC gets 169.254 and nothing else."
+why = '''
+A DHCP scope is a finite pool. Long leases and a burst of visiting devices
+(phones on the office network, a conference, a misbehaving switch) fill it, and
+then only the machines that already hold leases keep working, because a renewal
+does not need a free address. The symptom lands on the one person with a new
+laptop. Reading the scope statistics and the lease table takes a minute.
+'''
+concepts = [
+  "Lease, renewal at half time, and a new lease: why existing clients keep working",
+  "Scope statistics: in use, free, percentage",
+  "Lease duration as a design choice: hours for guests, days for offices",
+  "APIPA (169.254) means no DHCP answer",
+]
+steps = [
+  "Press Break above (or run winlab break dc01 dhcp-scope-full). Do not read the hints yet.",
+  "On pc01, ipconfig /release then ipconfig /renew and read what happens.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Deleting every lease frees the scope and briefly hands out addresses that machines still use (conflicts): remove the stale ones.",
+  "A bigger scope only delays the next exhaustion when the cause is long leases for short visits.",
+]
+further = [
+  "Microsoft Learn: Get-DhcpServerv4ScopeStatistics",
+  "Microsoft Learn: DHCP lease duration",
+]
+
+[[verify]]
+label = "how full is the scope"
+node = "dc01"
+cmd = "Get-DhcpServerv4ScopeStatistics -ScopeId 10.10.10.0"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A PC gets 169.254.x.x. What does that mean?"
+answer = "No DHCP server answered"
+wrong = ["It has a static address", "DNS failed", "It is on the wrong VLAN, always"]
+why = "APIPA is the fallback."
+
+[[quiz]]
+q = "Why do existing clients keep working when the scope is full?"
+answer = "They renew their existing leases"
+wrong = ["They do not need DHCP", "They use APIPA", "They have reservations"]
+why = "Only new clients need a free address."
+
+[[quiz]]
+q = "Why not delete every lease to free the scope?"
+answer = "Addresses still in use get handed out again, causing conflicts"
+wrong = ["It deletes the scope", "It requires a reboot of the DC", "It is the right fix"]
+why = "Remove stale leases; fix lease duration."

@@ -1,0 +1,19 @@
+[topic]
+id = "office-staff"
+title = "The office: staff at work in your lab"
+category = "Using winlab"
+order = 42
+keywords = ["office", "staff", "workday", "users", "new starter", "onboarding", "sign in", "load", "shift", "helpdesk", "hr", "sheet", "password"]
+summary = "The lab's staff come to work on the lab clock, sign in with their own accounts and use your servers."
+body = '''
+Open **Office** from the Start menu. With **Workday** on, the people in the lab's staff directory keep office hours on the lab clock: they arrive around half past eight, have lunch, and go home around half past five. Nobody works at night or at the weekend unless you turn on **Shift work**.
+
+While someone is in, they really work inside the lab at their own PC (or a hot desk): they sign in against the domain controller, open their department's folder on the file server and save documents, keep notes in their home folder, print when the lab has a printer, mail a colleague when it has a mail server, and open the intranet when a machine serves one. The load level (**Quiet**, **Normal**, **Busy**) sets how often they do something, so the servers' logs fill up as they would at work.
+
+- **The accounts are yours to make.** On day one HR's new-starter sheet arrives on a USB stick on the media shelf (**HR: new-starter sheet**). Plug it into a machine, and create the accounts, groups, folders and home folders from it.
+- **Hand out the first passwords** in the **Staff list** tab, or with `winlab staff password <account>` (it asks; the password is never part of the command). They are kept only in this lab's folder on this PC.
+- Someone with no account, or whose sign-in or work fails, **calls the helpdesk**: one ticket per broken thing, with a note added each time someone else hits it.
+- Staff only work at machines that are running, and only use servers that are running.
+
+From a command prompt: `winlab workday start`, `winlab workday status`, `winlab workday level busy`, `winlab workday shifts on`, `winlab workday tick` and `winlab staff list`. The lesson **Onboard the new starters** walks through the whole first day.
+'''

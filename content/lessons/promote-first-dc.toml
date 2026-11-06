@@ -1,0 +1,86 @@
+[lesson]
+id = "promote-first-dc"
+title = "Promote the first domain controller"
+module = "identity"
+order = 10
+lab = "ad-ds-basics"
+node = "dc01"
+role = "ad-ds"
+exercise = "promote-first-dc"
+minutes = 45
+summary = "Turn a plain server into the forest root domain controller with DNS."
+why = '''
+Active Directory is the database every other Windows service trusts: who a user
+is, which computer is allowed in, which policy applies. The first domain controller
+creates the forest, the domain, and the schema, and it must run DNS, because clients
+find domain controllers through DNS service records, not through broadcasts or a
+list someone typed. A domain whose DNS is wrong fails in ways that look like
+anything but DNS.
+
+Promotion is one command, but the choices it bakes in last for the lifetime of the
+forest: the DNS name, the NetBIOS name, the functional level, where the database
+and SYSVOL live. Understand each before pressing Enter; nobody renames a forest.
+'''
+concepts = [
+  "Forest, domain, tree: the forest is the security boundary; a domain is a replication and administration unit inside it",
+  "Functional level: which Windows Server features the domain may use; set by the oldest DC you intend to keep",
+  "SRV records: _ldap._tcp.dc._msdcs.<domain> is how a client discovers a DC; promotion registers them in DNS",
+  "DSRM password: the local Administrator password used when the directory is offline for repair",
+  "FSMO roles: five single-master roles the first DC holds (schema, naming, RID, PDC emulator, infrastructure)",
+]
+steps = [
+  "On dc01, confirm the static address and that the preferred DNS server is itself: Get-NetIPConfiguration.",
+  "Install the role and tools: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools.",
+  "Promote: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. The server reboots.",
+  "After the reboot, log on as CORP\\Administrator and run Get-ADDomain and Get-ADForest.",
+  "Check the DNS records promotion registered: Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv.",
+  "Run dcdiag /q: an empty result is a healthy DC. Read anything it prints.",
+]
+pitfalls = [
+  "Promoting a DC whose DNS points at an outside resolver leaves the SRV records unregistered; point DNS at the DC itself first.",
+  "A DC with a DHCP address is a time bomb: the address changes and every client loses the domain.",
+  "The DSRM password is not the domain Administrator password. Write it down somewhere you will find in a disaster.",
+]
+further = [
+  "Microsoft Learn: Install Active Directory Domain Services (Level 100)",
+  "Microsoft Learn: Active Directory Domain Services functional levels",
+]
+
+[[verify]]
+label = "the forest root domain"
+node = "dc01"
+cmd = "(Get-ADDomain).DNSRoot"
+
+[[verify]]
+label = "this host is a DC"
+node = "dc01"
+cmd = "(Get-ADDomainController -Identity $env:COMPUTERNAME).Enabled"
+
+[[verify]]
+label = "DNS zone for the domain"
+node = "dc01"
+cmd = "Get-DnsServerZone -Name corp.lab | Select-Object -ExpandProperty ZoneName"
+
+[[verify]]
+label = "who holds the FSMO roles"
+node = "dc01"
+cmd = "netdom query fsmo"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which DNS record type do clients ask for to find a domain controller?"
+answer = "SRV records such as _ldap._tcp.dc._msdcs.<domain>"
+wrong = ["The MX record of the domain", "A PTR record for the DC", "The SOA record"]
+why = "Promotion registers the SRV records; clients locate DCs through them."
+
+[[quiz]]
+q = "What is the DSRM password used for?"
+answer = "Logging on locally when the directory is offline for repair"
+wrong = ["It is the domain Administrator password", "Joining computers to the domain", "Encrypting SYSVOL"]
+why = "Directory Services Restore Mode has its own local Administrator password."
+
+[[quiz]]
+q = "Why should a DC never get its address from DHCP?"
+answer = "If the address changes, clients lose the domain because DNS and SRV records point at the old one"
+wrong = ["DHCP cannot hand out server addresses", "AD refuses to install on DHCP machines in every version", "It makes replication slower"]
+why = "A DC is found by its address; it must be static."

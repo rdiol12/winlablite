@@ -1,0 +1,17 @@
+[topic]
+id = "not-enough-memory"
+title = "Not enough memory to start the machines"
+category = "Common problems"
+order = 20
+keywords = ["memory", "ram", "not enough memory", "won't start", "refuses", "low-memory", "lean", "thrash", "slow"]
+summary = "What to do when winlab says the machines do not fit."
+body = '''
+Before anything boots, winlab compares what the machines need with the memory free on this PC right now. If they do not fit, it trims the servers for that run, and if they still do not fit it says so instead of letting the PC grind to a halt.
+
+- **Start only what the lesson needs.** Use Start these machines in the Lab guide (or `winlab learn start <lesson>`), not the whole lab.
+- **Turn machines off** that the current lesson does not use, in Machines.
+- **Close other programs** on this PC, especially browsers with many tabs. They take memory the machines could use.
+- **Use the Low-memory profile** (the switch in the Start menu, or Settings for this lab). It turns off what an isolated machine gets nothing from, so a server works in 1.5 GB. It takes effect the next time a machine is set up.
+
+An 8 GB PC runs every one- and two-machine lesson. See System requirements for more.
+'''

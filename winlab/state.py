@@ -1,0 +1,173 @@
+"""Running-lab state. One JSON file per lab under var/state."""
+
+from __future__ import annotations
+
+import ctypes
+import json
+import os
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+from . import paths
+
+STILL_ACTIVE = 259
+SUSPENDED = "suspended"
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+@dataclass
+class NodeState:
+    node_id: str
+    pid: int = 0
+    qmp_port: int = 0
+    serial_port: int = 0
+    vnc_port: int = 0
+    disk: str = ""
+    phase: str = "created"  # created | installing | booting | provisioning | ready | stopped | suspended
+    # An appliance winlab drives over its serial console (OPNsense): the
+    # console agent process that speaks the agent protocol on serial_port,
+    # and the QEMU chardev port of the console itself.
+    helper_pid: int = 0
+    console_port: int = 0
+    # A Linux machine's login console (ttyS0) as a loopback socket: the
+    # desktop's Terminal window (termview.py).
+    term_port: int = 0
+    # The USB-serial adapter's COM port, wired to a router's or a switch's
+    # console by the console cable (consolecable.py).
+    com_port: int = 0
+
+
+@dataclass
+class LabState:
+    name: str
+    accel: str = ""
+    display: str = ""
+    started_at: float = 0.0
+    source_path: str = ""
+    nodes: dict[str, NodeState] = field(default_factory=dict)
+
+    def running(self) -> dict[str, NodeState]:
+        return {k: v for k, v in self.nodes.items() if v.pid and pid_alive(v.pid)}
+
+    def suspended(self) -> dict[str, NodeState]:
+        """Machines that hibernated: not running, and their next start is a resume."""
+        return {k: v for k, v in self.nodes.items()
+                if v.phase == SUSPENDED and not (v.pid and pid_alive(v.pid))}
+
+
+def pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        # os.kill(pid, 0) on Windows calls TerminateProcess, which would kill
+        # the very machine we are probing. Query the handle instead.
+        k = ctypes.windll.kernel32
+        handle = k.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = k.GetExitCodeProcess(handle, ctypes.byref(code))
+        k.CloseHandle(handle)
+        return bool(ok) and code.value == STILL_ACTIVE
+    try:
+        os.kill(pid, 0)
+    except (OSError, ProcessLookupError):
+        return False
+    return True
+
+
+def state_file(lab_name: str) -> Path:
+    return paths.STATE / f"{lab_name}.json"
+
+
+def save(st: LabState) -> Path:
+    paths.STATE.mkdir(parents=True, exist_ok=True)
+    dest = state_file(st.name)
+    tmp = dest.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(asdict(st), indent=2), encoding="utf-8")
+    tmp.replace(dest)
+    return dest
+
+
+def load(lab_name: str) -> LabState | None:
+    f = state_file(lab_name)
+    if not f.exists():
+        return None
+    try:
+        raw = json.loads(f.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    # Fields this version does not know (a state file from a newer winlab)
+    # are dropped instead of making every command fail on the lab.
+    known = set(NodeState.__dataclass_fields__)
+    nodes = {k: NodeState(**{f: x for f, x in v.items() if f in known})
+             for k, v in (raw.get("nodes") or {}).items()}
+    return LabState(
+        name=raw.get("name", lab_name),
+        accel=raw.get("accel", ""),
+        display=raw.get("display", ""),
+        started_at=float(raw.get("started_at") or 0.0),
+        source_path=raw.get("source_path", ""),
+        nodes=nodes,
+    )
+
+
+def suspended(lab_name: str) -> set[str]:
+    st = load(lab_name)
+    return set(st.suspended()) if st else set()
+
+
+def running(lab_name: str) -> set[str]:
+    """The ids of the lab's machines whose QEMU is alive."""
+    st = load(lab_name)
+    return set(st.running()) if st else set()
+
+
+def is_running(lab_name: str, node_id: str) -> bool:
+    st = load(lab_name)
+    ns = st.nodes.get(node_id) if st else None
+    return bool(ns and ns.pid and pid_alive(ns.pid))
+
+
+def qmp_port(lab_name: str, node_id: str) -> int:
+    """A running machine's monitor port, 0 when it is not running."""
+    st = load(lab_name)
+    ns = st.nodes.get(node_id) if st else None
+    return ns.qmp_port if ns and ns.qmp_port and ns.pid and pid_alive(ns.pid) else 0
+
+
+def write_json(p: Path, data: dict, end: str = "") -> None:
+    """A lab's side file, through a temporary so a reader never sees half of it."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=1) + end, encoding="utf-8")
+    tmp.replace(p)
+
+
+def save_json(p: Path, data: dict | None) -> None:
+    """A lab's side file written in place; None removes it."""
+    if data is None:
+        p.unlink(missing_ok=True)
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=1), encoding="utf-8")
+
+
+def clear(lab_name: str) -> None:
+    state_file(lab_name).unlink(missing_ok=True)
+
+
+def known_labs() -> list[str]:
+    paths.STATE.mkdir(parents=True, exist_ok=True)
+    return sorted(p.stem for p in paths.STATE.glob("*.json"))
+
+
+def new(lab_name: str, accel: str, display: str, source_path: str = "") -> LabState:
+    return LabState(
+        name=lab_name,
+        accel=accel,
+        display=display,
+        started_at=time.time(),
+        source_path=source_path,
+    )

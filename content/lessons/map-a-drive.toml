@@ -1,0 +1,78 @@
+[lesson]
+id = "map-a-drive"
+title = "Map a network drive with Group Policy"
+module = "identity"
+order = 40
+lab = "ad-ds-basics"
+node = "dc01"
+role = "gpo"
+answer_lab = "every-role"
+answer_node = "dc01"
+exercise = "map-a-drive"
+minutes = 40
+summary = "Deliver a drive letter to every Sales logon from one place, with a Group Policy Preference."
+why = '''
+Group Policy is how one administrator configures a thousand machines: settings
+live in the directory and SYSVOL, clients pull them at boot and logon, and the
+link, not the setting, decides who gets what. A drive map is the classic first
+policy because it shows every moving part: a GPO, a link to an OU, user versus
+computer configuration, and the refresh cycle.
+
+Preferences differ from policies. A policy is enforced and reverts when the GPO
+goes away; a preference is applied once per refresh and the user may change it.
+Drive maps, printers and shortcuts are preferences. Knowing which you are using
+explains why a setting "did not stick" or "would not go away".
+'''
+concepts = [
+  "GPO: a container of settings stored in AD (the GPC) and SYSVOL (the GPT); the link puts it in scope",
+  "User versus computer configuration: processed at logon versus boot; a drive map is a user setting",
+  "Preference actions: Create, Replace, Update, Delete; Update is idempotent and the usual choice",
+  "Processing order: local, site, domain, OU, with the closest OU winning on conflict (LSDOU)",
+  "gpupdate and gpresult: force a refresh, and show which GPOs applied and why",
+]
+steps = [
+  "On dc01, create the GPO: New-GPO -Name 'Map S Drive'.",
+  "Open gpmc.msc, edit the GPO: User Configuration > Preferences > Windows Settings > Drive Maps > New > Mapped Drive. Location \\\\fs01\\Company, letter S, action Update, Reconnect on.",
+  "Link it: New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'.",
+  "On pc01, log on as CORP\\jdoe. Run gpupdate /force, log off and on, and open This PC.",
+  "Still as jdoe, run gpresult /r /scope:user and find 'Map S Drive' under Applied Group Policy Objects.",
+  "On dc01, read what GPMC wrote: the Drives.xml under \\\\corp.lab\\SYSVOL\\corp.lab\\Policies\\{GUID}\\User\\Preferences\\Drives.",
+]
+pitfalls = [
+  "A GPO linked to the OU that holds the computer does nothing for a user setting unless loopback processing is on.",
+  "The share must let the user in, or the drive maps and then shows an error on first open; check share and NTFS permissions on fs01.",
+  "Item-level targeting on a preference is powerful and invisible: when a map applies to some users and not others, look there.",
+]
+further = [
+  "Microsoft Learn: Group Policy Preferences drive maps",
+  "Microsoft Learn: Group Policy processing and precedence",
+]
+
+[[verify]]
+label = "the GPO is linked to Sales"
+node = "dc01"
+cmd = "(Get-GPInheritance -Target 'OU=Sales,DC=corp,DC=lab').GpoLinks | Select-Object DisplayName, Enabled, Order"
+
+[[verify]]
+label = "what the preference maps"
+node = "dc01"
+cmd = "$g = Get-GPO -Name 'Map S Drive'; [xml](Get-Content \"\\\\corp.lab\\SYSVOL\\corp.lab\\Policies\\{$($g.Id)}\\User\\Preferences\\Drives\\Drives.xml\" -Raw) | ForEach-Object { $_.Drives.Drive.Properties | Select-Object letter, path, action }"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A drive mapping is which kind of Group Policy setting?"
+answer = "A user setting, applied at logon"
+wrong = ["A computer setting, applied at boot", "A site setting", "A DNS setting"]
+why = "Drive maps live under User Configuration > Preferences."
+
+[[quiz]]
+q = "Which preference action is idempotent and the usual choice for a drive map?"
+answer = "Update"
+wrong = ["Replace", "Create", "Delete"]
+why = "Update changes only what differs; Replace deletes and recreates every refresh."
+
+[[quiz]]
+q = "In what order is Group Policy processed?"
+answer = "Local, site, domain, OU (LSDOU), the closest OU winning"
+wrong = ["OU, domain, site, local", "Domain only, then local", "Alphabetical by GPO name"]
+why = "Later in the order wins on conflict, so the nearest OU wins."

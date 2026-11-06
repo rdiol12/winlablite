@@ -1,0 +1,26 @@
+[topic]
+id = "not-enough-disk"
+title = "Not enough disk space"
+category = "Common problems"
+order = 30
+keywords = ["disk", "space", "full", "free", "storage", "drive", "images", "move", "gb"]
+summary = "Where the space goes, and how to keep the machines on another drive."
+body = '''
+A Windows Server base takes about 8 GB and a Windows 11 base about 9 GB. Each machine you boot adds 2 to 6 GB, and an ISO takes about 6 GB while its base is being prepared. Setup wants about 40 GB free.
+
+**Make room**
+
+- Delete machines you no longer need, and checkpoints you will not go back to (`winlab snap <lab> list`, then `winlab snap <lab> rm <name>`).
+- Remove ISOs you added and no longer use, from Images.
+
+**Keep the images on a bigger drive**
+
+The image store can live on any drive. Put this in a file called winlab.local.toml in the winlab folder, then move the images folder there:
+
+```
+[store]
+images = "D:/winlab-images"
+```
+
+Setting the WINLAB_IMAGES environment variable does the same.
+'''

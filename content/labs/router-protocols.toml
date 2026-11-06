@@ -1,0 +1,164 @@
+[lab]
+name = "router-protocols"
+description = "The lab router as a real router: OSPF with an FRRouting router across the office LAN, eBGP to an ISP, a guest network kept apart in a VRF, and VRRP so the office's gateway survives a router going down. Typed at the router's console; FRRouting does it on the router and on the Ubuntu routers it talks to."
+domain = "corp.lab"
+netbios = "CORP"
+timezone = "UTC"
+exercises = [
+  "router-ospf-neighbour",
+  "router-ebgp-to-isp",
+  "router-guest-vrf",
+  "router-vrrp-gateway",
+]
+
+# ---------------------------------------------------------------------------
+# The lab router routes office, guest and isp-link: those are its own
+# interfaces, typed at its console (Machines > the router's Console, or
+# `winlab console router-protocols router`). Behind the other two routers
+# are networks the lab router does not route (routed = false): it reaches
+# them only through what OSPF and BGP teach it. rtr-edge and rtr-isp are
+# Ubuntu machines that come up with their addresses and nothing else; they
+# install FRRouting from the 'frr' pack stick, exactly as in the
+# dynamic-routing lab (winlab/routing.py). On the lab router, FRRouting
+# comes from the lab's own Alpine package volume the first time its console
+# configures a routing protocol (winlab/iosrouting.py).
+#
+#                       pc-office (.10)
+#                            |
+#    rtr-edge (.3) ------- office 10.80.0.0/24 ------- lab router (.2)
+#       |                (VRRP: .1 shared)              |      |
+#    edge-lan 10.81.0.0/24                         guest   isp-link 198.51.100.0/30
+#       |                                       10.80.20.0/24    |
+#    pc-edge (.10)                                  |        rtr-isp (.2, AS 65100)
+#                                              pc-guest (.10)    |
+#                                                            isp-lan 203.0.113.0/24
+#                                                                |
+#                                                            inet01 (.80)
+# ---------------------------------------------------------------------------
+
+[[network]]
+id = "office"
+cidr = "10.80.0.0/24"
+gateway = "10.80.0.2"
+description = "the office LAN: the lab router (.2), rtr-edge (.3) and pc-office (.10); .1 is kept free for the VRRP virtual gateway"
+
+[[network]]
+id = "guest"
+cidr = "10.80.20.0/24"
+description = "the guest Wi-Fi's network: pc-guest (.10) behind the lab router (.1); it must reach nothing of the office's"
+
+[[network]]
+id = "isp-link"
+cidr = "198.51.100.0/30"
+description = "the ISP's handoff: the lab router .1 (AS 65000), rtr-isp .2 (AS 65100)"
+
+[[network]]
+id = "edge-lan"
+cidr = "10.81.0.0/24"
+routed = false
+gateway_node = "rtr-edge"
+description = "the workshop's LAN behind rtr-edge (eth0, 10.81.0.1): pc-edge (.10)"
+
+[[network]]
+id = "isp-lan"
+cidr = "203.0.113.0/24"
+routed = false
+gateway_node = "rtr-isp"
+description = "the Internet behind the ISP: inet01, a web server, behind rtr-isp (eth0, 203.0.113.1)"
+
+# ------------------------------------------------------------------ routers
+[[node]]
+id = "rtr-edge"
+image = "ubuntu"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+boot_order = 10
+description = "the workshop's router: eth0 edge-lan (10.81.0.1), eth1 the office LAN (10.80.0.3); FRRouting from the frr pack"
+
+  [node.vars]
+  packs = ["frr"]
+
+  [[node.nic]]
+  network = "edge-lan"
+  ip = "10.81.0.1"
+
+  [[node.nic]]
+  network = "office"
+  ip = "10.80.0.3"
+
+[[node]]
+id = "rtr-isp"
+image = "ubuntu"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+boot_order = 11
+description = "the ISP's edge router (AS 65100): eth0 isp-lan (the Internet), eth1 the handoff to the lab router; you configure it too"
+
+  [node.vars]
+  packs = ["frr"]
+
+  [[node.nic]]
+  network = "isp-lan"
+  ip = "203.0.113.1"
+
+  [[node.nic]]
+  network = "isp-link"
+  ip = "198.51.100.2"
+
+# ------------------------------------------------------------------ the PCs
+[[node]]
+id = "pc-office"
+image = "ubuntu"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+boot_order = 30
+description = "a PC on the office LAN: 10.80.0.10, gateway the lab router (10.80.0.2) until VRRP gives it 10.80.0.1"
+
+  [[node.nic]]
+  network = "office"
+  ip = "10.80.0.10"
+
+[[node]]
+id = "pc-guest"
+image = "ubuntu"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+boot_order = 31
+description = "a visitor's laptop on the guest network: 10.80.20.10, gateway the lab router (10.80.20.1)"
+
+  [[node.nic]]
+  network = "guest"
+  ip = "10.80.20.10"
+
+[[node]]
+id = "pc-edge"
+image = "ubuntu"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+boot_order = 32
+description = "a PC in the workshop: 10.81.0.10, gateway rtr-edge (10.81.0.1)"
+
+  [[node.nic]]
+  network = "edge-lan"
+  ip = "10.81.0.10"
+
+# The Internet: somebody else's web server. It answers HTTP on 80 and 8080
+# with the address the request came from: no NAT anywhere, only routes.
+[[node]]
+id = "inet01"
+image = "alpine"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+roles = ["inet-host"]
+boot_order = 5
+description = "a web server on the Internet (203.0.113.80): answers HTTP with where the request came from"
+
+  [[node.nic]]
+  network = "isp-lan"
+  ip = "203.0.113.80"

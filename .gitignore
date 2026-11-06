@@ -1,0 +1,45 @@
+# Fetched runtime (2+ GB QEMU; pulled by `winlab bootstrap`) — never commit
+/runtime/
+
+# Image store and anything VM-sized
+/images/
+*.qcow2
+*.iso
+*.vhd
+*.vhdx
+*.img
+*.fd
+*.ppm
+*.png
+
+# Per-run state, logs, built labs, snapshots
+/var/
+/winlab/licensing/_server_data/
+
+# Host-local overrides (point image store at another drive, etc.)
+winlab.local.toml
+
+# License tokens / server DB
+license.json
+*.secret
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+build/
+dist/
+*.spec
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Encrypted content packs: built by the release workflow, never committed
+/content/packs/
+*.wlpack

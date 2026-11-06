@@ -1,0 +1,67 @@
+[exercise]
+id = "span-mirror-capture"
+title = "Mirror dc01's port to pc01 and capture fs01 talking to it"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "fs01", "pc01"]
+brief = """
+Someone reports that fs01 is slow to log on, and you want to see its
+conversation with dc01 on the wire. pc01 is the only PC with Wireshark, and
+the switch sends it none of that traffic. Mirror dc01's switch port, both
+directions, to pc01's port, capture fs01 talking to dc01 on pc01, and save
+the capture in pc01's Documents. Leave the session configured. The checks
+read the router (where the switch's ports mirror) and the capture file on
+pc01, with Wireshark's own tshark.
+"""
+tasks = [
+  "Install Wireshark (with Npcap) on pc01 from the Wireshark stick: winlab wireshark fetch, then winlab wireshark stick ad-ds-basics",
+  "On corp's switch: monitor session 1 source interface <dc01's port> both, monitor session 1 destination interface <pc01's port>",
+  "Capture on pc01 while fs01 talks to dc01 (open \\\\dc01\\NETLOGON, gpupdate /force)",
+  "Save the capture as a .pcapng in pc01's Documents, and leave the session in place",
+]
+
+[[check]]
+name = "a port is mirrored both ways: tc copies its ingress and its egress"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for i in $(ls /sys/class/net | grep -E '^(eth|stp)'); do
+  tc filter show dev $i ingress 2>/dev/null | grep -q 'Egress Mirror' && tc filter show dev $i egress 2>/dev/null | grep -q 'Egress Mirror' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "monitor session 1 source interface fa0/N (dc01's port; show interfaces status names it). both is the default; rx or tx alone copies one direction."
+
+[[check]]
+name = "the destination port only listens: out of its VLAN, its ingress dropped"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in $(awk '$1=="dst"{print $2}' /run/winlab-span 2>/dev/null); do
+  tc filter show dev $d ingress 2>/dev/null | grep -q 'gact action drop' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 1
+hint = "monitor session 1 destination interface fa0/M (pc01's port). show monitor should list it under Destination Ports."
+
+[[check]]
+name = "pc01 captured fs01 and dc01 talking to each other"
+node = "pc01"
+script = '''
+$ts = 'C:\Program Files\Wireshark\tshark.exe'
+$f = Get-ChildItem 'C:\Users\*\Documents\*.pcapng', 'C:\Users\*\Documents\*.pcap' -ErrorAction SilentlyContinue |
+     Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not (Test-Path $ts)) { 'Wireshark is not installed on pc01' }
+elseif (-not $f) { 'no .pcapng in Documents on pc01' }
+else {
+    $n = (& $ts -r $f.FullName -Y 'ip.addr==10.10.10.10 && ip.addr==10.10.10.20' 2>$null | Measure-Object).Count
+    if ($n -gt 0) { 'True' } else { "no frame between fs01 and dc01 in $($f.Name)" }
+}
+'''
+expect = "True"
+weight = 3
+hint = "Without the mirror pc01 sees none of it. With it, capture while fs01 opens \\\\dc01\\NETLOGON, then File, Save As, into Documents."

@@ -1,0 +1,67 @@
+[lesson]
+id = "ts-time-skew"
+title = "Kerberos fails because the clock drifted"
+module = "troubleshoot"
+order = 50
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "time-skew"
+minutes = 20
+summary = "Domain logons to one server fail with a clock skew error; local logons work."
+why = '''
+Kerberos refuses tickets whose timestamps are more than five minutes off,
+so a machine with a wrong clock cannot authenticate to anything, while a local
+account still works. The error text is clear when you know to look for it
+(KRB_AP_ERR_SKEW), but the first report is "cannot connect to the share" or "the
+trust relationship failed". Compare clocks first, then look at the time service.
+'''
+concepts = [
+  "Maximum tolerance for clock synchronisation: five minutes, set in the Kerberos policy",
+  "w32tm /stripchart: the offset between this machine and a reference, live",
+  "w32tm /query /source and /status: where the clock comes from and when it last synced",
+  "Domain hierarchy: members sync from DCs, DCs from the PDC emulator; a member with a manual peer is off the tree",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 time-skew). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Setting the clock by hand without fixing the time service means it drifts again; the resync and the service state are the fix.",
+  "A VM whose host pushes a wrong clock drifts right back; look at the hypervisor's time integration too.",
+]
+further = [
+  "Microsoft Learn: Windows Time service",
+  "Microsoft Learn: Maximum tolerance for computer clock synchronization",
+]
+
+[[verify]]
+label = "offset from the DC"
+node = "fs01"
+cmd = "w32tm /stripchart /computer:10.10.10.10 /samples:2 /dataonly"
+
+[[verify]]
+label = "the time service"
+node = "fs01"
+cmd = "Get-Service w32time | Select-Object Status, StartType; w32tm /query /source"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Domain logons fail with a clock skew error. What is the limit?"
+answer = "Five minutes"
+wrong = ["One second", "One hour", "One day"]
+why = "Kerberos policy sets the tolerance."
+
+[[quiz]]
+q = "Which command shows the live offset to a reference clock?"
+answer = "w32tm /stripchart"
+wrong = ["w32tm /register", "net time", "Get-TimeZone"]
+why = "Then /query /source and /status."
+
+[[quiz]]
+q = "Setting the clock by hand without fixing the time service leads to…"
+answer = "drift again later"
+wrong = ["a permanent fix", "a domain rename", "a blue screen"]
+why = "Fix the source and resync."

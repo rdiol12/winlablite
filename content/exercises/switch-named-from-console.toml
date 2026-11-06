@@ -1,0 +1,129 @@
+[exercise]
+id = "switch-named-from-console"
+title = "Name the switch, its banner and pc01's port from the console cable"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["pc01"]
+brief = """
+The corp switch has no address to manage it by; its console port is the way
+in. Cable pc01's USB-serial adapter to the console, open a terminal on COM2
+at 9600 8N1, and give the switch its name, a warning banner and a
+description on the port pc01 is plugged into. The checks open COM2 on pc01
+themselves and read the switch's running configuration, so close your
+terminal before you press Check my work.
+"""
+tasks = [
+  "Plug the console cable between the corp switch and pc01, and restart pc01 so it finds COM2",
+  "Open a terminal on COM2 at 9600 8N1 and reach the switch's privileged prompt",
+  "Name the switch CORP-SW1",
+  "Give it a message-of-the-day banner that warns off anyone without authorization",
+  "Describe port Fa0/1 as pc01, save the configuration and close the terminal",
+]
+
+# Each check opens COM2 on pc01, asks the switch for its running
+# configuration over the console cable, and reads one thing in it.
+[[check]]
+name = "pc01 reaches the switch's console on COM2"
+node = "pc01"
+script = '''
+$names = [System.IO.Ports.SerialPort]::GetPortNames()
+$run = ''
+if ($names -notcontains 'COM2') { $run = 'pc01 has no COM2: plug the console cable into pc01 and restart it' } else {
+    $p = New-Object System.IO.Ports.SerialPort 'COM2', 9600, 'None', 8, 'One'
+    try {
+        $p.Open()
+        foreach ($line in '', 'end', 'enable') { $p.Write($line + "`r"); Start-Sleep -Milliseconds 600 }
+        $null = $p.ReadExisting()
+        $p.Write("show running-config`r"); Start-Sleep -Seconds 3
+        $run = $p.ReadExisting()
+        $p.Write("disable`r")
+    } catch { $run = 'COM2 is busy: close your terminal on it (PuTTY or the serial window) and check again' }
+    finally { if ($p.IsOpen) { $p.Close() } }
+}
+if ($run -match '(?m)^hostname ') { 'True' }
+elseif ($run -match '^(pc01 has|COM2 is)') { $run }
+else { 'the switch did not answer on COM2 at 9600 8N1: is the cable on the corp switch?' }
+'''
+expect = "True"
+weight = 1
+hint = "Windows only adds the adapter's port when it starts with the adapter plugged in; Device Manager, Ports (COM and LPT), shows it."
+
+[[check]]
+name = "the switch is called CORP-SW1"
+node = "pc01"
+script = '''
+$names = [System.IO.Ports.SerialPort]::GetPortNames()
+$run = ''
+if ($names -notcontains 'COM2') { $run = 'pc01 has no COM2: plug the console cable into pc01 and restart it' } else {
+    $p = New-Object System.IO.Ports.SerialPort 'COM2', 9600, 'None', 8, 'One'
+    try {
+        $p.Open()
+        foreach ($line in '', 'end', 'enable') { $p.Write($line + "`r"); Start-Sleep -Milliseconds 600 }
+        $null = $p.ReadExisting()
+        $p.Write("show running-config`r"); Start-Sleep -Seconds 3
+        $run = $p.ReadExisting()
+        $p.Write("disable`r")
+    } catch { $run = 'COM2 is busy: close your terminal on it (PuTTY or the serial window) and check again' }
+    finally { if ($p.IsOpen) { $p.Close() } }
+}
+if ($run -match '(?m)^hostname CORP-SW1\s*$') { 'True' }
+elseif ($run -match '(?m)^hostname (\S+)') { 'the switch is called ' + $Matches[1] }
+elseif ($run -match '^(pc01 has|COM2 is)') { $run }
+else { 'no running configuration came back over COM2' }
+'''
+expect = "True"
+weight = 2
+hint = "The name is a global configuration command; the prompt changes the moment it takes."
+
+[[check]]
+name = "a warning banner greets whoever connects"
+node = "pc01"
+script = '''
+$names = [System.IO.Ports.SerialPort]::GetPortNames()
+$run = ''
+if ($names -notcontains 'COM2') { $run = 'pc01 has no COM2: plug the console cable into pc01 and restart it' } else {
+    $p = New-Object System.IO.Ports.SerialPort 'COM2', 9600, 'None', 8, 'One'
+    try {
+        $p.Open()
+        foreach ($line in '', 'end', 'enable') { $p.Write($line + "`r"); Start-Sleep -Milliseconds 600 }
+        $null = $p.ReadExisting()
+        $p.Write("show running-config`r"); Start-Sleep -Seconds 3
+        $run = $p.ReadExisting()
+        $p.Write("disable`r")
+    } catch { $run = 'COM2 is busy: close your terminal on it (PuTTY or the serial window) and check again' }
+    finally { if ($p.IsOpen) { $p.Close() } }
+}
+if ($run -match 'banner motd \^C[^\r\n]*authori[sz]ed[^\r\n]*\^C') { 'True' }
+elseif ($run -match 'banner motd') { 'the banner does not warn off people who are not authorized' }
+elseif ($run -match '^(pc01 has|COM2 is)') { $run }
+else { 'the switch has no banner' }
+'''
+expect = "True"
+weight = 1
+hint = "A message-of-the-day banner sits between two delimiter characters of your choice, typed in global configuration."
+
+[[check]]
+name = "Fa0/1 is described as pc01"
+node = "pc01"
+script = '''
+$names = [System.IO.Ports.SerialPort]::GetPortNames()
+$run = ''
+if ($names -notcontains 'COM2') { $run = 'pc01 has no COM2: plug the console cable into pc01 and restart it' } else {
+    $p = New-Object System.IO.Ports.SerialPort 'COM2', 9600, 'None', 8, 'One'
+    try {
+        $p.Open()
+        foreach ($line in '', 'end', 'enable') { $p.Write($line + "`r"); Start-Sleep -Milliseconds 600 }
+        $null = $p.ReadExisting()
+        $p.Write("show running-config`r"); Start-Sleep -Seconds 3
+        $run = $p.ReadExisting()
+        $p.Write("disable`r")
+    } catch { $run = 'COM2 is busy: close your terminal on it (PuTTY or the serial window) and check again' }
+    finally { if ($p.IsOpen) { $p.Close() } }
+}
+if ($run -match '(?m)^interface FastEthernet0/1\s*\r?\n\s*description pc01\s*$') { 'True' }
+elseif ($run -match '^(pc01 has|COM2 is)') { $run }
+else { 'FastEthernet0/1 has no description pc01' }
+'''
+expect = "True"
+weight = 2
+hint = "A description belongs to the interface: enter the port's own configuration mode first."

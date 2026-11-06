@@ -1,0 +1,100 @@
+[lesson]
+id = "router-console-vrrp"
+title = "VRRP: one gateway address, two routers behind it"
+module = "network"
+order = 303
+lab = "router-protocols"
+node = "pc-office"
+nodes = ["pc-office", "rtr-edge", "pc-edge"]
+exercise = "router-vrrp-gateway"
+minutes = 45
+summary = "Give the office a virtual gateway, 10.80.0.1, shared by the lab router and rtr-edge with VRRP. Point the PC at it, take the master's interface down, and watch the backup take the address over."
+why = '''
+A PC has one default gateway. If that router dies, the PC is cut off, even when a
+second router sits on the same LAN, because the PC will not change its own
+settings. A first-hop redundancy protocol fixes that: two routers share a third,
+virtual address and a virtual MAC address, one of them (the master) answers for
+it, and the other takes over within a few seconds when the master's
+advertisements stop. The PC never notices.
+
+Cisco has its own protocol for this, HSRP (the standby command), and the open
+standard is VRRP (RFC 3768 for version 2, RFC 5798 for version 3), which Cisco
+routers speak too. In this lab the second gateway is a real router: rtr-edge,
+Ubuntu with FRRouting's vrrpd, on the office LAN beside the lab router. Both speak
+VRRP version 2, the version IOS's vrrp command uses. HSRP is not here, and the
+console says why when you type standby: no Linux router speaks it, so the second
+gateway would have to be pretend.
+
+How it looks underneath: on both routers the virtual address lives on a small
+interface of its own (a macvlan with the virtual MAC 00:00:5e:00:01:01). vrrpd
+holds it up on the master and down on the backup. The lab router makes that
+interface for you from the console command; on rtr-edge you make it by hand, as
+FRRouting's documentation says.
+'''
+concepts = [
+  "Virtual router: a group number (1 to 255), a virtual IP address and the virtual MAC 00:00:5e:00:01:<group> that only the master answers with",
+  "Master and backup: the highest priority (1 to 254, 100 by default) is master; the master sends an advertisement every second (vrrp <group> timers advertise)",
+  "Preemption: on by default in VRRP; a higher-priority router that comes back takes over again (no vrrp <group> preempt stops that)",
+  "Failover takes about three advertisement intervals: the backup waits that long without hearing the master before it takes over",
+  "HSRP (standby) is Cisco's own protocol for the same job; VRRP and HSRP do not talk to each other",
+  "PCs use the virtual address as their gateway; each router keeps its own address for management and routing",
+]
+steps = [
+  "Start pc-office, rtr-edge and pc-edge. OSPF from the first lesson stays up: both routers already know both networks, so either can be the office's gateway. On pc-office, ip route shows its default gateway: 10.80.0.2, the lab router itself.",
+  "Try the command a Cisco engineer types first: on the router's console, configure terminal, interface g0/1/0, standby 1 ip 10.80.0.1. The console refuses with its reason. HSRP is Cisco's own; the protocol both routers here speak is VRRP.",
+  "The lab router's side: still in interface g0/1/0, vrrp 1 ip 10.80.0.1, then vrrp 1 priority 110, end. show vrrp brief: group 1, priority 110, and a few seconds later State Master. It is master because nobody else is in the group yet.",
+  "rtr-edge's side, by hand. Switch vrrpd on: sudo sed -i 's/^vrrpd=no/vrrpd=yes/' /etc/frr/daemons, sudo systemctl restart frr. Make the virtual interface on eth1 (the office card) with the group's virtual MAC and address: sudo ip link add vrrp4-1 link eth1 addrgenmode random type macvlan mode bridge; sudo ip link set dev vrrp4-1 address 00:00:5e:00:01:01; sudo ip addr add 10.80.0.1/24 dev vrrp4-1; sudo ip link set dev vrrp4-1 up. Let only that interface answer ARP for the address: sudo sysctl -w net.ipv4.conf.eth1.arp_ignore=1.",
+  "Then the group in FRRouting: sudo vtysh, configure terminal, interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory. Version 2 is what IOS speaks; FRRouting would use version 3 otherwise and the two routers would ignore each other. show vrrp in vtysh: rtr-edge is Backup (priority 100 against 110), and ip -d link show vrrp4-1 says protodown on: vrrpd holds the address down while it is backup.",
+  "Point the PC at the virtual gateway. pc-office's address is written in its netplan file: sudo sed -i 's/via: 10.80.0.2/via: 10.80.0.1/' /etc/netplan/50-cloud-init.yaml, then sudo netplan apply. ip route shows default via 10.80.0.1. ping -c 2 10.81.0.10 (pc-edge) answers, and ip neigh shows 10.80.0.1 at 00:00:5e:00:01:01: the PC talks to the virtual MAC, not to either router's own.",
+  "Fail the master. Leave ping 10.81.0.10 running on pc-office. On the router's console: configure terminal, interface g0/1/0, shutdown. A few pings are lost (about three seconds), then the replies come back: rtr-edge's show vrrp says Master, and ip -d link show vrrp4-1 no longer says protodown. The PC's gateway address never changed.",
+  "Bring the lab router back: no shutdown on g0/1/0. With preemption (on by default) its priority 110 wins again within a few seconds; show vrrp brief on the console says Master and rtr-edge says Backup. Stop the ping (Ctrl+C) and read how many were lost.",
+  "Press Check my work: it reads which router is master and which backup in both kernels, the PC's gateway and a ping through it.",
+]
+pitfalls = [
+  "Both routers say Master: they do not hear each other. Check the version (2 on both), the group number and the subnet; tcpdump -ni eth1 vrrp on rtr-edge shows whose advertisements arrive.",
+  "The macvlan on rtr-edge is not kept across a reboot: netplan cannot make one. A systemd-networkd .netdev and .network pair in /etc/systemd/network would, in production.",
+  "The virtual address is a third address in the subnet: neither router's own. The lab router refuses its own address as the virtual one.",
+  "Without preemption a router that comes back with a higher priority stays backup; that is sometimes what you want, so that a flapping link does not move the gateway twice.",
+  "VRRP moves the gateway, not the routes behind it: both routers must already be able to reach the networks the PC wants (here, OSPF from the first lesson).",
+]
+further = [
+  "Cisco IOS IP Application Services: Configuring VRRP (vrrp ip, priority, preempt)",
+  "FRRouting documentation: VRRP (the macvlan setup, version 2 and 3)",
+  "RFC 3768: Virtual Router Redundancy Protocol (VRRP) version 2",
+]
+
+[[verify]]
+label = "which router is master: the lab router's virtual interface and vrrpd"
+node = "fabric"
+cmd = "ip -d link show | grep -B1 -A1 '00:00:5e:00:01:01'; vtysh -c 'show vrrp'"
+shell = "sh"
+
+[[verify]]
+label = "rtr-edge's side"
+node = "rtr-edge"
+cmd = "ip -d link show vrrp4-1; vtysh -c 'show vrrp'"
+shell = "sh"
+
+[[verify]]
+label = "pc-office's gateway and whose MAC it is"
+node = "pc-office"
+cmd = "ip route show default; ip neigh show 10.80.0.1"
+shell = "sh"
+
+[[quiz]]
+q = "Which MAC address does a PC see for the gateway of VRRP group 1?"
+answer = "00:00:5e:00:01:01, the virtual MAC, whichever router is master"
+wrong = ["The master router's own MAC address", "ff:ff:ff:ff:ff:ff", "Each router's MAC in turn"]
+why = "The virtual MAC moves with the master role, so the PC's ARP entry stays right after a failover."
+
+[[quiz]]
+q = "Why does the lab router refuse 'standby 1 ip 10.80.0.1'?"
+answer = "HSRP is Cisco's own protocol and the other gateway, a Linux router, cannot speak it"
+wrong = ["HSRP needs a licence", "The address is taken", "HSRP only works on switches"]
+why = "VRRP is the open standard both routers speak; HSRP and VRRP do not interoperate."
+
+[[quiz]]
+q = "Two VRRP routers both claim to be master. What is the likeliest cause?"
+answer = "They do not receive each other's advertisements (version, group or subnet differ, or the link is cut)"
+wrong = ["Both have priority 100", "Preemption is on", "The PCs use the virtual address"]
+why = "A backup becomes master only when it hears nothing from a better master."

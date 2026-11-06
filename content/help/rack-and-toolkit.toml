@@ -1,0 +1,26 @@
+[topic]
+id = "rack-and-toolkit"
+title = "The rack, cable labels and the admin toolkit"
+category = "Using winlab"
+order = 55
+keywords = ["rack", "rack elevation", "racking", "front panel", "unplug", "plug a cable", "patch panel", "cable label", "asset tag", "serial number", "label sheet", "audit", "documentation", "putty", "winscp", "sysinternals", "notepad++", "toolkit", "stick"]
+summary = "Where each device sits in the rack, the cables' labels and the asset tags, and the admin toolkit stick."
+body = '''
+**The Rack window** (desktop icon or Start) draws the lab's equipment in a 42U rack, front and back. It follows what you built: servers, storage, the router, the switches, the UPS and the patch panels you fit with **Patch panels +**. PCs, phones, printers and access points are listed under *Not racked*.
+
+- **Move a device:** drag it on the front view to another U. A red outline means the units are taken. Add a rack with **Racks +**. From a terminal: `winlab rack <lab> move srv01 20`.
+- **Cables:** the back shows every cable from port to port, coloured by its network. Click one to read or change its label. The **Cables** tab lists them all, and you can edit a label there too.
+- **Asset tags and serial numbers:** click a device. Two devices never share a tag.
+- **Power:** the side panel shows what the rack draws now and with everything on, against the UPS.
+- **Print labels:** the *Label sheet* tab prints asset tags with barcodes and wrap-around cable labels. **Export SVG / PNG** saves the diagram.
+- **Front and back:** **Front/Back** (or F) turns the racks round. The mouse wheel zooms; drag the background to pan; **Fit** shows the whole room. Hover a device for its asset tag, serial number and power draw.
+- **Racking:** **Empty the rack** puts every device on the floor, in the *To rack* list on the left. Drag one into a free U: it slides in on its rails and the screws go in. Drag a racked device onto the list to take it out. From a terminal: `winlab rack <lab> unrack all`, `winlab rack <lab> move nas01 3`.
+- **Plugging cables:** on the back, click a free port, then the port the other end goes into: a network card into a switch port or the patch panel, a switch's Gi0/1 into the router or another switch's Gi0/2-4, a power inlet (PSU) into a UPS outlet. Esc puts the cable down. It is the Workbench's own cable, live while the lab runs; a cable clicked into a switch port stays in that very port (show interfaces status on the switch's console says so), and one already there moves to a free port; through the patch panel, the switch picks the first free port. Select a cable and press **Unplug** (or Delete) to pull it. From a terminal: `winlab rack <lab> plug SRV01-NIC1 PP1-P1`, `winlab rack <lab> unplug <cable>`.
+- **Lights and sounds:** power lights follow the machines; port lights show a link and blink with the traffic the router counts. **Packets** plays the router's capture along the cables. Racking, plugging, a machine starting and a UPS on battery each have a sound, and **Fan hum** adds the room's hum while machines run; the tray's speaker mutes them all.
+
+The lesson *Rack the comms room and document it* (lab backup-recovery) builds and documents the room this way, and is graded on the rack as you leave it.
+
+**Audit the rack** is a drill. winlab swaps two cables' labels or puts a wrong asset tag on a device, and a ticket arrives in the helpdesk queue. Compare each label with the ports its cable really joins, and each tag with the *Asset register* tab (match by serial number). Correct them by hand, then press **Check my fix**. winlab never corrects the documentation for you.
+
+**The admin toolkit stick** carries PuTTY, WinSCP and Notepad++, and the Sysinternals Suite if you accept Microsoft's licence. Fetch them once in **Setup > Images** (or `winlab toolkit fetch`). Each comes from its publisher's own site and is checked against the checksum the publisher publishes. Then press **Admin toolkit stick** on the media shelf and drag the stick onto a Windows machine. Run the installers or the portable programs from it yourself: nothing installs on its own.
+'''

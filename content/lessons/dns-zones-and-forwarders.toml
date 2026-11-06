@@ -1,0 +1,80 @@
+[lesson]
+id = "dns-zones-and-forwarders"
+title = "DNS zones, forwarders and scavenging"
+module = "network"
+order = 10
+lab = "ad-ds-basics"
+node = "dc01"
+role = "dns"
+exercise = "dns-forwarders-aging-records"
+minutes = 35
+summary = "Read the zones a DC hosts, send outside queries somewhere useful, and stop stale records piling up."
+why = '''
+Every Active Directory problem is a DNS problem until proven otherwise. The DC
+hosts the domain's zone and the _msdcs zone where DCs register their service
+records; clients register their own A records dynamically, and if nobody cleans
+up, a zone fills with addresses of machines that left years ago. Forwarders decide
+what happens to names the DC does not own: without one, the DC asks the root
+servers, which in an isolated lab means every outside lookup times out slowly.
+
+Understand the three record types that matter for AD (A, SRV, and the _msdcs
+CNAME for replication), and the two knobs that keep a zone honest: dynamic
+updates set to secure only, and scavenging with sensible no-refresh and refresh
+intervals.
+'''
+concepts = [
+  "AD-integrated zone: stored in the directory and replicated with it; multi-master, secure dynamic updates",
+  "Forwarder versus conditional forwarder: everything not local, versus one specific domain",
+  "Aging and scavenging: records carry a timestamp; scavenging deletes those older than no-refresh plus refresh",
+  "SRV records: priority, weight, port and target; _ldap._tcp.dc._msdcs is the one clients ask for",
+]
+steps = [
+  "On dc01, list the zones: Get-DnsServerZone | Select-Object ZoneName, ZoneType, IsDsIntegrated, DynamicUpdate.",
+  "Read the SRV records: Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv | Format-Table HostName, RecordData -AutoSize.",
+  "Look at the forwarders: Get-DnsServerForwarder (a new forest has none, or whatever DNS the server had before promotion). Set one with Set-DnsServerForwarder -IPAddress 10.10.10.1 and watch a lookup for an outside name time out, since the lab has no internet.",
+  "Add a conditional forwarder for a partner domain: Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99 and see it in Get-DnsServerZone.",
+  "Turn on aging for corp.lab: Set-DnsServerZoneAging -Name corp.lab -Aging $true; read it back with Get-DnsServerZoneAging -Name corp.lab, and the server-wide scavenging interval with Get-DnsServerScavenging.",
+  "Create a static record for the intranet: Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; register a dynamic one (ipconfig /registerdns on fs01) and compare their Timestamp property.",
+]
+pitfalls = [
+  "Turning scavenging on with short intervals deletes the static records of servers that never re-register; mark important records static or set long intervals.",
+  "A DC pointing at a public resolver as its primary DNS will fail to find itself after a reboot; the DC's own address goes first.",
+]
+further = [
+  "Microsoft Learn: DNS Server role in Windows Server",
+  "Microsoft Learn: Understanding aging and scavenging",
+]
+
+[[verify]]
+label = "zones hosted here"
+node = "dc01"
+cmd = "Get-DnsServerZone | Select-Object ZoneName, ZoneType, IsDsIntegrated | Format-Table -AutoSize"
+
+[[verify]]
+label = "forwarders"
+node = "dc01"
+cmd = "(Get-DnsServerForwarder).IPAddress.IPAddressToString"
+
+[[verify]]
+label = "scavenging state"
+node = "dc01"
+cmd = "Get-DnsServerScavenging | Select-Object ScavengingState, ScavengingInterval, NoRefreshInterval, RefreshInterval | Format-List"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "What is the difference between a forwarder and a conditional forwarder?"
+answer = "A forwarder handles everything not local; a conditional forwarder handles one named domain"
+wrong = ["They are the same thing", "A conditional forwarder only works for reverse zones", "A forwarder only works inside AD"]
+why = "Conditional forwarders send queries for one domain to specific servers."
+
+[[quiz]]
+q = "Where is an AD-integrated zone stored?"
+answer = "In the directory, replicated with it"
+wrong = ["In a text file in System32\\dns only", "On the DHCP server", "In the registry of each client"]
+why = "That makes it multi-master with secure dynamic updates."
+
+[[quiz]]
+q = "What risk comes with aggressive scavenging intervals?"
+answer = "Static records of servers that never re-register get deleted"
+wrong = ["Zones stop replicating", "Clients cannot register at all", "The DC demotes itself"]
+why = "Mark important records static or keep long intervals."

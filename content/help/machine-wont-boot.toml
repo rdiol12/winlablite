@@ -1,0 +1,18 @@
+[topic]
+id = "machine-wont-boot"
+title = "A machine will not boot"
+category = "Common problems"
+order = 50
+keywords = ["boot", "won't start", "black screen", "no bootable device", "crash", "qemu", "log", "stuck", "firmware", "boot order"]
+summary = "Where to look when a machine stops at a black screen or does not start at all."
+body = '''
+**It does not start at all.** The message in the taskbar's job list or in Machines says why. Each machine writes a log at var\labs\<lab>\<machine>\qemu.log in the winlab folder; the last lines name the problem.
+
+**It stops at "no bootable device" or a firmware screen.** Look at **Boots from** in the machine's panel. A machine set to boot from its DVD drive with no disc in it, or one installed by hand that has not finished installing, has nothing to boot from.
+
+**Windows shows a recovery screen.** Treat it as a real PC: Startup Repair, or go back to a checkpoint from the Action menu.
+
+**It froze.** Use the power button in Machines to turn it off and on, as you would hold the power button on a real PC.
+
+If none of this helps, make a support file (see Contact support) and send it to us. It holds the machine's logs.
+'''

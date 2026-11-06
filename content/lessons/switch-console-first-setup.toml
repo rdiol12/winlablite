@@ -1,0 +1,83 @@
+[lesson]
+id = "switch-console-first-setup"
+title = "First-time setup of a switch over the console cable"
+module = "network"
+order = 5
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["pc01"]
+exercise = "switch-named-from-console"
+minutes = 30
+summary = "A switch out of the box has no address to reach it on: plug the blue console cable into a PC, open a terminal on its COM port at 9600 8N1, and give the switch its name, banner and port descriptions from its own command line."
+why = '''
+A new switch or router has no management address and no remote access set, so
+the network cannot reach it yet. Every one has a console port for that: a serial
+line, reached with a rollover (console) cable from a laptop or a PC beside the
+rack. Today the PC end is a USB-serial adapter, which Windows shows as a COM
+port, and the program on it is a terminal emulator: PuTTY, or a few lines of
+PowerShell. The console speaks 9600 baud, 8 data bits, no parity, 1 stop bit
+(9600 8N1) unless someone changed it; any other speed reads as garbage.
+
+The console is also the way back in when everything else fails: a wrong VLAN on
+the management port, a forgotten address, a configuration that locked you out.
+Knowing how to reach it, and how the line must be set, is the first thing a
+network admin learns on the job.
+'''
+concepts = [
+  "Console port: the device's serial line (RJ-45 or USB), always there, independent of the network",
+  "Rollover (console) cable: the blue cable, RJ-45 at the device, DB-9 or a USB-serial adapter at the PC",
+  "COM port: how Windows names a serial line; the adapter adds one (COM2 here, COM1 is taken)",
+  "9600 8N1: 9600 baud, 8 data bits, no parity, 1 stop bit, no flow control; the console's default line",
+  "User EXEC (>) and privileged EXEC (#) modes, global configuration (config)#, interface configuration (config-if)#",
+  "The running configuration and saving it: write memory, or copy running-config startup-config",
+]
+steps = [
+  "On the Workbench, drag the Console cable from the shelf onto the switch corp and pick pc01 as the other end: the USB-serial adapter goes into pc01. If pc01 was running, restart it so Windows finds the new port.",
+  "On pc01, find the adapter's port: Device Manager, Ports (COM & LPT), or in PowerShell Get-CimInstance Win32_SerialPort | Select-Object DeviceID, Description and [System.IO.Ports.SerialPort]::GetPortNames(). COM1 belongs to winlab; COM2 is the adapter.",
+  "Open a terminal on COM2 at 9600 8N1 with no flow control. With PuTTY from your own USB stick: Connection type Serial, Serial line COM2, Speed 9600. Without one, the Workbench's Connect from... pc01 on the switch's console port opens a serial terminal on pc01; set the same line there.",
+  "Or with what Windows has: mode COM2 BAUD=9600 PARITY=n DATA=8 STOP=1 sets the line, then $p = New-Object System.IO.Ports.SerialPort COM2,9600,None,8,One; $p.Open(); $p.Write(\"`r\"); Start-Sleep 1; $p.ReadExisting() sends Enter and reads the switch's answer. $p.Close() frees the port for PuTTY.",
+  "Press Enter at 'Press RETURN to get started'. At corp> type enable, then show version and show interfaces status: pc01's port Fa0/1 is connected.",
+  "Configure it: configure terminal, hostname CORP-SW1, banner motd #Authorized access only#, interface fa0/1, description pc01, then end (or Ctrl+Z). The prompt now says CORP-SW1#.",
+  "Read it back with show running-config and save it with write memory (copy running-config startup-config does the same).",
+  "See what a wrong line looks like: close the terminal and open it again at 115200. The switch's answer is garbage; back at 9600 it is readable again.",
+  "Close the terminal so COM2 is free, then press Check my work: the check opens COM2 on pc01 itself and reads the switch's running configuration.",
+]
+pitfalls = [
+  "Nothing on the screen: press Enter first, check the COM port number (Device Manager), and that the cable runs to this PC's adapter.",
+  "Garbage characters mean the speed or the framing is wrong: 9600 8N1 unless the device's line was changed.",
+  "A COM port opens in one program at a time: close PuTTY, or $p.Close() in PowerShell, before another terminal can use it.",
+  "Changes run at once but survive a power cut only once saved: write memory.",
+]
+further = [
+  "PuTTY user manual: Connecting to a local serial line",
+  "Microsoft Learn: System.IO.Ports.SerialPort class; the mode command",
+  "Cisco IOS configuration fundamentals: using the command-line interface, console port settings",
+]
+
+[[verify]]
+label = "the serial ports pc01 has"
+node = "pc01"
+cmd = "Get-CimInstance Win32_SerialPort | Select-Object DeviceID, Description, MaxBaudRate"
+
+[[verify]]
+label = "COM2, the adapter"
+node = "pc01"
+cmd = "[System.IO.Ports.SerialPort]::GetPortNames()"
+
+[[quiz]]
+q = "A switch fresh from the box has no IP address yet. How do you reach its command line?"
+answer = "Its console port, with a console cable to a PC's serial port"
+wrong = ["SSH to its default address", "Remote Desktop", "Its web page over the network"]
+why = "The console is a serial line on the device itself: it needs no address and no network."
+
+[[quiz]]
+q = "PuTTY on COM2 shows only garbage characters. What is wrong first?"
+answer = "The line's speed or framing: it should be 9600 8N1"
+wrong = ["The switch's VLAN", "The PC's IP address", "The cable is an Ethernet patch cable"]
+why = "Wrong baud rate or framing turns every character into garbage; the network plays no part on a serial line."
+
+[[quiz]]
+q = "Which prompt lets you type configure terminal?"
+answer = "CORP-SW1#"
+wrong = ["CORP-SW1>", "CORP-SW1(config-if)#", "C:\\>"]
+why = "configure terminal runs in privileged EXEC mode, the # prompt you reach with enable."

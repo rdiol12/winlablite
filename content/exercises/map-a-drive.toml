@@ -1,0 +1,49 @@
+[exercise]
+id = "map-a-drive"
+title = "Map a network drive with Group Policy"
+lab = "ad-ds-basics"
+reset_nodes = ["dc01", "fs01"]
+nodes = ["dc01", "fs01", "pc01"]  # booted by `winlab exercise start`
+brief = """
+Sales wants the company share as drive S: on every logon. Do it once, centrally,
+with a Group Policy Preference, not with a logon script on each PC. Drive maps
+are a *user* setting, so the GPO links to the OU that holds the users. Builds
+on create-ou-and-user (OU=Sales, jdoe) and on the file role's Company share on
+fs01.
+"""
+tasks = [
+  "Create a GPO named 'Map S Drive'",
+  "In User Configuration > Preferences > Drive Maps, map S: to \\\\fs01\\Company (action Update, reconnect on)",
+  "Link the GPO to OU=Sales",
+  "Log on to pc01 as jdoe and confirm S: appears (gpupdate /force if needed)",
+]
+
+[[check]]
+name = "GPO is linked to OU=Sales"
+node = "dc01"
+script = "@((Get-GPInheritance -Target 'OU=Sales,DC=corp,DC=lab').GpoLinks | ForEach-Object DisplayName) -contains 'Map S Drive'"
+expect = "True"
+weight = 2
+hint = "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'"
+
+[[check]]
+name = "S: maps to the fs01 Company share"
+node = "dc01"
+script = '''
+$g = Get-GPO -Name 'Map S Drive'
+$f = "\\corp.lab\SYSVOL\corp.lab\Policies\{$($g.Id)}\User\Preferences\Drives\Drives.xml"
+$x = [xml](Get-Content $f -Raw)
+($x.Drives.Drive | Where-Object { $_.Properties.letter -eq 'S' }).Properties.path
+'''
+match = "regex"
+expect = '^\\\\fs01(\.corp\.lab)?\\company$'
+weight = 3
+hint = "The path is the share's UNC path, \\\\fs01\\Company; the drive letter is S"
+
+[[check]]
+name = "jdoe can reach the share"
+node = "fs01"
+script = "[bool](Get-SmbShareAccess -Name Company | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.AccountName -match 'Authenticated Users|Domain Users|G-Sales|jdoe' })"
+expect = "True"
+weight = 1
+hint = "A mapped drive to a share the user cannot open fails silently at logon"

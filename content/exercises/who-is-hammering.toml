@@ -1,0 +1,73 @@
+[exercise]
+id = "who-is-hammering"
+title = "Who is hammering the file server?"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "fs01", "pc01"]
+brief = """
+The office says the file server is slow this afternoon. With the staff at
+work (the Office window: workday on, a busy day, the clock at the end-of-day
+saves), keep a counter log of fs01's SMB load, read who is connected and
+what they hold open, and find the person whose big copies are hammering the
+server and the job behind them. Write it down in C:\\winlab\\hammering.txt on
+fs01: account, pc, file and job, one per line.
+"""
+tasks = [
+  "On fs01, a counter log named FileServerLoad (logman) with the SMB Server Shares counters, started",
+  "It has written samples to a .blg file under C:\\PerfLogs",
+  "C:\\winlab\\hammering.txt on fs01 names the account and the big file it wrote on the share (account <name>, file <path>)",
+  "The note names the PC they work from (pc <computer>) and what the job was (job <what>)",
+]
+
+[[check]]
+name = "a counter log of the SMB load on fs01"
+node = "fs01"
+script = "$q = (logman query FileServerLoad 2>&1 | Out-String); [bool]($q -match 'SMB Server Shares')"
+expect = "True"
+weight = 2
+hint = "logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, then logman start FileServerLoad"
+
+[[check]]
+name = "the log has samples in a .blg file"
+node = "fs01"
+script = "[bool](Get-ChildItem -Path C:\\PerfLogs -Recurse -Filter '*.blg' -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'FileServerLoad*' -and $_.Length -gt 0 } | Select-Object -First 1)"
+expect = "True"
+weight = 1
+hint = "logman start FileServerLoad and let it run through the busy minutes; logman stop FileServerLoad closes the file"
+
+[[check]]
+name = "the note names the account and the big file it wrote"
+node = "fs01"
+script = '''
+$t = [string](Get-Content -Path 'C:\winlab\hammering.txt' -Raw -ErrorAction SilentlyContinue)
+$acct = if ($t -match '(?im)^\s*account\s+(\S+)') { $Matches[1] -replace '^.*\\', '' } else { '' }
+$file = if ($t -match '(?im)^\s*file\s+(.+?)\s*$') { $Matches[1].Trim('"') } else { '' }
+if (-not $t) { 'no note in C:\winlab\hammering.txt on fs01' }
+elseif (-not $acct -or -not $file) { 'the note needs an account line and a file line' }
+elseif (-not (Test-Path -LiteralPath $file)) { $file + ' is not there on fs01' }
+else {
+  $f = Get-Item -LiteralPath $file
+  $o = ([string](Get-Acl -LiteralPath $file).Owner) -replace '^.*\\', ''
+  if ($f.Length -lt 4MB) { $file + ' is small: look for the big copies' }
+  elseif ($o -ne $acct) { $file + ' was written by ' + $o + ', not ' + $acct }
+  else { 'True' }
+}
+'''
+expect = "True"
+weight = 3
+hint = "Get-ChildItem D:\\Shares -Recurse -File | Sort-Object Length -Descending, then (Get-Acl -LiteralPath <file>).Owner names who wrote it; lines 'account <name>' and 'file <full path>'"
+
+[[check]]
+name = "the note names their PC and the job"
+node = "fs01"
+script = '''
+$t = [string](Get-Content -Path 'C:\winlab\hammering.txt' -Raw -ErrorAction SilentlyContinue)
+$pc = if ($t -match '(?im)^\s*pc\s+(\S+)') { ($Matches[1] -replace '^\\\\', '') -replace '\..*$', '' } else { '' }
+$job = if ($t -match '(?im)^\s*job\s+(\S.*)$') { $Matches[1].Trim() } else { '' }
+if (-not $pc -or -not $job) { 'the note needs a pc line and a job line' }
+elseif (-not ([adsisearcher]"(&(objectCategory=computer)(name=$pc))").FindOne()) { $pc + ' is no computer in the domain' }
+else { 'True' }
+'''
+expect = "True"
+weight = 2
+hint = "Get-SmbSession shows ClientComputerName (an address: Resolve-DnsName it); the Office window's feed says what they were doing; lines 'pc <computer>' and 'job <what>'"

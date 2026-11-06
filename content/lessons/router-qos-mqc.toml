@@ -1,0 +1,105 @@
+[lesson]
+id = "router-qos-mqc"
+title = "QoS on the router: classify, mark, shape and share a slow line"
+module = "network"
+order = 360
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "fs01", "pc01"]
+exercise = "router-qos-mqc"
+minutes = 60
+summary = "Use the Modular QoS CLI on the router: class-maps that sort traffic, a policy-map that gives voice priority, guarantees file copies a share and marks them, a shaper that turns the user LAN into a 20 Mbit/s line, and the counters that prove each class saw its traffic."
+why = '''
+A network with spare capacity needs no QoS. QoS matters at the narrow
+place: the line to a branch, the uplink of a busy office, the moment a big
+file copy and a phone call want the same 20 Mbit/s. Then the router must
+decide whose packets wait and whose are dropped, and it can only do that
+for traffic it can tell apart.
+
+IOS does it with the Modular QoS CLI (MQC), in three steps you also meet in
+the zone-based firewall: class-map (which traffic: a DSCP value, an access
+list, a protocol), policy-map (what each class gets: priority for voice, a
+guaranteed bandwidth, a police rate, a new DSCP mark) and service-policy
+(on which interface, in which direction). Queueing only happens where a
+queue forms, on the way out of an interface that is busier than its line;
+so a policy that shares out a slow line is put under a shaper that makes
+the line slow, the hierarchical policy every branch router runs.
+
+On this router the policy becomes Linux traffic control: an HTB tree of
+classes on the interface, fq_codel or a FIFO in each, and nftables marking
+each packet with its class and its new DSCP. Two honest differences from an
+ISR: the priority class is held to its rate at all times (an ISR polices it
+only when the line is congested), and match protocol is by well-known port,
+not NBAR. The lab's own LAN is gigabit, so you shape it to make the
+congestion that QoS needs.
+'''
+concepts = [
+  "DSCP: six bits in the IP header saying how a packet wants to be treated; EF (46) for voice, AF41 for video, AF11 to AF13 for bulk data, CS0 (0) best effort; a router trusts or rewrites them",
+  "class-map match-any (one match line is enough) or match-all (every line): match dscp ef, match access-group name SMB, match protocol http, match any; class-default catches the rest",
+  "priority <kbps>: low-latency queueing, served first and held to its rate so it cannot starve the others; bandwidth <kbps> or percent: a guaranteed share that may borrow what is idle",
+  "police <bps>: a hard limit, what exceeds is dropped (or remarked with set-dscp-transmit); shape average <bps>: a soft limit, what exceeds waits in a queue",
+  "Hierarchical QoS: a parent policy shapes class-default to the line's real speed, and a child service-policy under it shares that speed out between the classes",
+  "Direction: queueing (priority, bandwidth, shape) only on output; an input policy can only classify, mark and police",
+  "show policy-map interface: per class, the packets that matched, what was marked, what the police and the queue dropped",
+]
+steps = [
+  "Build the user LAN if lesson router-zone-firewall has not: on the Workbench a switch in a free router port with pc01's cable on it, the router's port 10.10.20.1/24 (no shutdown) and an ip dhcp pool USERS with default-router 10.10.20.1 and dns-server 10.10.10.10; ipconfig /renew on pc01. File copies from fs01 to pc01 now cross the router and leave it on that port (GigabitEthernet0/0/1 here).",
+  "Make something to copy. On fs01: New-Item -ItemType Directory C:\\Big, fsutil file createnew C:\\Big\\test.bin 209715200 (200 MB), New-SmbShare -Name Big -Path C:\\Big -ReadAccess 'CORP\\Domain Users'.",
+  "Measure the unshaped line: on pc01, Measure-Command { Copy-Item \\\\fs01\\Big\\test.bin $env:TEMP\\test.bin -Force } | Select-Object TotalSeconds. A few seconds: the lab is gigabit.",
+  "The classes. On the router's console: configure terminal, ip access-list extended SMB, permit tcp any eq 445 any, exit. class-map match-any VOICE, match dscp ef, exit. class-map match-any FILES, match access-group name SMB, exit.",
+  "The child policy, which shares the line: policy-map USERS-OUT, class VOICE, priority 1000, class FILES, bandwidth 5000, set dscp af11, class class-default, fair-queue, exit, exit.",
+  "The parent policy, which makes the line: policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT, exit, exit. Put it on the way out to the users: interface g0/0/1, service-policy output SHAPE-20M, end.",
+  "Copy again from pc01 with Measure-Command: about 80 seconds now, 200 MB through a 20 Mbit/s shaper. While it runs, show policy-map interface g0/0/1 on the router: class FILES counts packets and its QoS Set line counts them marked af11; class-default under the shaper shows the queue.",
+  "Police instead of share, to feel the difference: policy-map USERS-OUT, class FILES, police 8000000 conform-action transmit exceed-action drop, end. Copy again: SMB slows to about 8 Mbit/s, and show policy-map interface g0/0/1 counts exceeded packets dropped. TCP backs off from the drops, so the copy still finishes. Take it out again: policy-map USERS-OUT, class FILES, no police.",
+  "Mark what comes in, too: configure terminal, ip access-list extended SMB-IN, permit tcp any any eq 445, exit, class-map match-any SMB-FROM-USERS, match access-group name SMB-IN, exit, policy-map MARK-IN, class SMB-FROM-USERS, set dscp af21, then interface g0/0/1, service-policy input MARK-IN. Try service-policy input SHAPE-20M once: the router refuses queueing on input, as IOS does.",
+  "Read it all: show class-map, show policy-map, show policy-map interface. Save it with write memory; show running-config lists the class-maps and policy-maps before the interfaces, and service-policy under interface GigabitEthernet0/0/1.",
+]
+pitfalls = [
+  "A policy on a fast interface that is never full does nothing you can see: queues only form under congestion, which is why the shaper comes first.",
+  "Guarantees cannot add up to more than the parent: priority 1000 and bandwidth 5000 under a 20 Mbit/s shaper fit; bandwidth 30000 under it is refused when the policy is attached.",
+  "A class-map nobody's policy names, or a policy-map attached to no interface, classifies nothing: check show policy-map interface, not show running-config.",
+  "class-map and policy-map here are QoS; the firewall's are class-map type inspect and policy-map type inspect. The same name in both is two different things.",
+  "Marking only helps where something trusts it later: set dscp on the way out to the users means nothing to Windows, but on the way to a WAN it tells the provider's routers what the packet is.",
+  "On this router the priority class is capped at its rate even when the line is idle; on an ISR it may use idle bandwidth and is policed only under congestion.",
+]
+further = [
+  "RFC 4594: Configuration Guidelines for DiffServ Service Classes",
+  "Cisco IOS QoS Configuration Guide: Modular QoS Command-Line Interface, and Regulating Packet Flow (shaping and policing)",
+  "Linux tc-htb(8) and tc-fq_codel(8): the queueing behind this router's policy",
+  "Microsoft Learn: Policy-based Quality of Service (QoS), how Windows marks its own traffic",
+]
+
+[[verify]]
+label = "the queueing tree on the router's interfaces (HTB classes and what they sent)"
+node = "fabric"
+shell = "sh"
+cmd = "for d in $(cat /run/winlab-qos-devs 2>/dev/null); do echo \"== $d\"; tc -s class show dev $d; done"
+
+[[verify]]
+label = "how the router classifies and marks: nftables with per-class counters"
+node = "fabric"
+shell = "sh"
+cmd = "nft list table ip wlqos 2>/dev/null || echo 'no service-policy yet'"
+
+[[verify]]
+label = "the copy from fs01 over the shaped line, timed"
+node = "pc01"
+cmd = "Measure-Command { Copy-Item \\\\fs01\\Big\\test.bin $env:TEMP\\test.bin -Force } | Select-Object TotalSeconds"
+
+[[quiz]]
+q = "Which actions may an input service-policy use?"
+answer = "Classify, mark (set dscp) and police; no priority, bandwidth or shaping"
+wrong = ["All of them, the same as output", "Only shaping", "Only priority"]
+why = "Queues form on the way out of an interface; on the way in a router can only sort, mark and drop."
+
+[[quiz]]
+q = "Why is SHAPE-20M's class-default given a child service-policy?"
+answer = "The shaper makes the 20 Mbit/s line; the child shares that line between voice, files and the rest"
+wrong = ["To police class-default", "Because class-default cannot hold actions", "To mark every packet EF"]
+why = "That is hierarchical QoS: without the shaper the gigabit interface never congests, and the child's priority and bandwidth would never act."
+
+[[quiz]]
+q = "What does police do with traffic above its rate, and what does shape do?"
+answer = "Police drops (or remarks) it at once; shape queues it and sends it later"
+wrong = ["Both queue it", "Both drop it", "Police queues it, shape drops it"]
+why = "A policer is a hard ceiling with no buffer; a shaper smooths bursts into a queue, at the cost of delay."

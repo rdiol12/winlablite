@@ -1,0 +1,87 @@
+[lesson]
+id = "span-port-mirroring"
+title = "SPAN: mirror a server's switch port to a PC running Wireshark"
+module = "network"
+order = 331
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "fs01", "pc01"]
+exercise = "span-mirror-capture"
+minutes = 45
+summary = "A switch only sends a PC its own traffic. Copy a server's port to a listening PC with monitor session, and read the server's conversations in Wireshark."
+why = '''
+Plug a PC with Wireshark into a switch and you see your own traffic, the
+broadcasts, and nothing else: a switch learns where each address lives and
+sends every frame only there. That is the switch doing its job, and it is
+why "just run Wireshark" does not work for a problem between two other
+machines (a server that is slow to answer one client, a logon that fails,
+a printer that floods).
+
+SPAN (Switched Port Analyzer, Cisco's name; port mirroring elsewhere) makes
+the switch copy what one or more ports send and receive to another port,
+where an analyser listens. monitor session 1 source interface names what to
+copy (rx: what the port receives, tx: what it sends, both by default),
+monitor session 1 destination interface names where the copies go. The
+destination port stops being a normal port: it leaves its VLAN and, by
+default, ignores what comes in on it, so the PC there is a listener and
+nothing more.
+
+In this lab every switch port is a port of the router's bridge, and a SPAN
+session is tc on those ports: a mirred action copies every frame on the
+source port's ingress (rx) and egress (tx) to the destination port, as a
+Catalyst's ASIC does. The destination port is moved out of its VLAN and its
+ingress is dropped, as on the real switch.
+'''
+concepts = [
+  "A switch forwards unicast only to the port that address was learned on; a capture on any other port does not see it",
+  "Source ports and directions: rx is what the switch receives on the port, tx what it sends out of it, both is the default; a source VLAN mirrors every port in it",
+  "The destination port carries only the copies: no VLAN, no learning, and frames into it are dropped unless ingress is enabled",
+  "The capturing PC's card must be in promiscuous mode to keep frames addressed to other machines: Wireshark (with Npcap) does that by default",
+  "Oversubscription: mirroring a busy gigabit port, both ways, can be more than the destination port can send; copies are dropped, never the original traffic",
+  "A port is a source or a destination, never both, and a destination belongs to one session",
+]
+steps = [
+  "Get Wireshark onto the lab: on this PC run winlab wireshark fetch (it downloads the Windows installer from wireshark.org and checks it), then winlab wireshark stick ad-ds-basics. Plug the Wireshark stick into pc01 from the media shelf and install it there, with the Npcap it offers: without Npcap, Wireshark on Windows cannot capture.",
+  "Find the ports. On corp's switch console: enable, show interfaces status. Note the port dc01 is in and the port pc01 is in (the Name column; show mac address-table says which address is where).",
+  "Prove the problem first: on pc01, start a capture in Wireshark on the Ethernet card, and on fs01 open \\\\dc01\\NETLOGON in Explorer and run gpupdate /force. Stop the capture: no frame between fs01 (10.10.10.20) and dc01 (10.10.10.10), only broadcasts and pc01's own.",
+  "Mirror dc01's port to pc01's: configure terminal, monitor session 1 source interface fa0/N both (dc01's port), monitor session 1 destination interface fa0/M (pc01's). Then do show monitor: Source Ports Both: dc01's port, Destination Ports pc01's, Ingress Disabled.",
+  "Capture again on pc01 and repeat the Explorer and gpupdate on fs01. Now Wireshark shows the conversation: filter on ip.addr == 10.10.10.20 and you see SMB2, Kerberos, LDAP and DNS between fs01 and dc01, none of it addressed to pc01. Save the capture as span.pcapng in Documents.",
+  "Notice what pc01 lost: it has no network while it listens (ping 10.10.10.10 from it fails, and its address will not renew). The destination port is out of its VLAN, as on a real switch.",
+  "Try one direction only: no monitor session 1 source interface fa0/N, then monitor session 1 source interface fa0/N rx. Capture again: only what dc01 sends (frames arriving at the switch from dc01). tx is the other half.",
+  "Mirror a whole VLAN instead of a port: no monitor session 1, then monitor session 1 source vlan 1 and the same destination. A session mirrors interfaces or VLANs, not both; the switch refuses to mix them.",
+  "End it: no monitor session 1. pc01's port goes back into its VLAN and pc01 gets its network back. show monitor says No SPAN configured. Leave a session from dc01's port to pc01's port configured when you go to the exercise.",
+]
+pitfalls = [
+  "Leaving a SPAN session on a port someone uses: the PC there loses its network while the port is a destination.",
+  "Capturing without promiscuous mode: the copies arrive, and the card throws away every frame not addressed to it.",
+  "Mirroring an uplink both ways onto a 100 Mbit port: the copies exceed what the destination can send and are dropped; mirror one direction or one VLAN.",
+  "Expecting VLAN tags: a copy from an access port arrives untagged; copies from a trunk carry their tags here (encapsulation replicate is kept and shown, the router's mirror always copies the frame as it was).",
+]
+further = [
+  "Cisco: Configuring SPAN and RSPAN (Catalyst 2960 software configuration guide)",
+  "Wireshark User's Guide: capturing on a switched network",
+]
+
+[[verify]]
+label = "the mirrors on the router: each port's tc filters copying to the destination"
+node = "fabric"
+shell = "sh"
+cmd = "cat /run/winlab-span 2>/dev/null; for i in $(ls /sys/class/net | grep -E '^(eth|stp)'); do f=$(tc filter show dev $i ingress 2>/dev/null; tc filter show dev $i egress 2>/dev/null); echo \"$f\" | grep -qE 'Mirror|drop' && echo \"== $i\" && echo \"$f\" | grep -E 'Mirror|gact'; done"
+
+[[quiz]]
+q = "pc01 runs Wireshark on a plain switch port. What does it see of a file copy between fs01 and dc01?"
+answer = "Nothing: the switch sends those frames only to fs01's and dc01's ports"
+wrong = ["All of it", "Only the replies", "The first frame of each conversation"]
+why = "A switch forwards known unicast only out of the port the address was learned on; SPAN is how another port gets a copy."
+
+[[quiz]]
+q = "monitor session 1 source interface fa0/3 rx copies which frames?"
+answer = "The frames the switch receives on fa0/3, that is, what the machine on fa0/3 sends"
+wrong = ["The frames the switch sends out of fa0/3", "Both directions", "Only broadcasts"]
+why = "rx and tx are from the switch port's point of view; both is the default."
+
+[[quiz]]
+q = "Why does the PC on a SPAN destination port lose its network?"
+answer = "The destination port leaves its VLAN and drops what comes in on it, so it only carries the copies"
+wrong = ["The PC's card is in promiscuous mode", "Spanning tree blocks the port", "The copies fill the port"]
+why = "By default a SPAN destination takes no ingress traffic and is in no VLAN; ingress can be enabled on a real switch for an IDS that must answer."

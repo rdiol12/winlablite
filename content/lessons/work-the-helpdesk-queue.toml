@@ -1,0 +1,100 @@
+[lesson]
+id = "work-the-helpdesk-queue"
+title = "Work the helpdesk queue: priorities, SLAs and a fix that holds"
+module = "operations"
+order = 39
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "fs01", "pc01"]
+exercise = "helpdesk-shift"
+minutes = 50
+summary = "Take calls from the office's staff as they come in, answer them inside their SLA, ask the right question, fix what is really broken and write it down."
+why = '''
+Most of a sysadmin's day is not building things. It is the queue: people
+ringing because something they use stopped working, each sure theirs is the
+most urgent. A service desk keeps that fair and visible. Every call is a
+ticket with a priority set by impact (how many people it stops, and whether
+there is a workaround), and every priority has two promises on the clock: how
+soon someone answers (respond) and how soon it works again (resolve). Missing
+either is a breach, and breaches are what a manager reads first.
+
+The Helpdesk window is that queue for the lab. With it taking calls, the
+office's staff ring when something breaks on a running machine, and it really
+is broken: Noah at the front desk whose PC cannot find the domain, Finance
+whose drive has gone, monitoring paging about a server. They say what they
+see, not what it is. You take the ticket, find the cause on the machines,
+fix it, and resolve it with a note; winlab then checks the machine, and if
+the fix did not hold the caller rings back and the ticket reopens. That
+counts against your first-time-fix rate, the number that says whether people
+can trust a "fixed" from you.
+'''
+concepts = [
+  "Priority is impact and urgency, not who shouts: a server everyone uses is P1 or P2, one person's problem with a workaround is P3 or P4",
+  "Two targets per ticket: respond (someone has answered: taken it or written on it) and resolve (it works again); both run on the clock from the moment the call came in",
+  "Work the queue in priority order, then by the target closest to breaching; take a ticket before you start on it so nobody else does the same work",
+  "Waiting on user stops the resolve clock while you need something only the caller can give; it is not a place to park a ticket you do not want",
+  "Business hours: P3 and P4 targets usually count working time only, so a ticket from 17:00 on Friday is due on Monday; P1 and P2 run round the clock",
+  "First-time fix: resolve only after you have proved it yourself (the user's view, not the server's); a reopened ticket costs more trust than a slower fix",
+  "The work log is for the next person: what you saw, what you changed, how you proved it",
+]
+steps = [
+  "Start dc01, fs01 and pc01 and let them boot. Open the Helpdesk window (Start menu or the desktop). Read the Settings tab: the three paces, business hours, and the targets for each priority. Choose Normal day, leave business hours off, and press Start taking calls (or: winlab helpdesk start --pace normal).",
+  "Wait for the first call: a notification pops up and the tray shows the open count. To move the day along, jump the lab clock ahead an hour (the clock in the taskbar) or run winlab helpdesk tick. Do not fix anything yet: first read the ticket, the caller card (department, extension, desk PC) and the SLA.",
+  "Take the ticket with the closest breach among the highest priorities (Take, or winlab helpdesk take INC00001). That answers it: the respond target is met. Write a first note on what you will check.",
+  "Find the cause on the machines, from the user's side first. For a desk PC: open it from the caller card and run ipconfig /all, Resolve-DnsName of the domain, Test-ComputerSecureChannel and Get-Service. For a server: Get-Service, Get-SmbShare, Get-Volume, the event logs. Write each finding in the work log as you go.",
+  "If you need the caller (which file, since when, can they try again), use Waiting on user with your question in the box: the resolve clock stops until they answer. Do not use it to hide a ticket you are stuck on.",
+  "Fix it the way you would in production, then prove it the way the caller would see it (open the share from pc01, sign in, run the app). Only then press Resolve with a resolution note: what was wrong, what you changed, how you checked. winlab checks the machine; a fix that did not hold reopens the ticket.",
+  "Work at least three tickets this way, at least one P1 or P2 among them. Then write a handover note for whoever is on the desk next, on pc01 in C:\\Users\\Public\\Documents\\handover.txt: one line per ticket you touched, with its number (INC000..), what it was and its state.",
+  "Open the Report tab: tickets handled, SLA met, first-time fix, mean time to resolve, breaches. Press Stop taking calls when your shift is done (anything the queue broke that is still open is undone and the report is kept with your progress), then Check my work.",
+]
+pitfalls = [
+  "Fixing the symptom on your own PC instead of the caller's: a DNS cache flushed on pc01 proves nothing about the server's records. Prove the fix where the user is.",
+  "Resolving on the server's word: the service is Running, but the share is still gone or the client still points at the wrong DNS server. winlab checks the end state, and so does the caller.",
+  "Working tickets in the order they arrived: a P3 from an hour ago is not more urgent than a P1 from a minute ago.",
+  "Taking every ticket at once to stop the respond clocks: Take means you are working on it now. A queue full of taken tickets nobody is working on is worse than an honest new one.",
+  "Leaving the work log empty: a reopened ticket with no notes means starting from scratch, and the next person on the desk cannot help.",
+]
+further = [
+  "ITIL 4: Incident management and Service desk practices",
+  "winlab help: Scenario days, for a longer story with mail on a clock",
+]
+
+[[verify]]
+label = "the DNS server pc01 uses"
+node = "pc01"
+cmd = "Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object { $_.ServerAddresses } | Format-Table InterfaceAlias, ServerAddresses"
+
+[[verify]]
+label = "pc01's trust with the domain"
+node = "pc01"
+cmd = "Test-ComputerSecureChannel"
+
+[[verify]]
+label = "the file server's shares and service"
+node = "fs01"
+cmd = "Get-SmbShare | Format-Table Name, Path; Get-Service LanmanServer | Format-List Name, Status, StartType"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A domain controller's DNS service stops, and a receptionist cannot print. Which ticket do you work first?"
+answer = "The DNS one: it stops everyone signing in, so it is P1; the printer is one person's P3"
+wrong = ["The printer: it came in first", "Whichever caller is more senior", "Both at once, to stop both clocks"]
+why = "Priority is impact; the order of arrival only breaks ties."
+
+[[quiz]]
+q = "What meets a ticket's respond target?"
+answer = "Answering it: taking it, or writing the first note on it"
+wrong = ["Resolving it", "Reading it in the queue", "The caller ringing again"]
+why = "Respond is a promise that someone is on it; resolve is the other target."
+
+[[quiz]]
+q = "When is Waiting on user the right state?"
+answer = "When you need something only the caller can give; it stops the resolve clock until they answer"
+wrong = ["When you are stuck and want the clock to stop", "Always, right after taking a ticket", "When the fix needs a reboot"]
+why = "It is honest only while you are really waiting on them."
+
+[[quiz]]
+q = "You resolve a ticket and the caller says it still does not work. What does that cost?"
+answer = "The ticket reopens and is no longer a first-time fix"
+wrong = ["Nothing, as long as it is fixed later", "Only the respond target", "The ticket closes as breached"]
+why = "Prove the fix from the user's side before you resolve."

@@ -1,0 +1,79 @@
+[exercise]
+id = "etherchannel-lacp-bundle"
+title = "Two cables to the floor switch, bundled with LACP"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["pc01"]
+brief = """
+The floor switch hangs off corp's switch by one cable, and the second cable
+you added is blocked by spanning tree. Bundle the two into one port-channel
+with LACP, so both carry traffic and spanning tree sees one link, and spread
+the conversations over the members by IP address. The checks read the
+router, where each switch's port-channel is a Linux bond and the two bonds
+speak LACP to each other.
+"""
+tasks = [
+  "On the Workbench add a switch, cable its uplink (Gi0/1) into corp's switch, and drag a second cable between the same two switches",
+  "On corp's switch: interface range over its two ports to the new switch, channel-group 1 mode active",
+  "On the new switch: interface range gi0/1 - 2, channel-group 1 mode active (or passive)",
+  "On both: port-channel load-balance src-dst-ip",
+  "Check with show etherchannel summary that Po1 is SU and both members are P, and save both switches",
+]
+
+[[check]]
+name = "a port-channel runs LACP: an 802.3ad bond with two members"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /proc/net/bonding/stp*; do [ -e $f ] || continue
+  grep -q '802.3ad' $f && [ $(grep -c '^Slave Interface' $f) -ge 2 ] && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "interface range gi0/2 - 3 (the two ports to the other switch), channel-group 1 mode active. mode on makes a bond without LACP; this check wants LACP."
+
+[[check]]
+name = "LACP is negotiated: both members are in the active aggregator, with a partner"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /proc/net/bonding/stp*; do [ -e $f ] || continue; grep -q '802.3ad' $f || continue
+  n=$(awk '/Active Aggregator Info/{a=1} a&&/Number of ports/{print $4; exit}' $f)
+  p=$(awk '/Active Aggregator Info/{a=1} a&&/Partner Mac Address/{print $4; exit}' $f)
+  [ "${n:-0}" -ge 2 ] && [ -n "$p" ] && [ "$p" != 00:00:00:00:00:00 ] && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 3
+hint = "Both ends need a channel-group, and at least one must be active: passive with passive never forms. show etherchannel summary on both switches should say Po1(SU) with members (P)."
+
+[[check]]
+name = "spanning tree sees one link and forwards on it"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False; blk=0
+for b in /sys/class/net/stp*po*; do [ -e $b/brport/state ] && [ "$(cat $b/brport/state)" = 3 ] && r=True; done
+for p in /sys/class/net/stp*/brif/*/state; do [ "$(cat $p 2>/dev/null)" = 4 ] && blk=$((blk+1)); done
+[ $blk = 0 ] || r=False
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "show spanning-tree on the new switch: one row, Po1, FWD. A blocking Gi port means one cable is still outside the bundle (a mode that does not bundle, or a third cable)."
+
+[[check]]
+name = "the conversations are spread by IP address"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /proc/net/bonding/stp*; do [ -e $f ] && grep -q 'Transmit Hash Policy: layer2+3' $f && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 1
+hint = "port-channel load-balance src-dst-ip, in configure terminal, on both switches (show etherchannel load-balance)."

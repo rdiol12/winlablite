@@ -1,0 +1,80 @@
+[lesson]
+id = "dhcp-scopes"
+title = "DHCP scopes, options and reservations"
+module = "network"
+order = 20
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01", "pc01"]   # what 'Start these machines' boots; the forest root DC comes along
+role = "dhcp"
+exercise = "dhcp-reserve-and-exclude"
+minutes = 30
+summary = "Hand out addresses, gateways and DNS from one place, and pin the machines that must not move."
+why = '''
+DHCP is the service nobody notices until it stops: every PC, phone and printer
+gets its address, gateway and DNS servers from it. On a Windows network the
+important detail is option 006 (DNS servers): a client that receives a public
+resolver cannot find the domain. In AD the server must also be authorized, so a
+rogue DHCP server someone plugs in is refused by domain members.
+
+Reservations are how you give a printer or a server a fixed address without
+touching the device: the lease is tied to its MAC address, and the address can be
+changed centrally later. Exclusions keep the static range out of the pool.
+'''
+concepts = [
+  "Scope: a subnet's pool, lease time and options; one scope per subnet the server serves",
+  "Options 003 and 006: router and DNS servers, the two that break everything when wrong",
+  "Authorization: a DHCP server in a domain must be authorized in AD before it serves",
+  "Reservation versus exclusion: a reservation is a fixed lease for a MAC; an exclusion is a range never offered",
+  "DORA: Discover, Offer, Request, Acknowledge, the four broadcasts of a lease",
+]
+steps = [
+  "On dc01, list the scopes: Get-DhcpServerv4Scope, and the options for one: Get-DhcpServerv4OptionValue -ScopeId 10.10.10.0.",
+  "Confirm the server is authorized: Get-DhcpServerInDC.",
+  "Watch a lease happen: on pc01 run ipconfig /release and ipconfig /renew; on dc01, Get-DhcpServerv4Lease -ScopeId 10.10.10.0.",
+  "Reserve pc01's address: Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <pc01 MAC> -Name pc01, then renew on pc01.",
+  "Keep the top of the scope for printers set by hand: Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (an exclusion must lie inside the scope's range).",
+  "Read the DHCP server log in C:\\Windows\\System32\\dhcp and find the lease you just watched.",
+]
+pitfalls = [
+  "A scope that hands out the DC's address as the DNS server but a public resolver as a second entry still breaks domain logons intermittently.",
+  "Two DHCP servers on one segment without failover means duplicate addresses; use DHCP failover or split scopes deliberately.",
+]
+further = [
+  "Microsoft Learn: DHCP server in Windows Server",
+  "Microsoft Learn: Manage DHCP with PowerShell",
+]
+
+[[verify]]
+label = "scopes"
+node = "dc01"
+cmd = "Get-DhcpServerv4Scope | Select-Object ScopeId, StartRange, EndRange, State | Format-Table -AutoSize"
+
+[[verify]]
+label = "DNS and router options"
+node = "dc01"
+cmd = "Get-DhcpServerv4OptionValue -ScopeId 10.10.10.0 | Select-Object OptionId, Name, Value | Format-Table -AutoSize"
+
+[[verify]]
+label = "authorized in AD"
+node = "dc01"
+cmd = "Get-DhcpServerInDC | Select-Object DnsName, IPAddress"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which two DHCP options break everything when they are wrong?"
+answer = "003 (router) and 006 (DNS servers)"
+wrong = ["015 and 042", "051 and 066", "001 and 002"]
+why = "A wrong gateway or DNS server stops clients reaching anything."
+
+[[quiz]]
+q = "What must happen before a domain DHCP server will serve leases?"
+answer = "It must be authorized in Active Directory"
+wrong = ["It must be a domain controller", "It must have a public address", "It must run WINS"]
+why = "Unauthorized Windows DHCP servers in a domain stop serving."
+
+[[quiz]]
+q = "Reservation versus exclusion?"
+answer = "A reservation is a fixed lease for one MAC; an exclusion is a range never offered"
+wrong = ["They are the same", "An exclusion is a fixed lease; a reservation blocks a range", "Reservations only work on relayed scopes"]
+why = "Use reservations for printers and the like."

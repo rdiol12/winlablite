@@ -1,0 +1,117 @@
+[lesson]
+id = "router-ipsec-vti"
+title = "Site-to-site IPsec on the router: IKEv2 and a tunnel interface to a branch"
+module = "security"
+order = 362
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "pc01"]
+exercise = "router-ipsec-vti"
+minutes = 75
+summary = "Join a branch office to the office over an untrusted network with IKEv2 and IPsec: build every IKEv2 and IPsec part on the router, a static virtual tunnel interface, and the branch's own end with strongSwan on Linux."
+why = '''
+Two offices that talk over the Internet need two things the Internet does
+not give them: privacy (nobody on the way can read the traffic) and proof
+(the other end is really the branch). Site-to-site IPsec gives both. IKEv2
+is the conversation in which the two routers prove who they are (here with
+a pre-shared key) and agree on keys; IPsec's ESP then encrypts and signs
+every packet between the two sites.
+
+IOS builds it from small parts that name each other, and the names are how
+you troubleshoot it: a proposal (which ciphers IKE may use), a policy that
+offers those proposals, a keyring (which key for which peer), an IKEv2
+profile (which peer, how it proves itself, which keyring), a transform set
+(how ESP encrypts) and an IPsec profile tying the last two together. The
+profile protects a tunnel interface: Tunnel0 with tunnel mode ipsec ipv4 is
+a static virtual tunnel interface (VTI), an interface like any other, so
+what you route into it is encrypted, and a routing protocol could run over
+it. That is the modern route-based design; the older crypto map, an access
+list on the outside interface choosing what to encrypt, is what you will
+meet on old routers.
+
+In this lab the router is a Linux router (an Alpine VM): Tunnel0 becomes an
+XFRM interface, and strongSwan's charon does IKEv2 with what you typed. The
+branch is a Linux server you add, with strongSwan from the Ubuntu archive
+on a pack stick, set up by hand in swanctl's own configuration. The
+"Internet" between them is a lab network: the lab never reaches the real
+one. Only pre-shared keys are built; certificates (rsa-sig) are not.
+'''
+concepts = [
+  "IKEv2 SA (show crypto ikev2 sa): the routers' own secure channel, READY when they agreed; IPsec SAs (show crypto ipsec sa): one each way, with the packets they encrypted and decrypted",
+  "crypto ikev2 proposal: encryption aes-cbc-256, integrity sha256, group 14 (Diffie-Hellman 2048-bit MODP; 19 and 20 are the elliptic curves); a policy offers proposals, optionally only on one local address",
+  "crypto ikev2 keyring, peer, address, pre-shared-key: the key is per peer, and both ends must type exactly the same one",
+  "crypto ikev2 profile: match identity remote address (which peer it is for), authentication local and remote pre-share, keyring local; identity local address when this side is known by another address",
+  "crypto ipsec transform-set: esp-aes 256 esp-sha256-hmac, or esp-gcm 256 (encryption and integrity in one); mode tunnel; set pfs group14 in the IPsec profile for fresh keys each rekey",
+  "A VTI's traffic selectors are any to any (0.0.0.0/0 on both sides): what is encrypted is decided by routing into the tunnel, not by an access list",
+  "UDP 500 (IKE), UDP 4500 (IKE and ESP behind NAT) and IP protocol 50 (ESP) must pass between the two outside addresses",
+]
+steps = [
+  "Finish the lab's first lesson (dc01 with DNS and DHCP, pc01 joined). On this PC, fetch the strongSwan pack first: Setup lists it, or winlab packs fetch strongswan.",
+  "Build the Internet and the branch. On the Workbench add a switch (the provider's network) and drag its uplink into a free router port; add a Linux server (Ubuntu, ready-made), name it br01, and cable it to that switch. show ip interface brief on the router's console says which port the switch is in (GigabitEthernet0/1/0 when it is the third).",
+  "The router's outside address: configure terminal, interface g0/1/0, description to the provider, ip address 203.0.113.1 255.255.255.0, no shutdown, end.",
+  "On br01, log in as ubuntu with the lab password. ip -br link names its network card; give it the outside address: sudo ip addr add 203.0.113.2/24 dev <the card>, sudo ip link set <the card> up. ping -c 2 203.0.113.1 answers: the two outside addresses can talk, in clear, as any two hosts on the Internet can.",
+  "Give the branch a LAN: sudo ip link add branch type dummy, sudo ip addr add 10.50.0.1/24 dev branch, sudo ip link set branch up. A dummy interface stands for the branch's office network; nothing in the office can reach 10.50.0.0/24 yet.",
+  "On the router, the IKEv2 parts: configure terminal, crypto ikev2 proposal PROP-AES256, encryption aes-cbc-256, integrity sha256, group 14, exit. crypto ikev2 policy POL-HQ, proposal PROP-AES256, exit.",
+  "The keyring: crypto ikev2 keyring KR-BRANCH, peer BR01, address 203.0.113.2, then pre-shared-key followed by a key you choose (letters, digits and punctuation, no spaces), exit, exit. Write the key down: the branch needs the very same one.",
+  "The IKEv2 profile: crypto ikev2 profile PROF-BRANCH, match identity remote address 203.0.113.2 255.255.255.255, authentication remote pre-share, authentication local pre-share, keyring local KR-BRANCH, exit.",
+  "The IPsec parts: crypto ipsec transform-set TS-AES256 esp-aes 256 esp-sha256-hmac, mode tunnel, exit. crypto ipsec profile IPSEC-BRANCH, set transform-set TS-AES256, set ikev2-profile PROF-BRANCH, exit.",
+  "The tunnel: interface Tunnel0, ip address 10.255.0.1 255.255.255.252, tunnel source g0/1/0, tunnel mode ipsec ipv4, tunnel destination 203.0.113.2, tunnel protection ipsec profile IPSEC-BRANCH, exit. And the route into it: ip route 10.50.0.0 255.255.255.0 Tunnel0, end. show crypto ikev2 sa is empty: the branch does not answer yet.",
+  "Install strongSwan on br01: in Machines open br01's Settings and press Plug the strongswan package stick, then sudo mkdir -p /mnt/winlab-pack, sudo mount LABEL=WLPACK /mnt/winlab-pack, cat /mnt/winlab-pack/README.txt and follow it to install charon-systemd, strongswan-swanctl and libstrongswan-standard-plugins offline. systemctl status strongswan: charon runs.",
+  "Tell charon not to make routes of its own (the tunnel interface will carry them): in /etc/strongswan.d/charon.conf set install_routes = no inside the charon section (sudo nano), then sudo systemctl restart strongswan.",
+  "Write the branch's end in /etc/swanctl/conf.d/hq.conf: a connections block with one connection hq (version = 2, local_addrs = 203.0.113.2, remote_addrs = 203.0.113.1, proposals = aes256-sha256-modp2048, local and remote sections with auth = psk and id = their own outside address) and in it a children block with hq (local_ts and remote_ts = 0.0.0.0/0, esp_proposals = aes256-sha256, if_id_in = 42, if_id_out = 42). Then a secrets block with ike-hq: id = 203.0.113.1, and the secret setting holding the key you typed on the router, in double quotes. sudo chmod 600 the file.",
+  "The branch's tunnel interface and route: sudo ip link add xfrm-hq type xfrm if_id 42, sudo ip addr add 10.255.0.2/30 dev xfrm-hq, sudo ip link set xfrm-hq up, sudo ip route add 10.10.10.0/24 dev xfrm-hq. Then sudo swanctl --load-all: it loads one connection and one secret.",
+  "Bring it up: on the router, clear crypto session (or wait a few seconds: the router keeps trying). show crypto ikev2 sa shows READY with AES-CBC 256, SHA256 and DH group 14, and Auth sign: PSK. On br01, sudo swanctl --list-sas shows the same SA from the other side, ESTABLISHED, with a child INSTALLED, TUNNEL.",
+  "Send traffic: on pc01, ping 10.50.0.1 answers. On the router, show crypto ipsec sa: #pkts encaps and #pkts decaps climb with each ping, and show ip route lists 10.50.0.0/24 directly connected to Tunnel0.",
+  "See that it is encrypted: on br01, sudo tcpdump -ni <the card> host 203.0.113.1 while pc01 pings: only ESP packets (proto 50) cross the provider's network, never ICMP from 10.10.10.x. sudo tcpdump -ni xfrm-hq shows the same pings decrypted.",
+  "Break it once on purpose: on the router, crypto ikev2 keyring KR-BRANCH, peer BR01, and type a different pre-shared-key, end, then clear crypto session. show crypto ikev2 sa stays empty or IN-NEG, and on br01 sudo journalctl -u strongswan shows an authentication failure (AUTHENTICATION_FAILED). Put the right key back.",
+  "Save it: write memory. show running-config lists every crypto part and interface Tunnel0; the key is shown in clear as IOS shows it, and service password-encryption scrambles it.",
+]
+pitfalls = [
+  "Both ends must agree on everything: a proposal one side does not offer gets NO_PROPOSAL_CHOSEN, a different key gets AUTHENTICATION_FAILED. Read the other side's log before changing your own side.",
+  "The peer's identity is checked: match identity remote address must be the address the branch says it is (its id), not only where its packets come from.",
+  "With the zone firewall from lesson router-zone-firewall in place, Tunnel0 must be in a zone (BRANCH, say) with zone-pairs to the zones that use it; an interface in no zone talks to no zoned interface.",
+  "The branch needs a route back through its tunnel interface. Without it the reply leaves in clear by its default route and the office never sees it.",
+  "A VTI encrypts what is routed into it; a static route to the branch via the provider's address instead of Tunnel0 sends the traffic in clear.",
+  "charon making its own routes (install_routes) with any-to-any selectors can take over a Linux machine's routing table; on a route-based VPN switch it off.",
+]
+further = [
+  "RFC 7296: Internet Key Exchange Protocol Version 2 (IKEv2)",
+  "Cisco IOS Security Configuration Guide: Configuring Internet Key Exchange Version 2 and IPsec Virtual Tunnel Interfaces",
+  "strongSwan documentation: swanctl.conf and route-based VPNs with XFRM interfaces",
+  "Lesson router-zone-firewall: the zones the tunnel must belong to",
+]
+
+[[verify]]
+label = "the router's IKEv2 and IPsec SAs, as strongSwan holds them"
+node = "fabric"
+shell = "sh"
+cmd = "swanctl --list-sas 2>/dev/null || echo 'charon not running: no tunnel with tunnel protection yet'"
+
+[[verify]]
+label = "the router's tunnel interfaces and the routes into them"
+node = "fabric"
+shell = "sh"
+cmd = "ip -d link show type xfrm 2>/dev/null; ip route show proto 186 2>/dev/null | grep wltun"
+
+[[verify]]
+label = "pc01 reaches the branch LAN through the tunnel"
+node = "pc01"
+cmd = "Test-Connection 10.50.0.1 -Count 2 -Quiet"
+
+[[quiz]]
+q = "show crypto ikev2 sa says READY but pc01 cannot reach the branch, and show crypto ipsec sa shows encaps climbing and decaps at 0. Where is the fault most likely?"
+answer = "At the branch: its traffic back is not routed into its tunnel interface"
+wrong = ["The pre-shared keys differ", "The IKEv2 proposals do not match", "UDP 500 is blocked"]
+why = "The SAs are up, so keys and proposals agree; packets go out encrypted and nothing comes back through the tunnel, so the far end's return path is wrong."
+
+[[quiz]]
+q = "What decides which traffic a static VTI (tunnel mode ipsec ipv4) encrypts?"
+answer = "Routing: whatever is routed into the tunnel interface"
+wrong = ["An access list named in a crypto map", "The transform set", "The IKEv2 proposal"]
+why = "A VTI negotiates any-to-any selectors; the routing table chooses what goes in."
+
+[[quiz]]
+q = "Which part holds the pre-shared key for a peer?"
+answer = "The IKEv2 keyring (peer, address, pre-shared-key)"
+wrong = ["The IKEv2 proposal", "The transform set", "The IPsec profile"]
+why = "The profile points at the keyring with keyring local; the keyring has one key per peer."

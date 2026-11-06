@@ -1,0 +1,81 @@
+[lesson]
+id = "router-console-vrf"
+title = "A VRF for the guest network: one router, two routing tables"
+module = "network"
+order = 302
+lab = "router-protocols"
+node = "pc-guest"
+nodes = ["pc-guest", "pc-office"]
+exercise = "router-guest-vrf"
+minutes = 35
+summary = "Put the guest network into a VRF of its own at the lab router's console, so the same router that routes the office no longer routes guests to it: a separate routing table, not an access list."
+why = '''
+A router routes between all its interfaces by default: the guest Wi-Fi and the
+accounts office are one hop apart. An access list can block that, but it is a
+list of exceptions on a router that still wants to forward. A VRF (Virtual
+Routing and Forwarding instance) changes the question: the guest interface gets a
+routing table of its own, which knows only the networks in the same VRF. There is
+no route from guest to office to block, because in the guest's table the office
+does not exist. Used without MPLS like this, it is called VRF-lite, and it is how
+one router (or one firewall) serves networks that must never meet.
+
+The lab router builds it the way Linux does: vrf definition GUEST is a VRF
+device with a kernel routing table of its own, and vrf forwarding GUEST on an
+interface enslaves that interface to it. ip route show vrf GUEST on the router is
+the same table show ip route vrf GUEST prints. One honest limit: winlab gives
+every network of a lab its own subnet, so here a VRF separates routing, not
+overlapping address plans; in life two VRFs may both use 10.0.0.0/24.
+'''
+concepts = [
+  "vrf definition <name> (with address-family ipv4) or the older ip vrf <name>: a routing table of its own; rd <asn>:<n> names it for MPLS VPNs and is optional for VRF-lite",
+  "vrf forwarding <name> on an interface moves it into the VRF and removes its IP address, as IOS does: type the address again after it",
+  "show ip route vrf <name> is the VRF's table; show ip route is the global one, and an interface lives in exactly one of them",
+  "ping vrf <name> <address> sends from inside the VRF; a plain ping uses the global table",
+  "ip route vrf <name> <network> <mask> <next hop> is a static route inside a VRF",
+]
+steps = [
+  "Start pc-guest and pc-office. On pc-guest (a visitor's laptop, 10.80.20.10, gateway 10.80.20.1): ping -c 2 10.80.0.10. pc-office answers: the lab router routes guest to office, as any router routes between its interfaces.",
+  "Open the router's console: enable, show ip interface brief. GigabitEthernet0/0/0 is the guest network (10.80.20.1). show ip route lists it beside the office (C 10.80.20.0/24 and C 10.80.0.0/24): one table.",
+  "Make the VRF: configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4, exit-address-family, exit. The prompts are Router(config-vrf)# and Router(config-vrf-af)#. show vrf (from the enable prompt, or do show vrf here) lists GUEST with no interfaces yet.",
+  "Move the guest interface into it: interface g0/0/0, vrf forwarding GUEST. The console prints that the interface's IP address was removed: an address belongs to a table, so IOS takes it away when the table changes. Type it again: ip address 10.80.20.1 255.255.255.0, then end.",
+  "Read both tables. show ip route: the guest network is gone from it. show ip route vrf GUEST: Routing Table: GUEST, with C 10.80.20.0/24 and L 10.80.20.1/32 and nothing else. show ip vrf lists GUEST with Gi0/0/0.",
+  "Test it from the guest side: on pc-guest, ping -c 2 10.80.20.1 still answers (its gateway is in the same VRF), and ping -c 2 10.80.0.10 now fails: in the guest's table there is no route to the office. From the console, ping 10.80.20.10 fails too (the global table has no route to it) and ping vrf GUEST 10.80.20.10 answers.",
+  "See it on the router itself, the Linux way: the router's VRF is a kernel VRF device. The verify commands below run ip -d link show GUEST and ip route show vrf GUEST on it: the guest interface (an lab0.<vlan> device) has master GUEST.",
+  "In life the guest network still needs the Internet: a static route in the VRF to a firewall (ip route vrf GUEST 0.0.0.0 0.0.0.0 <firewall>) or a default leaked from the global table. This lab has no guest firewall, so leave the guests isolated. write memory keeps the VRF.",
+  "Press Check my work: it reads the router's VRF device and tables, and pings from pc-guest.",
+]
+pitfalls = [
+  "vrf forwarding on an interface that has an address removes the address: an interface that seems dead after the command just needs ip address again.",
+  "vrf definition without address-family ipv4 has no IPv4 in it on IOS; type the address family even though the VRF has nothing else to say.",
+  "ip vrf GUEST and vrf definition GUEST are two styles; an interface uses ip vrf forwarding for the first and vrf forwarding for the second, and the console tells you which.",
+  "A VRF is not a firewall: anything routed into the VRF (a static route, a leaked route) is reachable. It only means no route exists until you make one.",
+  "OSPF in the global table does not see a VRF's interfaces: router ospf <pid> vrf GUEST would be a separate process for them.",
+]
+further = [
+  "Cisco IOS XE: Configuring VRF-lite (vrf definition, vrf forwarding)",
+  "Linux kernel documentation: Virtual Routing and Forwarding (VRF)",
+]
+
+[[verify]]
+label = "the VRF device on the router and its table"
+node = "fabric"
+cmd = "ip -d link show GUEST; ip -br link show master GUEST; ip route show vrf GUEST"
+shell = "sh"
+
+[[verify]]
+label = "the guest's gateway answers, the office does not"
+node = "pc-guest"
+cmd = "ping -c 2 -W 2 10.80.20.1; ping -c 2 -W 2 10.80.0.10"
+shell = "sh"
+
+[[quiz]]
+q = "What happens to an interface's IP address when you type vrf forwarding on it?"
+answer = "IOS removes it, and you type it again inside the VRF"
+wrong = ["It is kept and moved into the VRF", "It is copied into both tables", "The command is refused until the address is removed"]
+why = "An address is part of a routing table; changing the table drops it."
+
+[[quiz]]
+q = "Why can a guest in a VRF not reach the office, without any access list?"
+answer = "The VRF's routing table has no route to the office's network"
+wrong = ["The VRF drops all traffic by default", "The router blocks traffic between VLANs", "The guest's gateway is a different router"]
+why = "Each VRF routes only with the networks in its own table."

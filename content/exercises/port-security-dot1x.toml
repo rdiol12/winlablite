@@ -1,0 +1,90 @@
+[exercise]
+id = "port-security-dot1x"
+title = "A desk port a stranger cannot use, and a PC that proves who it is"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "pc01"]
+brief = """
+Anyone can plug into corp's switch today. Lock the port of one desk to the
+PC that sits there, so that an unknown laptop plugged in there takes the
+port down instead of joining the network, and leave that port err-disabled
+for the grader to find. Then make pc01's port ask NPS on dc01 who is
+plugging in, over 802.1X, and let pc01 in as a domain computer. The checks
+read the router (where the switch ports are), NPS's log on dc01 and pc01's
+Wired AutoConfig.
+"""
+tasks = [
+  "On corp's switch, secure a port with switchport port-security and mac-address sticky (violation shutdown, maximum 1), with its machine running so its address sticks",
+  "Plug a visitor's laptop in at that desk (the cable's menu on the canvas) and leave the port err-disabled",
+  "On dc01: install NPS, register it in AD, add the switch as a RADIUS client (the router's address on corp, 10.10.10.1) with a shared key, and a network policy for Domain Computers with PEAP",
+  "On the switch: aaa new-model, aaa authentication dot1x default group radius, radius server with dc01's address and the key, dot1x system-auth-control; on pc01's port authentication port-control auto and dot1x pae authenticator",
+  "On pc01: Wired AutoConfig running, 802.1X on in the network card's Authentication tab (PEAP, user or computer authentication), until show authentication sessions says Auth",
+]
+
+[[check]]
+name = "port security runs on a switch port: the router keeps a limited address set for it"
+node = "fabric"
+shell = "sh"
+script = '''
+if nft list table bridge winlab_port 2>/dev/null | grep -q 'set ok_'; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 1
+hint = "On the switch's console: interface fa0/N, switchport port-security. show port-security lists the port when it is on."
+
+[[check]]
+name = "an unknown laptop on a secured port ended err-disabled"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /run/winlab-port/*.err; do [ -e "$f" ] || continue; p=$(basename $f .err)
+  bridge -d link show dev $p 2>/dev/null | grep -q 'state disabled' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 3
+hint = "Right-click the secured machine's cable: Plug a visitor's laptop in at this desk. With violation shutdown (the default) and maximum 1 the port err-disables at the laptop's first frame; show interfaces status says err-disabled. Leave it so."
+
+[[check]]
+name = "802.1X runs on a port: the router's hostapd asks a RADIUS server"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for c in /run/winlab-port/hapd-*.conf; do [ -e "$c" ] && grep -q '^auth_server_addr=' $c && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "aaa new-model, aaa authentication dot1x default group radius, radius server NPS (address ipv4 10.10.10.10 auth-port 1812, key), dot1x system-auth-control, and on the port authentication port-control auto and dot1x pae authenticator."
+
+[[check]]
+name = "a domain PC authenticated: a port authorized by the RADIUS server"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for c in /run/winlab-port/hapd-*.conf; do [ -e "$c" ] || continue; i=$(sed -n 's/^interface=//p' $c)
+  hostapd_cli -p /run/hostapd -i $i all_sta 2>/dev/null | grep -q 'AUTHORIZED' && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 3
+hint = "show authentication sessions on the switch: Running means no answer from NPS (the key, or the RADIUS client's address); Unauth with a failure means NPS said no (event 6273 on dc01 says which policy and why)."
+
+[[check]]
+name = "NPS granted access (event 6272 on dc01)"
+node = "dc01"
+script = "[bool](Get-WinEvent -FilterHashtable @{LogName='Security'; Id=6272} -MaxEvents 1 -ErrorAction SilentlyContinue)"
+expect = "True"
+weight = 2
+hint = "NPS logs every decision in dc01's Security log: 6272 granted, 6273 denied. No event at all means the request never reached NPS or was dropped (event 18 in the System log: the shared key)."
+
+[[check]]
+name = "Wired AutoConfig runs on pc01 and starts with it"
+node = "pc01"
+script = "$s = Get-Service dot3svc; ($s.Status -eq 'Running') -and ($s.StartType -eq 'Automatic')"
+expect = "True"
+weight = 1
+hint = "Without the Wired AutoConfig service a Windows PC never answers 802.1X: sc.exe config dot3svc start= auto, then net start dot3svc."

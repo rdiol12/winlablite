@@ -1,0 +1,91 @@
+[exercise]
+id = "spanning-tree-root"
+title = "A loop of switches, with the root bridge where it belongs"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["pc01"]
+brief = """
+Three switches cabled in a ring are a loop. Spanning tree keeps the network
+alive by blocking one cable, but which one it blocks depends on which switch
+is the root bridge, and left alone the root is whichever switch has the
+lowest address: an accident. Build the ring under corp's switch, make the
+switch the router is cabled to the root on purpose, and choose its backup.
+The checks read the router's own kernel bridges, where the switches' spanning
+tree runs.
+"""
+tasks = [
+  "On the Workbench add two switches and cable each one's uplink (Gi0/1) into the switch corp is on",
+  "Drag a free gigabit port of one new switch onto the other: a spare cable, and a loop",
+  "On the console of the switch cabled to the router: spanning-tree vlan 1 priority 4096 (or spanning-tree vlan 1 root primary)",
+  "On one of the other two: spanning-tree vlan 1 root secondary",
+  "Leave spanning tree on everywhere, and check with show spanning-tree that one port blocks",
+]
+
+[[check]]
+name = "the ring is there and spanning tree blocks one port of it"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for p in /sys/class/net/stp*/brif/*/state; do [ "$(cat $p 2>/dev/null)" = 4 ] && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "Three switches, two uplinks into the top one and a spare cable between the two below: drag a free Gi0/2-4 port of one onto the other. With spanning tree on, one port of the ring blocks (B on the canvas)."
+
+[[check]]
+name = "spanning tree runs on every switch bridge"
+node = "fabric"
+shell = "sh"
+script = '''
+n=0; off=0
+for d in /sys/class/net/stp*/bridge; do [ -d "$d" ] || continue; n=$((n+1)); [ "$(cat $d/stp_state)" = 0 ] && off=$((off+1)); done
+if [ $n -gt 0 ] && [ $off = 0 ]; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 2
+hint = "show spanning-tree on each switch: 'instance for vlan 1 does not exist' means it is off there; spanning-tree vlan 1 in configure terminal turns it back on."
+
+[[check]]
+name = "the switch cabled to the router is the root bridge"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in /sys/class/net/stp*; do [ -d $d/bridge ] || continue; n=${d##*/}
+  if [ -e $d/brif/${n}fa ] && [ "$(cat $d/bridge/bridge_id)" = "$(cat $d/bridge/root_id)" ]; then r=True; fi; done
+echo $r
+'''
+expect = "True"
+weight = 3
+hint = "The lowest bridge ID wins: priority first, then the address. On the top switch's console: configure terminal, spanning-tree vlan 1 priority 4096."
+
+[[check]]
+name = "it is root by its priority, not by luck of its address"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in /sys/class/net/stp*; do [ -d $d/bridge ] || continue; n=${d##*/}
+  if [ -e $d/brif/${n}fa ] && [ "$(cat $d/bridge/priority)" -lt 32768 ]; then r=True; fi; done
+echo $r
+'''
+expect = "True"
+weight = 1
+hint = "Every switch ships at priority 32768; a root chosen by the address changes the day a switch with a lower one is plugged in."
+
+[[check]]
+name = "a backup root is chosen"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for d in /sys/class/net/stp*; do [ -d $d/bridge ] || continue; n=${d##*/}
+  [ -e $d/brif/${n}fa ] && continue
+  [ "$(cat $d/bridge/priority)" -lt 32768 ] && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 1
+hint = "spanning-tree vlan 1 root secondary on one of the other switches sets 28672: it takes over if the root goes."

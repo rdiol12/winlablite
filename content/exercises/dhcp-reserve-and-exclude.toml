@@ -1,0 +1,41 @@
+[exercise]
+id = "dhcp-reserve-and-exclude"
+title = "A reservation for pc01 and a block kept back for printers"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01", "pc01"]
+brief = """
+pc01 runs a licence dongle server that other machines find by address, so it
+must always get 10.10.10.60, still from DHCP so its gateway and DNS options
+stay managed in one place. The top of the scope is promised to network
+printers that will be set by hand.
+"""
+tasks = [
+  "Reserve 10.10.10.60 for pc01 (its MAC address is the client id)",
+  "Exclude 10.10.10.140 to 10.10.10.150 from the 10.10.10.0 scope",
+  "Renew on pc01 (ipconfig /renew) so it moves to its reserved address",
+]
+
+[[check]]
+name = "a reservation of 10.10.10.60 exists"
+node = "dc01"
+script = "[bool](Get-DhcpServerv4Reservation -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress.IPAddressToString -eq '10.10.10.60' })"
+expect = "True"
+weight = 2
+hint = "Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <pc01 MAC, from Get-DhcpServerv4Lease> -Name pc01"
+
+[[check]]
+name = "printers' range is excluded"
+node = "dc01"
+script = "[bool](Get-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -ErrorAction SilentlyContinue | Where-Object { $_.StartRange.IPAddressToString -eq '10.10.10.140' -and $_.EndRange.IPAddressToString -eq '10.10.10.150' })"
+expect = "True"
+weight = 1
+hint = "Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (an exclusion must fall inside the scope's range)"
+
+[[check]]
+name = "pc01 now holds 10.10.10.60"
+node = "pc01"
+script = "@(Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object { $_.IPAddress }) -contains '10.10.10.60'"
+expect = "True"
+weight = 2
+hint = "The reservation applies at the next lease: ipconfig /release, then ipconfig /renew on pc01. A wrong MAC (dashes, not colons) is the usual reason it does not."

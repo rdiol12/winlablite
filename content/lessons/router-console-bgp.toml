@@ -1,0 +1,100 @@
+[lesson]
+id = "router-console-bgp"
+title = "eBGP from the lab router to an ISP, and the way out for the whole office"
+module = "network"
+order = 301
+lab = "router-protocols"
+node = "rtr-isp"
+nodes = ["rtr-isp", "rtr-edge", "pc-office", "pc-edge", "inet01"]
+exercise = "router-ebgp-to-isp"
+minutes = 45
+summary = "Peer the lab router (AS 65000) with the ISP's router (AS 65100) over eBGP, announce the company's networks with network statements, learn the Internet's, and hand the way out to the workshop's router with an OSPF default route."
+why = '''
+Between companies and their providers there is BGP. It does not discover
+neighbours: each side names the other's address and AS number, they open a TCP
+session on port 179, and each tells the other which networks it can reach. A
+company announces its own prefixes and learns the provider's (or a default
+route), and the provider carries the company's prefixes to the rest of the
+Internet.
+
+The lab router is the company's edge here: router bgp 65000 at its console, as on
+any Cisco edge router. rtr-isp is the provider, Ubuntu with FRRouting, AS 65100.
+Inside the company OSPF already runs (the previous lesson); the edge router is
+where the two meet, and default-information originate is how the routers inside
+learn that everything unknown goes to the edge.
+
+One honest difference you will see: FRRouting follows RFC 8212 and, by default,
+neither accepts nor sends eBGP routes until a policy (a route-map) allows them.
+IOS does not. The lab router's console behaves like IOS, so winlab turns that
+default off on it (no bgp ebgp-requires-policy, written for you into the
+router's FRRouting configuration); on rtr-isp you type it yourself, and you see
+why it exists.
+'''
+concepts = [
+  "router bgp <AS>: one BGP process per router, named by its autonomous system number; 64512 to 65534 are private AS numbers, like private addresses",
+  "neighbor <address> remote-as <AS>: a different AS than your own makes it eBGP; the session is TCP 179 and nothing happens until both sides name each other",
+  "network <prefix> mask <mask> announces a prefix only if exactly that prefix is in the routing table (connected, static or learned from OSPF)",
+  "BGP states: Idle, Connect, Active, OpenSent, OpenConfirm, Established; show ip bgp summary prints a prefix count instead of a state once Established",
+  "Administrative distance: eBGP routes are 20, OSPF 110, static 1; B in show ip route",
+  "default-information originate always (OSPF): announce a default route to the OSPF routers even without one in the table; without always it follows a default the router has",
+]
+steps = [
+  "Start rtr-isp, rtr-edge, pc-office, pc-edge and inet01 (the web server on the Internet, 203.0.113.80). OSPF from the previous lesson stays: the lab router and rtr-edge are neighbours.",
+  "Install FRRouting on rtr-isp: in Machines, pull the frr package stick out of rtr-edge and plug it into rtr-isp (its Settings), then mount LABEL=WLPACK and install frr as the README on the stick says. Forwarding on: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf, sudo sysctl --system. BGP daemon on: sudo sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons, sudo systemctl restart frr.",
+  "The ISP's side first. On rtr-isp: sudo vtysh, configure terminal, router bgp 65100, bgp router-id 9.9.9.9, no bgp ebgp-requires-policy, neighbor 198.51.100.1 remote-as 65000, address-family ipv4 unicast, network 203.0.113.0/24, exit-address-family, end, write memory. show bgp summary: the neighbour sits in Active, because nobody answers on 198.51.100.1 yet.",
+  "The company's side, at the lab router's console: enable, configure terminal, router bgp 65000. The prompt is Router(config-router)#. Type bgp router-id 2.2.2.2 and neighbor 198.51.100.2 remote-as 65100, then neighbor 198.51.100.2 description ISP. Then the networks to announce, as IOS-XE writes them: address-family ipv4, network 10.80.0.0 mask 255.255.255.0, network 10.81.0.0 mask 255.255.255.0, exit-address-family, end.",
+  "Watch the session come up: show ip bgp summary on the console. The line for 198.51.100.2 goes from Active or Connect to a number (prefixes received) within a few seconds. show ip bgp lists 203.0.113.0/24 with next hop 198.51.100.2 and AS path 65100, and the two 10.x networks you announce with next hop 0.0.0.0.",
+  "Notice 10.81.0.0/24 is announced although no interface of the lab router is in it: network takes any exact match in the routing table, and the lab router learned it from OSPF. Try network 10.0.0.0 mask 255.0.0.0: show ip bgp never lists it, because no 10.0.0.0/8 route exists. Take it away again with no network 10.0.0.0 mask 255.0.0.0 (in router bgp 65000, address-family ipv4).",
+  "The routing table now: show ip route on the console has B 203.0.113.0/24 [20/0] via 198.51.100.2. On rtr-isp, show ip route bgp has the company's two networks. From pc-office, curl -s http://203.0.113.80/ answers with 'from 10.80.0.10': the web server sees the PC's own address, because there is no NAT here, only routes.",
+  "The workshop cannot get out yet: from pc-edge, curl -s -m 5 http://203.0.113.80/ times out. rtr-edge knows only what OSPF told it, and OSPF says nothing about the Internet. Give it a way out: on the console, configure terminal, router ospf 1, default-information originate always, end. On rtr-edge, show ip route in vtysh has O>* 0.0.0.0/0 via 10.80.0.2. Now pc-edge's curl answers 'from 10.81.0.10'.",
+  "Break it and read it: on the console, router bgp 65000, neighbor 198.51.100.2 remote-as 65101. show ip bgp summary: the session drops and stays down; on rtr-isp, show bgp neighbors 198.51.100.1 names the NOTIFICATION (bad peer AS). Put 65100 back. clear ip bgp * restarts every session by hand, which a real change of policy often needs.",
+  "show ip protocols on the console lists both protocols, what each routes for and the BGP neighbour. write memory keeps it. Press Check my work.",
+]
+pitfalls = [
+  "Active is not active: it means the router is trying to open the TCP session and nobody answers. Check the address, that the other side names you, and that bgpd runs there.",
+  "A network statement with the wrong mask announces nothing and gives no error; show ip bgp shows what is really announced.",
+  "On FRRouting, eBGP without a route-map or no bgp ebgp-requires-policy is Established with (Policy) in show bgp summary and no prefixes: that is RFC 8212, not a fault in the session.",
+  "default-information originate without always only works when the router has a default route itself; here the ISP sends none, so always is what makes it happen.",
+  "The way back matters as much as the way out: pc-edge reaches inet01 only because rtr-isp learned 10.81.0.0/24 from the lab router.",
+]
+further = [
+  "Cisco IOS IP Routing: BGP Configuration Guide (neighbor remote-as, network mask)",
+  "FRRouting documentation: BGP (bgp ebgp-requires-policy)",
+  "RFC 4271: A Border Gateway Protocol 4 (BGP-4); RFC 8212: Default External BGP Route Propagation Behavior without Policies",
+]
+
+[[verify]]
+label = "the lab router's BGP session and prefixes"
+node = "fabric"
+cmd = "vtysh -c 'show ip bgp summary'; vtysh -c 'show ip bgp'"
+shell = "sh"
+
+[[verify]]
+label = "what the ISP learned from the company"
+node = "rtr-isp"
+cmd = "vtysh -c 'show ip route bgp'"
+shell = "sh"
+
+[[verify]]
+label = "the workshop reaches the Internet with its own address"
+node = "pc-edge"
+cmd = "curl -s -m 5 http://203.0.113.80/; traceroute -n -w 2 203.0.113.80"
+shell = "sh"
+
+[[quiz]]
+q = "When does 'network 10.81.0.0 mask 255.255.255.0' under router bgp announce anything?"
+answer = "When exactly 10.81.0.0/24 is in the routing table, from any source"
+wrong = ["Always, as soon as it is typed", "Only when an interface has an address in it", "Only after redistribute connected"]
+why = "BGP's network command originates an existing route; it does not create one."
+
+[[quiz]]
+q = "show ip bgp summary shows Active for a neighbour. What does that mean?"
+answer = "The TCP session to the neighbour is not up: the router keeps trying"
+wrong = ["The session is up and routes flow", "The neighbour is administratively shut down", "The neighbour sent too many prefixes"]
+why = "Active and Connect are both attempts to open TCP 179; Established is the working state."
+
+[[quiz]]
+q = "Which administrative distance does an eBGP route have on a Cisco router?"
+answer = "20"
+wrong = ["110", "200", "1"]
+why = "eBGP is 20, so it wins over OSPF (110); iBGP is 200."

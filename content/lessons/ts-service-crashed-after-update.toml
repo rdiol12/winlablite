@@ -1,0 +1,71 @@
+[lesson]
+id = "ts-service-crashed-after-update"
+title = "A service crashed in the night and nobody restarted it"
+module = "troubleshoot"
+order = 157
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01", "pc01"]
+problem = "service-crashed-after-update"
+minutes = 25
+summary = "After the night's patching DNS is down on the DC; it was not stopped by anyone and did not come back."
+why = '''
+Servers rarely break while you watch. They break at 03:00, after the updates
+restarted them, and they stay broken until the first person in rings the
+helpdesk. Whether a crash costs five minutes or five hours depends on one
+setting most admins never look at: what the Service Control Manager does
+when a service dies. With no recovery options it does nothing, the service
+stays down and the System log quietly records event 7034. This lesson is
+the morning after: find what went down and when, bring it back, and set the
+recovery options so the next crash restarts itself.
+'''
+concepts = [
+  "Automatic start type is about boot; recovery options are about crashes",
+  "System log events 7031 and 7034: a service terminated unexpectedly, with or without a recovery action",
+  "sc.exe qfailure and sc.exe failure: reading and setting a service's recovery actions",
+  "Correlating a crash with a change (the update history) for the incident note",
+]
+steps = [
+  "Press Break above (or run winlab break dc01 service-crashed-after-update). Do not read the hints yet.",
+  "From pc01, resolve a name in the domain (Resolve-DnsName dc01) and see it fail. Note the time.",
+  "On dc01, list the automatic services that are not running and read the System log for what happened to them.",
+  "Bring the service back, then set recovery options so a crash restarts it. Press Verify my fix: it checks the machine.",
+  "Write the incident note: what crashed, when, why it stayed down, and what you changed so it heals itself next time.",
+]
+pitfalls = [
+  "Starting the service and stopping there: it works until the next crash, which will again wait for you.",
+  "Changing the start type to Automatic (Delayed Start) and calling that a fix: start type is not what happens on a crash.",
+]
+further = [
+  "Microsoft Learn: sc.exe failure",
+  "Microsoft Learn: Event ID 7034 and 7031, Service Control Manager",
+]
+
+[[verify]]
+label = "the service and its recovery options"
+node = "dc01"
+cmd = "Get-Service DNS | Format-List Name, Status, StartType; sc.exe qfailure DNS"
+
+[[verify]]
+label = "the night's crashes in the System log"
+node = "dc01"
+cmd = "Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Service Control Manager'; Id=7031,7034} -MaxEvents 5 -ErrorAction SilentlyContinue | Format-List TimeCreated, Id, Message"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "A service with start type Automatic crashes at 03:00. Without recovery options, what happens?"
+answer = "It stays stopped until someone starts it"
+wrong = ["Windows restarts it after a minute", "The server reboots", "It starts again at the next logon"]
+why = "Start type only says what happens at boot."
+
+[[quiz]]
+q = "Which command shows what the Service Control Manager does when a service fails?"
+answer = "sc.exe qfailure <service>"
+wrong = ["Get-Service <service> | Format-List *", "sc.exe query <service>", "Get-WinEvent -LogName Setup"]
+why = "qfailure lists the reset period and the actions: restart, run a program, reboot."
+
+[[quiz]]
+q = "Event 7034 in the System log means…"
+answer = "the service terminated unexpectedly"
+wrong = ["the service was stopped by an administrator", "the service failed to install", "the service's account password expired"]
+why = "7031 says the same with the recovery action that was taken."

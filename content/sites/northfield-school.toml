@@ -1,0 +1,1089 @@
+# A client job (winlab/campus.py): a school of three buildings, the sports
+# hall far across the playing field. Coordinates are metres.
+
+[job]
+id = "northfield-school"
+title = "Northfield School"
+client = "Northfield Secondary School"
+contact = "Rina Golan, school business manager"
+level = 2
+domain = "school.lab"
+summary = "Three buildings, one of them 450 m of duct away: singlemode fibre, staff and student networks kept apart, a computer lab, Wi-Fi, cameras, a domain with teachers and students, shares, home folders, a print server and locked-down student desktops."
+label_scheme = "{closet}/{panel}/{port:02}"
+budget = 33000
+width = 320
+height = 222
+brief = '''
+Dear installer,
+
+Northfield is moving out of the old portable classrooms into the main block,
+the library and the sports hall, and the council has signed off the
+cabling budget. Please take the site from bare walls to working IT.
+
+Cabling. Every wall jack in all three buildings cabled to its building's
+comms room, tested and patched. The library and the sports hall link to the
+main comms room over fibre. Note that the duct to the sports hall goes all
+the way round the playing field: our surveyor measured it at about 450 m.
+
+Network. Three networks, kept apart:
+  STAFF     VLAN 10, 10.20.10.0/24: office and staff PCs, the printer, Wi-Fi, the server
+  STUDENTS  VLAN 20, 10.20.20.0/24: the computer lab and library PCs
+  CCTV      VLAN 30, 10.20.30.0/24: cameras only, addresses from the router
+The router is .1 on each. Staff and student addresses come from the server.
+
+Wi-Fi. Northfield-Staff (WPA2) in every classroom, the staff room, the
+office, the library and the sports hall.
+
+Cameras. The main entrance, the car park and the sports hall door, powered
+from the switches.
+
+Servers. Two, in the main comms room. DC01, 10.20.10.10: domain controller
+of school.lab, DNS, DHCP for staff and students, and the print server.
+FS01, 10.20.10.11: the file server, a member of the domain. Fixed addresses
+for both; everything else gets its address from DHCP.
+
+People. Teachers Anna Berg and David Cohen, office manager Rina Golan, and
+two student accounts to start with, Sara Levi and Omer Dahan (first.last).
+OUs Staff and Students; groups Teachers, Office and Students.
+
+Files. Homework: teachers change it, students read it. Staff: teachers and
+the office only, students no access at all. Every student has a home folder
+on FS01 (\\FS01\Home\username) on their H: drive. The shares give no one
+Everyone Full Control: the folders' own (NTFS) rights decide, and Staff
+hides itself from those who cannot open it (access-based enumeration).
+
+Addresses and names. Keep .1 to .20 of the staff and student networks out
+of the DHCP pools; both scopes hand out the router, DC01 as DNS and the
+domain name school.lab, and the printer has a reservation. DNS needs
+reverse lookup zones for both networks and files.school.lab as another
+name for FS01.
+
+Printing. The staff room printer PRN01 is shared from DC01 as StaffPrinter,
+and the staff PC uses it from there.
+
+PCs. LAB01 and LAB02 in the computer lab and LIB01 in the library are
+student PCs (OU Lab PCs); OFFICE01 in the office and STAFF01 in the staff
+room are staff PCs (OU Office PCs). All in the domain.
+Students may not open Control Panel or Settings. Lab PCs lock after 10
+minutes. Passwords at least 10 characters.
+
+Kind regards,
+Rina Golan
+'''
+
+[[area]]
+kind = "road"
+name = "Northfield Road"
+x = 0
+y = 210
+w = 320
+h = 12
+[[area]]
+kind = "parking"
+name = "Car park"
+x = 10
+y = 88
+w = 80
+h = 50
+[[area]]
+kind = "field"
+name = "Playing field"
+x = 110
+y = 90
+w = 125
+h = 100
+[[area]]
+kind = "path"
+name = ""
+x = 94
+y = 36
+w = 26
+h = 4
+
+[[building]]
+id = "main"
+name = "Main block"
+x = 20
+y = 20
+w = 70
+h = 40
+tray = [[1, 17], [69, 17]]
+door = [[8, 0], [4, 40]]
+  [[building.room]]
+  id = "office"
+  name = "Office"
+  x = 0
+  y = 0
+  w = 16
+  h = 14
+  [[building.room]]
+  id = "staffroom"
+  name = "Staff room"
+  x = 16
+  y = 0
+  w = 16
+  h = 14
+  [[building.room]]
+  id = "class1"
+  name = "Classroom 1"
+  x = 32
+  y = 0
+  w = 19
+  h = 14
+  [[building.room]]
+  id = "class2"
+  name = "Classroom 2"
+  x = 51
+  y = 0
+  w = 19
+  h = 14
+  [[building.room]]
+  id = "corridor"
+  name = "Corridor"
+  x = 0
+  y = 14
+  w = 70
+  h = 6
+  [[building.room]]
+  id = "comms"
+  name = "Comms room"
+  x = 0
+  y = 20
+  w = 8
+  h = 8
+  [[building.room]]
+  id = "itlab"
+  name = "Computer lab"
+  x = 8
+  y = 20
+  w = 24
+  h = 20
+  [[building.room]]
+  id = "class3"
+  name = "Classroom 3"
+  x = 32
+  y = 20
+  w = 19
+  h = 20
+  [[building.room]]
+  id = "class4"
+  name = "Classroom 4"
+  x = 51
+  y = 20
+  w = 19
+  h = 20
+  [[building.closet]]
+  id = "mdf"
+  name = "Main comms room (MDF)"
+  kind = "mdf"
+  room = "comms"
+  x = 4
+  y = 24
+  [[building.point]]
+  id = "off-j1"
+  kind = "jack"
+  room = "office"
+  x = 0.5
+  y = 7
+  [[building.point]]
+  id = "off-j2"
+  kind = "jack"
+  room = "office"
+  x = 15.5
+  y = 7
+  [[building.point]]
+  id = "off-c1"
+  kind = "ceiling"
+  room = "office"
+  x = 8
+  y = 7
+  [[building.point]]
+  id = "stf-j1"
+  kind = "jack"
+  room = "staffroom"
+  x = 24
+  y = 0.5
+  [[building.point]]
+  id = "stf-j2"
+  kind = "jack"
+  room = "staffroom"
+  x = 31.5
+  y = 7
+  [[building.point]]
+  id = "stf-c1"
+  kind = "ceiling"
+  room = "staffroom"
+  x = 24
+  y = 7
+  [[building.point]]
+  id = "c1-j1"
+  kind = "jack"
+  room = "class1"
+  x = 41
+  y = 0.5
+  [[building.point]]
+  id = "c1-c1"
+  kind = "ceiling"
+  room = "class1"
+  x = 41.5
+  y = 7
+  [[building.point]]
+  id = "c2-j1"
+  kind = "jack"
+  room = "class2"
+  x = 60
+  y = 0.5
+  [[building.point]]
+  id = "c2-c1"
+  kind = "ceiling"
+  room = "class2"
+  x = 60.5
+  y = 7
+  [[building.point]]
+  id = "lab-j1"
+  kind = "jack"
+  room = "itlab"
+  x = 8.5
+  y = 26
+  [[building.point]]
+  id = "lab-j2"
+  kind = "jack"
+  room = "itlab"
+  x = 8.5
+  y = 34
+  [[building.point]]
+  id = "lab-j3"
+  kind = "jack"
+  room = "itlab"
+  x = 16
+  y = 39.5
+  [[building.point]]
+  id = "lab-j4"
+  kind = "jack"
+  room = "itlab"
+  x = 24
+  y = 39.5
+  [[building.point]]
+  id = "lab-j5"
+  kind = "jack"
+  room = "itlab"
+  x = 31.5
+  y = 30
+  [[building.point]]
+  id = "lab-c1"
+  kind = "ceiling"
+  room = "itlab"
+  x = 20
+  y = 30
+  [[building.point]]
+  id = "c3-j1"
+  kind = "jack"
+  room = "class3"
+  x = 41
+  y = 39.5
+  [[building.point]]
+  id = "c3-c1"
+  kind = "ceiling"
+  room = "class3"
+  x = 41.5
+  y = 30
+  [[building.point]]
+  id = "c4-j1"
+  kind = "jack"
+  room = "class4"
+  x = 54
+  y = 39.5
+  [[building.point]]
+  id = "c4-c1"
+  kind = "ceiling"
+  room = "class4"
+  x = 60.5
+  y = 30
+  [[building.point]]
+  id = "main-o1"
+  kind = "outdoor"
+  room = "office"
+  x = 10
+  y = -0.5
+  [[building.point]]
+  id = "park-o1"
+  kind = "outdoor"
+  room = "itlab"
+  x = 9
+  y = 40.5
+
+[[building]]
+id = "library"
+name = "Library"
+x = 120
+y = 24
+w = 36
+h = 26
+tray = [[1, 13], [35, 13]]
+door = [[0, 13]]
+  [[building.room]]
+  id = "reading"
+  name = "Reading room"
+  x = 0
+  y = 0
+  w = 24
+  h = 26
+  [[building.room]]
+  id = "study"
+  name = "Study room"
+  x = 24
+  y = 0
+  w = 12
+  h = 14
+  [[building.room]]
+  id = "libcomms"
+  name = "Library comms"
+  x = 24
+  y = 14
+  w = 12
+  h = 12
+  [[building.closet]]
+  id = "idf-lib"
+  name = "Library comms (IDF)"
+  kind = "idf"
+  room = "libcomms"
+  x = 30
+  y = 20
+  [[building.point]]
+  id = "lib-j1"
+  kind = "jack"
+  room = "reading"
+  x = 0.5
+  y = 6
+  [[building.point]]
+  id = "lib-j2"
+  kind = "jack"
+  room = "reading"
+  x = 0.5
+  y = 20
+  [[building.point]]
+  id = "lib-j3"
+  kind = "jack"
+  room = "reading"
+  x = 12
+  y = 25.5
+  [[building.point]]
+  id = "lib-c1"
+  kind = "ceiling"
+  room = "reading"
+  x = 12
+  y = 13
+  [[building.point]]
+  id = "std-j1"
+  kind = "jack"
+  room = "study"
+  x = 35.5
+  y = 6
+  [[building.point]]
+  id = "std-c1"
+  kind = "ceiling"
+  room = "study"
+  x = 30
+  y = 7
+
+[[building]]
+id = "sports"
+name = "Sports hall"
+x = 250
+y = 150
+w = 56
+h = 36
+tray = [[1, 18], [55, 18]]
+door = [[0, 18]]
+  [[building.room]]
+  id = "hall"
+  name = "Sports hall"
+  x = 0
+  y = 0
+  w = 44
+  h = 36
+  [[building.room]]
+  id = "changing"
+  name = "Changing rooms"
+  x = 44
+  y = 0
+  w = 12
+  h = 18
+  [[building.room]]
+  id = "store"
+  name = "Equipment store"
+  x = 44
+  y = 18
+  w = 12
+  h = 18
+  [[building.closet]]
+  id = "idf-sports"
+  name = "Equipment store (IDF)"
+  kind = "idf"
+  room = "store"
+  x = 50
+  y = 27
+  [[building.point]]
+  id = "hall-j1"
+  kind = "jack"
+  room = "hall"
+  x = 0.5
+  y = 8
+  [[building.point]]
+  id = "hall-j2"
+  kind = "jack"
+  room = "hall"
+  x = 22
+  y = 35.5
+  [[building.point]]
+  id = "hall-c1"
+  kind = "ceiling"
+  room = "hall"
+  x = 14
+  y = 18
+  [[building.point]]
+  id = "hall-c2"
+  kind = "ceiling"
+  room = "hall"
+  x = 32
+  y = 18
+  [[building.point]]
+  id = "chg-c1"
+  kind = "ceiling"
+  room = "changing"
+  x = 50
+  y = 9
+  [[building.point]]
+  id = "hall-o1"
+  kind = "outdoor"
+  room = "hall"
+  x = -0.5
+  y = 24
+
+[[conduit]]
+id = "duct-library"
+name = "Duct to the library"
+from = "mdf"
+to = "idf-lib"
+path = [[24, 44], [24, 64], [146, 64], [146, 50], [150, 44]]
+
+[[conduit]]
+id = "duct-sports"
+name = "Duct round the playing field"
+from = "mdf"
+to = "idf-sports"
+path = [[24, 44], [24, 205], [300, 205], [300, 186], [300, 177]]
+
+[[target]]
+id = "entrance"
+name = "Main entrance"
+building = "main"
+x = 8
+y = -4
+[[target]]
+id = "car-park"
+name = "Car park"
+x = 36
+y = 90
+[[target]]
+id = "hall-door"
+name = "Sports hall door"
+building = "sports"
+x = -4
+y = 18
+
+
+# ---- the file server, shares, DHCP and DNS done as a network admin would
+[[check]]
+section = "Server"
+name = "FS01 is a member of school.lab with the fixed address 10.20.10.11"
+node = "fs01"
+script = '''
+$cs = Get-CimInstance Win32_ComputerSystem
+$ip = Get-NetIPAddress -AddressFamily IPv4 -IPAddress 10.20.10.11 -ErrorAction SilentlyContinue | Where-Object PrefixOrigin -eq 'Manual'
+if ($cs.Domain -ne 'school.lab' -or -not $cs.PartOfDomain) { 'FS01 is not in school.lab' } elseif (-not $ip) { 'FS01 does not have 10.20.10.11 set by hand' }
+elseif (((Get-DnsClientServerAddress -AddressFamily IPv4 | Where-Object ServerAddresses).ServerAddresses -join ',') -notmatch '10\.20\.10\.10') { 'FS01 does not use DC01 for DNS' } else { 'True' }
+'''
+weight = 2
+[[check]]
+section = "Files"
+name = "Homework and Staff shares: no Everyone Full Control on the shares; NTFS rights decide"
+node = "fs01"
+script = '''
+$bad = foreach ($n in 'Homework','Staff') {
+  $a = Get-SmbShareAccess -Name $n -ErrorAction SilentlyContinue
+  if (-not $a) { "no share $n" } elseif ($a | Where-Object { $_.AccountName -match '^Everyone$' -and $_.AccessRight -eq 'Full' -and $_.AccessControlType -eq 'Allow' }) { "$n gives Everyone Full Control" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+[[check]]
+section = "Files"
+name = "Staff hides itself from those who cannot open it (access-based enumeration)"
+node = "fs01"
+script = "[string](Get-SmbShare -Name Staff -ErrorAction SilentlyContinue).FolderEnumerationMode"
+expect = "AccessBased"
+[[check]]
+section = "Server"
+name = "Both DHCP scopes hand out DC01 as DNS and the domain name school.lab"
+node = "dc01"
+script = '''
+$bad = foreach ($n in '10.20.10','10.20.20') {
+  $o = @{}; Get-DhcpServerv4OptionValue -ErrorAction SilentlyContinue | ForEach-Object { $o[$_.OptionId] = $_.Value -join ',' }
+  Get-DhcpServerv4OptionValue -ScopeId "$n.0" -ErrorAction SilentlyContinue | ForEach-Object { $o[$_.OptionId] = $_.Value -join ',' }
+  if ($o[6] -notmatch '10\.20\.10\.10') { "scope $n.0: option 6 (DNS) is not DC01" } elseif ($o[15] -notmatch 'school\.lab') { "scope $n.0: no option 15 school.lab" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+[[check]]
+section = "Server"
+name = "DHCP keeps .1 to .20 out of both pools; PRN01 has a reservation"
+node = "dc01"
+script = '''
+$n = { param($ip) $b = ([ipaddress]$ip).GetAddressBytes(); [array]::Reverse($b); [BitConverter]::ToUInt32($b, 0) }
+$bad = foreach ($net in '10.20.10','10.20.20') {
+  $s = Get-DhcpServerv4Scope -ScopeId "$net.0" -ErrorAction SilentlyContinue
+  $hi = & $n "$net.20"; $lo = & $n "$net.1"
+  $cut = Get-DhcpServerv4ExclusionRange -ScopeId "$net.0" -ErrorAction SilentlyContinue | Where-Object { (& $n $_.StartRange) -le $lo -and (& $n $_.EndRange) -ge $hi }
+  if (-not $s) { "no scope $net.0" } elseif (-not ((& $n $s.StartRange) -gt $hi -or $cut)) { "scope $net.0 still hands out .1 to .20" }
+}
+$a = (Resolve-DnsName prn01.school.lab -Type A -ErrorAction SilentlyContinue | Where-Object Type -eq 'A').IPAddress
+$r = Get-DhcpServerv4Reservation -ScopeId 10.20.10.0 -ErrorAction SilentlyContinue
+if (-not $a) { $bad += 'prn01.school.lab does not resolve' } elseif (-not ($r.IPAddress.IPAddressToString -contains $a)) { $bad += "no reservation for prn01's address $a" }
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+[[check]]
+section = "Server"
+name = "DNS: reverse lookup zones for 10.20.10.0/24 and 10.20.20.0/24; files.school.lab an alias of FS01"
+node = "dc01"
+script = '''
+$miss = '10.20.10.in-addr.arpa','10.20.20.in-addr.arpa' | Where-Object { -not (Get-DnsServerZone -Name $_ -ErrorAction SilentlyContinue) }
+$c = Get-DnsServerResourceRecord -ZoneName school.lab -Name files -RRType CName -ErrorAction SilentlyContinue
+if ($miss) { 'no reverse zone ' + ($miss -join ', ') } elseif (-not $c -or $c.RecordData.HostNameAlias -notmatch '^fs01\.') { 'no CNAME files pointing to fs01' }
+elseif ((Resolve-DnsName 10.20.10.11 -Type PTR -ErrorAction SilentlyContinue).NameHost -notmatch '^fs01\.') { 'no PTR record for FS01' } else { 'True' }
+'''
+weight = 2
+[[check]]
+section = "Desktops"
+name = "LAB01 takes its address from DHCP on the student network"
+node = "lab01"
+script = "[bool](Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.PrefixOrigin -eq 'Dhcp' -and $_.IPAddress -like '10.20.20.*' })"
+[[check]]
+section = "Desktops"
+name = "LIB01 reaches the file server by name: files.school.lab answers on SMB"
+node = "lib01"
+script = "[bool](Test-NetConnection files.school.lab -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue)"
+
+# ---- what the client asks for once the work is under way
+[[change]]
+id = "library-printer"
+after = 0.4
+from = "Rina Golan"
+letter = "The librarian has asked for a printer in the reading room for the students' work. Please add one, PRN02, on the staff network so we control it."
+
+  [[change.need]]
+  id = "library-printer"
+  kind = "devices"
+  device = "printer"
+  rooms = ["reading"]
+  ids = ["prn02"]
+  text = "Change order: printer PRN02 in the library reading room, connected"
+
+[[machine]]
+id = "dc01"
+what = "Windows Server: domain controller, DNS, DHCP and print server; 10.20.10.10"
+where = "Main comms room (MDF), racked"
+[[machine]]
+id = "fs01"
+what = "Windows Server: file server, a member of school.lab; 10.20.10.11"
+where = "Main comms room (MDF), racked"
+[[machine]]
+id = "office01"
+what = "Windows PC, staff"
+where = "Office"
+[[machine]]
+id = "staff01"
+what = "Windows PC, staff"
+where = "Staff room"
+[[machine]]
+id = "lab01"
+what = "Windows PC, students"
+where = "Computer lab"
+[[machine]]
+id = "lab02"
+what = "Windows PC, students"
+where = "Computer lab"
+[[machine]]
+id = "lib01"
+what = "Windows PC, students"
+where = "Library"
+[[machine]]
+id = "prn01"
+what = "Network printer, shared from DC01 as StaffPrinter"
+where = "Staff room"
+
+[[person]]
+first = "Rina"
+last = "Golan"
+account = "rina.golan"
+department = "Office"
+title = "School business manager"
+pc = "office01"
+manager = true
+[[person]]
+first = "Anna"
+last = "Berg"
+account = "anna.berg"
+department = "Teachers"
+title = "Teacher"
+pc = "staff01"
+[[person]]
+first = "David"
+last = "Cohen"
+account = "david.cohen"
+department = "Teachers"
+title = "IT teacher"
+pc = "lab01"
+[[person]]
+first = "Sara"
+last = "Levi"
+account = "sara.levi"
+department = "Students"
+title = "Student"
+pc = "lib01"
+[[person]]
+first = "Omer"
+last = "Dahan"
+account = "omer.dahan"
+department = "Students"
+title = "Student"
+pc = "lab02"
+
+[[need]]
+id = "jacks"
+section = "Cabling"
+kind = "jacks"
+rooms = "all"
+weight = 3
+text = "Every wall jack in all three buildings cabled, tested and patched"
+[[need]]
+id = "fibre"
+section = "Cabling"
+kind = "backbone"
+weight = 3
+text = "The library and the sports hall on fibre to the main comms room, trunked"
+hint = "Measure the duct first: multimode OM4 reaches 400 m; past that, singlemode OS2."
+[[need]]
+id = "router"
+section = "Cabling"
+kind = "uplink"
+text = "The router patched into the main switch"
+[[need]]
+id = "poe"
+section = "Cabling"
+kind = "poe"
+text = "Cameras and access points powered from the switches"
+[[need]]
+id = "names"
+section = "Network"
+kind = "names"
+ids = ["dc01", "fs01", "office01", "staff01", "lab01", "lab02", "lib01", "prn01"]
+text = "Machines named to the school's list"
+[[need]]
+id = "vlan10"
+section = "Network"
+kind = "vlan"
+tag = 10
+name = "STAFF"
+devices = ["printer", "ap"]
+ids = ["dc01", "fs01", "office01", "staff01"]
+weight = 2
+text = "VLAN 10 named STAFF: DC01, FS01, the office and staff PCs, the printer and the access points"
+[[need]]
+id = "vlan20"
+section = "Network"
+kind = "vlan"
+tag = 20
+name = "STUDENTS"
+ids = ["lab01", "lab02", "lib01"]
+weight = 2
+text = "VLAN 20 named STUDENTS: the computer lab and library PCs"
+[[need]]
+id = "vlan30"
+section = "Network"
+kind = "vlan"
+tag = 30
+name = "CCTV"
+devices = ["camera"]
+weight = 2
+text = "VLAN 30 named CCTV with the cameras"
+[[need]]
+id = "gw10"
+section = "Network"
+kind = "routed"
+tag = 10
+gateway = "10.20.10.1/24"
+text = "The router is 10.20.10.1/24 on VLAN 10"
+[[need]]
+id = "gw20"
+section = "Network"
+kind = "routed"
+tag = 20
+gateway = "10.20.20.1/24"
+text = "The router is 10.20.20.1/24 on VLAN 20"
+[[need]]
+id = "gw30"
+section = "Network"
+kind = "routed"
+tag = 30
+gateway = "10.20.30.1/24"
+text = "The router is 10.20.30.1/24 on VLAN 30"
+[[need]]
+id = "pool30"
+section = "Network"
+kind = "dhcp-pool"
+tag = 30
+text = "A DHCP pool on the router for the cameras (VLAN 30)"
+[[need]]
+id = "helper10"
+section = "Network"
+kind = "helper"
+tag = 10
+text = "VLAN 10's DHCP relayed to DC01"
+[[need]]
+id = "helper20"
+section = "Network"
+kind = "helper"
+tag = 20
+text = "VLAN 20's DHCP relayed to DC01"
+[[need]]
+id = "lab"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["itlab"]
+ids = ["lab01", "lab02"]
+count = 2
+text = "LAB01 and LAB02 in the computer lab"
+[[need]]
+id = "lib"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["reading", "study"]
+ids = ["lib01"]
+text = "LIB01 in the library"
+[[need]]
+id = "office"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["office"]
+ids = ["office01"]
+text = "OFFICE01 in the office"
+[[need]]
+id = "staffpc"
+section = "Devices"
+kind = "devices"
+device = "pc"
+rooms = ["staffroom"]
+ids = ["staff01"]
+text = "STAFF01 in the staff room"
+[[need]]
+id = "printer"
+section = "Devices"
+kind = "devices"
+device = "printer"
+rooms = ["staffroom"]
+ids = ["prn01"]
+text = "PRN01 in the staff room"
+[[need]]
+id = "wifi"
+section = "Wi-Fi"
+kind = "wifi"
+rooms = ["office", "staffroom", "class1", "class2", "class3", "class4", "itlab", "reading", "study", "hall"]
+weight = 2
+text = "Wi-Fi in every classroom, the staff room, the office, the library and the sports hall"
+[[need]]
+id = "ssid"
+section = "Wi-Fi"
+kind = "ssid"
+ssid = "Northfield-Staff"
+security = "wpa2"
+text = "Every access point broadcasts Northfield-Staff with WPA2"
+[[need]]
+id = "cameras"
+section = "Cameras"
+kind = "cameras"
+weight = 2
+text = "Cameras on the main entrance, the car park and the sports hall door"
+
+[[check]]
+section = "Server"
+name = "DC01 is the domain controller of school.lab"
+node = "dc01"
+script = '''
+(Get-ADDomain -ErrorAction SilentlyContinue).DNSRoot
+'''
+expect = "school.lab"
+weight = 2
+
+[[check]]
+section = "Server"
+name = "DC01 has the static address 10.20.10.10"
+node = "dc01"
+script = '''
+[bool](Get-NetIPAddress -AddressFamily IPv4 -IPAddress 10.20.10.10 -ErrorAction SilentlyContinue | Where-Object PrefixOrigin -eq 'Manual')
+'''
+
+[[check]]
+section = "Server"
+name = "DHCP scopes for staff (10.20.10.0) and students (10.20.20.0), each with its router, authorized"
+node = "dc01"
+script = '''
+$bad = foreach ($n in '10.20.10','10.20.20') {
+  $s = Get-DhcpServerv4Scope -ScopeId "$n.0" -ErrorAction SilentlyContinue
+  if (-not $s) { "no scope $n.0" } elseif ($s.State -ne 'Active') { "scope $n.0 not active" }
+  elseif (((Get-DhcpServerv4OptionValue -ScopeId "$n.0" -ErrorAction SilentlyContinue | Where-Object OptionId -eq 3).Value -join ',') -notmatch "^$([regex]::Escape($n)).1$") { "scope $n.0 has no router $n.1" }
+}
+if (-not (Get-DhcpServerInDC -ErrorAction SilentlyContinue)) { $bad += 'not authorized in AD' }
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+
+[[check]]
+section = "Active Directory"
+name = "OUs Staff, Students, Lab PCs and Office PCs"
+node = "dc01"
+script = '''
+$miss = 'Staff','Students','Lab PCs','Office PCs' | Where-Object { -not (Get-ADOrganizationalUnit -Filter "Name -eq '$_'" -ErrorAction SilentlyContinue) }
+if ($miss) { 'missing: ' + ($miss -join ', ') } else { 'True' }
+'''
+
+[[check]]
+section = "Active Directory"
+name = "Teachers and office in OU Staff, students in OU Students, in their groups"
+node = "dc01"
+script = '''
+$want = @{ 'anna.berg' = 'Staff,Teachers'; 'david.cohen' = 'Staff,Teachers'; 'rina.golan' = 'Staff,Office'; 'sara.levi' = 'Students,Students'; 'omer.dahan' = 'Students,Students' }
+$bad = foreach ($u in $want.Keys) {
+  $ou, $g = $want[$u].Split(',')
+  $a = Get-ADUser -Filter "SamAccountName -eq '$u'" -Properties MemberOf -ErrorAction SilentlyContinue
+  if (-not $a) { "$u missing" } elseif ($a.DistinguishedName -notmatch "OU=$ou,") { "$u not in OU $ou" }
+  elseif (-not ($a.MemberOf | Where-Object { $_ -match "^CN=$g," })) { "$u not in group $g" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+
+[[check]]
+section = "Active Directory"
+name = "Lab and library PCs in OU Lab PCs, staff PCs in OU Office PCs"
+node = "dc01"
+script = '''
+$want = @{ LAB01 = 'Lab PCs'; LAB02 = 'Lab PCs'; LIB01 = 'Lab PCs'; OFFICE01 = 'Office PCs'; STAFF01 = 'Office PCs' }
+$bad = foreach ($c in $want.Keys) {
+  $a = Get-ADComputer -Filter "Name -eq '$c'" -ErrorAction SilentlyContinue
+  if (-not $a) { "$c not joined" } elseif ($a.DistinguishedName -notmatch "OU=$($want[$c]),") { "$c not in OU $($want[$c])" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+weight = 2
+
+[[check]]
+section = "Files"
+name = "Homework share: Teachers change, Students read only"
+node = "fs01"
+script = '''
+$s = Get-SmbShare -Name Homework -ErrorAction SilentlyContinue
+if (-not $s) { 'no share Homework' } else {
+  $acl = (Get-Acl $s.Path).Access | Where-Object AccessControlType -eq 'Allow'
+  $t = $acl | Where-Object { $_.IdentityReference -match '\\Teachers$' -and $_.FileSystemRights -match 'Modify|FullControl' }
+  $st = $acl | Where-Object { $_.IdentityReference -match '\\Students$' }
+  $sw = $st | Where-Object { $_.FileSystemRights -match 'Modify|FullControl|Write' }
+  if (-not $t) { 'Teachers cannot change it' } elseif (-not $st) { 'Students cannot read it' } elseif ($sw) { 'Students can change it' } else { 'True' }
+}
+'''
+weight = 2
+
+[[check]]
+section = "Files"
+name = "Staff share: Teachers and Office only, no student access"
+node = "fs01"
+script = '''
+$s = Get-SmbShare -Name Staff -ErrorAction SilentlyContinue
+if (-not $s) { 'no share Staff' } else {
+  $acl = (Get-Acl $s.Path).Access | Where-Object AccessControlType -eq 'Allow'
+  $who = $acl.IdentityReference.Value
+  if (-not ($who -match '\\Teachers$')) { 'Teachers have no access' } elseif (-not ($who -match '\\Office$')) { 'Office has no access' }
+  elseif ($who -match '\\Students$|^Everyone$|^BUILTIN\\Users$|Authenticated Users') { 'students (or everyone) can still get in' } else { 'True' }
+}
+'''
+weight = 2
+
+[[check]]
+section = "Files"
+name = "Students' accounts have H: on \\\\FS01\\Home"
+node = "dc01"
+script = '''
+$bad = foreach ($u in 'sara.levi','omer.dahan') {
+  $a = Get-ADUser $u -Properties HomeDirectory, HomeDrive -ErrorAction SilentlyContinue
+  if (-not $a) { "$u missing" } elseif ($a.HomeDrive -ne 'H:' -or $a.HomeDirectory -notmatch '^\\\\(fs01|files)(\.school\.lab)?\\Home\\') { "$u has no H: home folder on \\FS01\Home" }
+}
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+
+[[check]]
+section = "Files"
+name = "FS01: the Home share, a folder for each student that only they (and admins) open"
+node = "fs01"
+script = '''
+$h = Get-SmbShare -Name Home -ErrorAction SilentlyContinue
+if (-not $h) { 'no share Home on FS01' } else {
+  $bad = foreach ($u in 'sara.levi','omer.dahan') {
+    $p = Join-Path $h.Path $u
+    if (-not (Test-Path $p)) { "no folder $u" } else {
+      $acl = (Get-Acl $p).Access | Where-Object AccessControlType -eq 'Allow'
+      if (-not ($acl | Where-Object { $_.IdentityReference -match "\\$u$" })) { "$u has no rights on their folder" }
+      elseif ($acl | Where-Object { $_.IdentityReference -match '\\Students$|^BUILTIN\\Users$|^Everyone$' -and $_.FileSystemRights -match 'Read|Modify|FullControl' }) { "other students can open $u's folder" }
+    }
+  }
+  if ($bad) { $bad -join '; ' } else { 'True' }
+}
+'''
+
+[[check]]
+section = "Printing"
+name = "PRN01 shared from DC01 as StaffPrinter"
+node = "dc01"
+script = '''
+[bool](Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Shared -and $_.ShareName -eq 'StaffPrinter' })
+'''
+hint = "Add the Print and Document Services role, add PRN01 as a TCP/IP printer and share it as StaffPrinter."
+
+[[check]]
+section = "Printing"
+name = "STAFF01 prints through \\\\DC01\\StaffPrinter"
+node = "staff01"
+script = '''
+[bool](Get-Printer -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'StaffPrinter' })
+'''
+
+[[check]]
+section = "Policies"
+name = "Students cannot open Control Panel or Settings (a GPO on OU Students)"
+node = "dc01"
+script = '''
+$ou = Get-ADOrganizationalUnit -Filter "Name -eq 'Students'" -ErrorAction SilentlyContinue
+if (-not $ou) { 'no OU Students' } else {
+  $hit = foreach ($l in (Get-GPInheritance -Target $ou.DistinguishedName).InheritedGpoLinks) {
+    $v = Get-GPRegistryValue -Guid $l.GpoId -Key 'HKCU\Software\Microsoft\Windows\CurrentVersion\Policies\Explorer' -ValueName NoControlPanel -ErrorAction SilentlyContinue
+    if ($v -and [int]$v.Value -eq 1) { $l.DisplayName }
+  }
+  if ($hit) { 'True' } else { 'no GPO applying to Students sets Prohibit access to Control Panel and PC settings' }
+}
+'''
+weight = 2
+
+[[check]]
+section = "Policies"
+name = "Lab PCs lock after 10 minutes"
+node = "dc01"
+script = '''
+$ou = Get-ADOrganizationalUnit -Filter "Name -eq 'Lab PCs'" -ErrorAction SilentlyContinue
+if (-not $ou) { 'no OU Lab PCs' } else {
+  $hit = foreach ($l in (Get-GPInheritance -Target $ou.DistinguishedName).InheritedGpoLinks) {
+    $v = Get-GPRegistryValue -Guid $l.GpoId -Key 'HKLM\Software\Microsoft\Windows\CurrentVersion\Policies\System' -ValueName InactivityTimeoutSecs -ErrorAction SilentlyContinue
+    if ($v -and [int]$v.Value -gt 0 -and [int]$v.Value -le 600) { $l.DisplayName }
+  }
+  if ($hit) { 'True' } else { 'no GPO on Lab PCs sets the machine inactivity limit to 600 seconds or less' }
+}
+'''
+
+[[check]]
+section = "Policies"
+name = "Domain passwords at least 10 characters"
+node = "dc01"
+script = '''
+[bool]((Get-ADDefaultDomainPasswordPolicy).MinPasswordLength -ge 10)
+'''
+
+[[check]]
+section = "Desktops"
+name = "OFFICE01 is called OFFICE01 in Windows, and is in school.lab"
+node = "office01"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'OFFICE01') { "Windows calls this PC $($c.Name): the client's name is OFFICE01" }
+elseif ($c.Domain -ne 'school.lab') { "it is in $($c.Domain), not school.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+
+[[check]]
+section = "Desktops"
+name = "STAFF01 is called STAFF01 in Windows, and is in school.lab"
+node = "staff01"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'STAFF01') { "Windows calls this PC $($c.Name): the client's name is STAFF01" }
+elseif ($c.Domain -ne 'school.lab') { "it is in $($c.Domain), not school.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+
+[[check]]
+section = "Desktops"
+name = "LAB01 is called LAB01 in Windows, and is in school.lab"
+node = "lab01"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'LAB01') { "Windows calls this PC $($c.Name): the client's name is LAB01" }
+elseif ($c.Domain -ne 'school.lab') { "it is in $($c.Domain), not school.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+
+[[check]]
+section = "Desktops"
+name = "LAB02 is called LAB02 in Windows, and is in school.lab"
+node = "lab02"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'LAB02') { "Windows calls this PC $($c.Name): the client's name is LAB02" }
+elseif ($c.Domain -ne 'school.lab') { "it is in $($c.Domain), not school.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+
+[[check]]
+section = "Desktops"
+name = "LIB01 is called LIB01 in Windows, and is in school.lab"
+node = "lib01"
+script = '''
+$c = Get-CimInstance Win32_ComputerSystem
+if ($c.Name -ne 'LIB01') { "Windows calls this PC $($c.Name): the client's name is LIB01" }
+elseif ($c.Domain -ne 'school.lab') { "it is in $($c.Domain), not school.lab" }
+else { 'True' }
+'''
+hint = "System > About > Rename this PC (or Rename-Computer), then restart; join the domain once it has its own name."
+
+[[check]]
+section = "Active Directory"
+name = "AD and DNS know each PC by its name, once; nothing left of an old name"
+node = "dc01"
+script = '''
+$z = 'school.lab'
+$bad = @(foreach ($n in 'OFFICE01','STAFF01','LAB01','LAB02','LIB01') {
+  $a = @(Get-DnsServerResourceRecord -ZoneName $z -Name $n -RRType A -ErrorAction SilentlyContinue)
+  if (-not (Get-ADComputer -Filter "Name -eq '$n'" -ErrorAction SilentlyContinue)) { "$n has no computer account" }
+  elseif ($a.Count -eq 0) { "no A record for $n" }
+  elseif ($a.Count -gt 1) { "$n has $($a.Count) A records (" + (($a | ForEach-Object { $_.RecordData.IPv4Address }) -join ', ') + ')' }
+})
+$old = @(Get-ADComputer -Filter "Name -like 'DESKTOP-*' -or Name -like 'WIN-*'" -ErrorAction SilentlyContinue | ForEach-Object Name) +
+       @(Get-DnsServerResourceRecord -ZoneName $z -RRType A -ErrorAction SilentlyContinue | Where-Object { $_.HostName -match '^(DESKTOP|WIN)-' } | ForEach-Object HostName)
+$old = @($old | Where-Object { $_ } | Sort-Object -Unique)
+if ($old) { $bad += 'names left over from before a rename: ' + ($old -join ', ') }
+if ($bad) { $bad -join '; ' } else { 'True' }
+'''
+hint = "A PC installed by hand comes up as DESKTOP-something: rename it before it joins (or with Rename-Computer after), then delete what the old name left behind: its computer account in AD and its A record in DNS."

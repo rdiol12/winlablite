@@ -1,0 +1,21 @@
+[topic]
+id = "files-in-and-out"
+title = "Files in and out of a lab"
+category = "Using winlab"
+order = 30
+keywords = ["file", "copy", "drag", "drop", "usb", "stick", "dvd", "disc", "transfer", "isolated", "isolation", "internet", "shared folder", "sealed"]
+summary = "The lab is sealed off from this PC. These are the ways a file crosses."
+body = '''
+The machines are cabled only to each other. They cannot reach this PC, your home network or the internet, so nothing you do in the lab can touch them. That is also why Windows Update and Microsoft sign-in do not work inside.
+
+**Into a machine**
+
+- Drop a file on a machine's window, or use Clipboard, Send a file. It lands on the machine's Public desktop in a folder called From this PC (up to 64 MB).
+- Plug in a USB stick from the machine's Settings or the media shelf. **Plug folder** copies a folder of yours onto a new stick; your folder itself is never shared.
+- Put a disc in the DVD drive: any image from Images, or a folder burned to a disc on the media shelf.
+- From a command prompt: `winlab cp --lab <lab> notes.txt <machine>:C:\Temp\notes.txt`
+
+**Out of a machine**
+
+- `winlab cp --lab <lab> <machine>:C:\Temp\report.txt report.txt` copies a file back over the same channel.
+'''

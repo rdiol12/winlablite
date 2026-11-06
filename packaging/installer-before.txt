@@ -1,0 +1,38 @@
+Welcome to winlab
+=================
+
+winlab builds a real Windows Server network on this PC: domain controllers,
+file servers and clients running in their own isolated network, with lessons
+that check your work inside the machines.
+
+What this installer puts on your PC
+  - winlab itself (one program) and its documents
+  - a Start menu entry, and a desktop icon if you want one
+  - a folder for your machines and downloads, which you choose next
+
+What winlab downloads the first time you open it (one click, about 1 GB)
+  - QEMU, the free machine runtime (GPL), from the MSYS2 project
+  - the network router's packages, from Alpine Linux
+  - Red Hat's free virtio drivers, the noVNC screen viewer and the
+    PowerShell DSC modules that configure the servers
+  These are free software under their own licences (listed in LICENSING.md).
+  winlab fetches them from their publishers onto this PC and never ships them.
+
+What you download yourself
+  - Windows, from Microsoft: the free evaluation ISO of Windows Server
+    (and Windows 11 for the client machines). Only Microsoft may hand out
+    Windows, so winlab opens Microsoft's page for you and then finds the
+    file in your Downloads folder.
+
+What your PC needs
+  - Windows 10 (version 1809 or later) or Windows 11, 64-bit, any edition
+  - virtualization turned on in the PC's firmware (most PCs have it on;
+    winlab checks and tells you how if not)
+  - 8 GB of memory runs one lesson's machines at a time; 16 GB runs any
+    lab whole
+  - about 40 GB of free disk space for the machines
+  - internet for the one-time downloads only; the labs never use it
+
+Removing winlab
+  Settings > Apps > winlab > Uninstall. It stops any running lab, removes
+  the program, and asks before it deletes your machines and downloads.

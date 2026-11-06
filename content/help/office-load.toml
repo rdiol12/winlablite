@@ -1,0 +1,24 @@
+[topic]
+id = "office-load"
+title = "Load and traffic: a real day on your servers"
+category = "Using winlab"
+order = 43
+keywords = ["load", "traffic", "busy", "profile", "monday", "month-end", "backup", "antivirus", "indexing", "wsus", "replication", "network", "cables", "back-off", "tickets", "gpo", "firewall", "vpn", "sql", "remote desktop"]
+summary = "The staff's working day with the shape and weight of a real office, the servers' own night work, and where the traffic goes."
+body = '''
+With **Workday** on in **Office**, the load engine gives the lab the day a real company has. Open the **Load and traffic** tab.
+
+**What the staff do.** Besides signing in, saving on their department's share, printing and mailing, they look colleagues up in the address book (DNS and LDAP against your domain controller), open and save Word-sized documents of very different sizes, copy big scans to the file server and on into their home folder, run reports on your SQL Server when the lab has one, reach the Remote Desktop session host, and browse the lab's other web sites. A sign-in does what Windows does: a user Group Policy refresh, the logon script the account names, and the drives it maps. Someone whose PC sits at home dials the VPN you built before anything else. Each thing is done only when the lab has the server for it and it runs. Nothing is created for you: the load only uses what you built.
+
+**The shape of the day** (the **Pace** tab). The **Office day** profile starts slowly, peaks with the morning mail, dips at lunch, swells with the end-of-day saves and goes quiet at the weekend; on Monday mornings everyone signs in at once, and on the last two working days of the month Finance closes the books (more documents, reports and printing). Turn any period up or down, pick **Flat** or **Round the clock** (for shift work), or switch on **Busy day** to double everything until midnight on the lab clock.
+
+**The servers' own work** (the **Server jobs** tab). Real servers are busy when nobody is in: the nightly backup window reads every file on the shares (and reports Windows Server Backup's last result when you set it up), Microsoft Defender runs its quick scan (servers at night, PCs over lunch), the indexer crawls the shares, each machine asks your WSUS what it is missing once you point it there, and two domain controllers push their changes to each other every hour. They run whenever the lab's machines run, with the workday on or off: the backup does not wait for the staff to arrive. A replication or update scan that fails pages you with a monitoring ticket.
+
+**Where the load goes.** **Machines** shows each machine's live CPU, disk and network beside what the staff did there in the last hour; **People** what each person did today; **Network** each cable's load from its switch port, with a short graph, and the uplinks.
+
+**Change has consequences.** Break something the staff use, with a Group Policy, a firewall rule, a share permission or a stopped service, and everyone it touches calls the helpdesk in their own words: each person once an hour at most, onto one ticket for the broken thing, raised to P2 when three people have called and to P1 at six. When someone it touched works again, or nobody has called for an hour and a half, the ticket gets a note that the calls have stopped, so you know the fix took before you resolve it.
+
+**Kind to the machines.** Each tick runs only so many things, at most three on one PC, and stops when its time is up. A machine that does not answer, or answers slowly, is left alone for a while (longer each time), and its people wait. Moving the lab clock a day ahead does not make everyone act at once.
+
+From a command prompt: `winlab load status`, `winlab load profile office`, `winlab load period lunch 0.5`, `winlab load busy on "audit"`, `winlab load background off`.
+'''

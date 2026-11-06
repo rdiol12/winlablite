@@ -1,0 +1,94 @@
+[lesson]
+id = "etherchannel-lacp"
+title = "EtherChannel: two cables between switches as one link, with LACP"
+module = "network"
+order = 330
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["pc01"]
+exercise = "etherchannel-lacp-bundle"
+minutes = 50
+summary = "Bundle two switch-to-switch cables into a port-channel with LACP, read show etherchannel summary, and break it the classic way: on against active."
+why = '''
+One gigabit cable between the core switch and a floor switch is one gigabit
+for the whole floor, and one cable to lose. A second cable looks like the
+answer, but two cables between two switches are a loop, and spanning tree
+blocks one of them: you paid for two and use one.
+
+EtherChannel (Cisco's name; the standard is IEEE 802.3ad, now 802.1AX, link
+aggregation) bundles the cables into one logical link, a port-channel.
+Spanning tree sees one port, so nothing blocks; each conversation goes down
+one member chosen by a hash of its addresses, so the bandwidth adds up across
+many conversations; and a cable pulled out only takes its share with it.
+
+The two ends must agree to bundle. LACP (the standard) negotiates it: an
+active port asks, a passive one only answers. mode on bundles without asking
+anything, which is exactly why it is dangerous: on at one end and LACP (or
+nothing) at the other is a misconfiguration a Catalyst catches and
+err-disables. PAgP (desirable and auto) is Cisco's older, Cisco-only
+protocol.
+
+In this lab the switches' cables are veth pairs between kernel bridges on the
+router. A channel that forms is a real Linux bond on each side (802.3ad for
+LACP, balance-xor for on), so the kernel's LACP runs between them for real
+and spanning tree sees one port. Linux has no PAgP: winlab applies PAgP's
+rules to decide whether a channel forms, and the bundle then runs LACP on the
+wire; the console says so.
+'''
+concepts = [
+  "A port-channel is one logical link made of up to eight member ports; spanning tree, the MAC table and the trunk settings see the port-channel, not the members",
+  "Modes: active (LACP, asks), passive (LACP, only answers), on (no protocol at all), desirable and auto (PAgP, Cisco's own)",
+  "What bundles: active with active or passive; on with on; desirable with desirable or auto. passive with passive, and auto with auto, never do: nobody asks",
+  "Load balancing is per conversation, not per frame: a hash of MAC or IP addresses (port-channel load-balance) picks the member, so one file copy never goes faster than one cable",
+  "The members must match: speed, duplex, trunk or access, allowed and native VLANs. Configure them under interface port-channel and the members inherit it",
+  "EtherChannel misconfiguration guard: a switch with mode on that hears spanning tree from several ports at the far end err-disables its port-channel (channel-misconfig)",
+  "Flags in show etherchannel summary: SU in use, SD down; members P bundled, I stand-alone, s suspended, D down",
+]
+steps = [
+  "Open the Workbench. corp's switch is the one the router is cabled to. Add a switch from the shelf and drag its uplink (Gi0/1) onto corp's switch: that is one cable. Then drag a free gigabit port of the new switch onto corp's switch again: a second cable between the same two switches (Gi0/2 on the new switch, Gi0/3 on corp's).",
+  "Look at the loop first. Double-click the new switch, enable, show spanning-tree: one of the two cables is blocking (Altn BLK). Two cables, one in use. show cdp neighbors shows which local port goes to which port at the far end.",
+  "Bundle corp's end. On corp's switch: enable, configure terminal, interface range gi0/2 - 3, channel-group 1 mode active. The switch says Creating a port-channel interface Port-channel 1. Then do show etherchannel summary: Po1(SD) with its members (I), stand-alone, because the far end does not speak LACP yet.",
+  "Bundle the other end: on the new switch, interface range gi0/1 - 2, channel-group 1 mode passive. A passive port only answers, and corp's active ports are asking, so the channel forms: %LINK-3-UPDOWN: Interface Port-channel1, changed state to up. show etherchannel summary on both: Po1(SU), members (P).",
+  "Read it from every side: show interfaces port-channel 1 (BW 2000000 Kbit/sec, Members in this channel), show lacp neighbor (the partner's system ID is the other switch's address; A or P says whether it asks), show etherchannel detail, and show spanning-tree: one row, Po1, forwarding, cost 3 instead of 4. Nothing blocks any more.",
+  "Configure the bundle, not the members: interface port-channel 1, description to the floor switch, switchport trunk allowed vlan 1,10. show running-config: the description is on Port-channel1, and the trunk setting landed on both members, as IOS hands it down.",
+  "Choose the hash: port-channel load-balance src-dst-ip on both switches (show etherchannel load-balance). The 2960's default, src-mac, puts everything from one machine (the router, say) on one member; source and destination IP spreads the conversations better.",
+  "Break it the classic way. On the new switch: interface range gi0/1 - 2, no channel-group, channel-group 1 mode on. on bundles without asking, but corp's end is LACP: the new switch logs %PM-4-ERR_DISABLE: channel-misconfig (STP) error detected on Po1 and its port-channel goes err-disabled. show etherchannel summary shows Po1(SD) with members (D), and show spanning-tree shows them BKN*. The floor switch is cut off.",
+  "Fix it the way a real switch needs: make the modes agree (no channel-group, then channel-group 1 mode active on both ports), then shut and unshut the bundle to clear the err-disable: interface port-channel 1, shutdown, no shutdown. Po1(SU) again.",
+  "Try the pairs that never bundle: passive on both ends (nobody asks: members (I), and spanning tree blocks one cable again), and desirable at one end against active at the other (PAgP against LACP: (I)). Put both ends back to active, and copy running-config startup-config on both switches.",
+]
+pitfalls = [
+  "mode on at one end and active, passive or nothing at the other: the on side err-disables (channel-misconfig). Fix the modes, then shutdown / no shutdown on the port-channel.",
+  "passive with passive (or auto with auto) never forms: one end must ask.",
+  "Changing a member's trunk settings by hand so it differs from the others suspends it (s): configure interface port-channel instead.",
+  "Expecting one big copy to go twice as fast: a conversation always uses one member; the bundle helps many conversations, not one.",
+  "In this lab PAgP's desirable and auto follow PAgP's rules, but the bond on the router runs LACP on the wire, as Linux has no PAgP. A real 2960 speaks PAgP itself.",
+]
+further = [
+  "IEEE 802.1AX: link aggregation (LACP), formerly 802.3ad",
+  "Cisco: Configuring EtherChannels (Catalyst 2960 software configuration guide)",
+  "Linux kernel documentation: bonding (mode 802.3ad and balance-xor, xmit_hash_policy)",
+]
+
+[[verify]]
+label = "the bonds on the router: mode, the hash, and each member's aggregator and partner"
+node = "fabric"
+shell = "sh"
+cmd = "for f in /proc/net/bonding/stp*; do [ -e $f ] && echo \"== $(cat /sys/class/net/${f##*/}/ifalias 2>/dev/null)\" && grep -E 'Bonding Mode|Transmit Hash|Number of ports|Partner Mac|Slave Interface|Aggregator ID|MII Status' $f; done"
+
+[[quiz]]
+q = "One switch has channel-group 1 mode passive on two ports, the other mode passive too. What happens?"
+answer = "No channel forms: both only answer, so nobody starts LACP and the ports stand alone (I)"
+wrong = ["The channel forms with LACP", "Both ports are err-disabled", "The channel forms without a protocol"]
+why = "At least one end must be active (LACP) or desirable (PAgP) to ask."
+
+[[quiz]]
+q = "mode on at one end, mode active at the other. What does a Catalyst do?"
+answer = "The on side err-disables its port-channel: channel-misconfig, found by spanning tree"
+wrong = ["They negotiate down to on", "The active side switches to on", "Nothing: on always works"]
+why = "on sends no LACP at all; the active end never bundles and runs each cable alone, and the on end hears spanning tree from two ports, which the misconfiguration guard catches."
+
+[[quiz]]
+q = "A port-channel of two gigabit cables carries one large file copy between two servers. How fast can it go?"
+answer = "One gigabit: a conversation is hashed onto one member"
+wrong = ["Two gigabits", "Half a gigabit on each cable", "It depends on spanning tree"]
+why = "Load balancing is per flow, by a hash of addresses; many flows spread out, one flow does not."

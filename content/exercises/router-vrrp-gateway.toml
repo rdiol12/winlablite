@@ -1,0 +1,74 @@
+[exercise]
+id = "router-vrrp-gateway"
+title = "The office's gateway survives a router: VRRP between the lab router and rtr-edge"
+lab = "router-protocols"
+reset_nodes = []
+nodes = ["pc-office", "rtr-edge", "pc-edge"]
+brief = """
+The office's PCs should use a gateway address that no single router owns.
+Make 10.80.0.1 a VRRP (version 2) virtual address of group 1, shared by the
+lab router (priority 110, the master) and rtr-edge (the backup), and point
+pc-office at it. The checks read both routers' kernels (which one holds the
+virtual MAC up), the PC's route and ARP entry, and ping through the virtual
+gateway.
+"""
+tasks = [
+  "On the router's console, interface g0/1/0: vrrp 1 ip 10.80.0.1, vrrp 1 priority 110",
+  "On rtr-edge: vrrpd on, a macvlan on eth1 with MAC 00:00:5e:00:01:01 and 10.80.0.1/24, and in vtysh interface eth1: vrrp 1 version 2, vrrp 1 ip 10.80.0.1",
+  "pc-office's default gateway is 10.80.0.1 (its netplan file), and it reaches pc-edge",
+  "Shut the lab router's g0/1/0 once and watch rtr-edge take over; bring it back",
+]
+
+[[check]]
+name = "the lab router is master: its virtual MAC interface is up and holds 10.80.0.1"
+node = "fabric"
+shell = "sh"
+script = "l=$(ip -d -o link show 2>/dev/null | grep -i 'link/ether 00:00:5e:00:01:01'); echo \"$l\" | grep -q macvlan && echo \"$l\" | grep -q LOWER_UP && ! echo \"$l\" | grep -q 'protodown on' && ip -o -4 addr show | grep -q ' 10\\.80\\.0\\.1/24 ' && echo yes || echo no"
+expect = "yes"
+weight = 3
+hint = "interface g0/1/0, vrrp 1 ip 10.80.0.1 and vrrp 1 priority 110 on the console; show vrrp brief says Master. Backup instead: rtr-edge has a higher priority, or the lab router hears nothing (version 2 on both)."
+
+[[check]]
+name = "the lab router's group has priority 110"
+node = "fabric"
+shell = "sh"
+script = "grep -q '^ vrrp 1 priority 110' /etc/frr/frr.conf 2>/dev/null && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "vrrp 1 priority 110 under interface g0/1/0 on the console"
+
+[[check]]
+name = "rtr-edge is in group 1 for 10.80.0.1, speaking version 2"
+node = "rtr-edge"
+shell = "sh"
+script = "c=$(vtysh -c 'show running-config' 2>/dev/null); echo \"$c\" | grep -q '^ vrrp 1 ip 10\\.80\\.0\\.1' && echo \"$c\" | grep -q '^ vrrp 1 version 2' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "vrrpd=yes in /etc/frr/daemons and restart frr; in vtysh: interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory"
+
+[[check]]
+name = "rtr-edge is backup: its virtual interface is held down"
+node = "rtr-edge"
+shell = "sh"
+script = "l=$(ip -d -o link show 2>/dev/null | grep -i 'link/ether 00:00:5e:00:01:01'); echo \"$l\" | grep -q macvlan && echo \"$l\" | grep -q 'protodown on' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "No such interface: make the macvlan on eth1 with address 00:00:5e:00:01:01 and 10.80.0.1/24 (the lesson's steps). Not held down: rtr-edge thinks it is master, so it does not hear the lab router (version, group, or the lab router's interface is shut)."
+
+[[check]]
+name = "pc-office uses the virtual gateway"
+node = "pc-office"
+shell = "sh"
+script = "ip route show default | grep -q 'via 10\\.80\\.0\\.1 ' && ping -c 1 -W 2 10.80.0.1 >/dev/null 2>&1 && ip neigh show 10.80.0.1 | grep -qi '00:00:5e:00:01:01' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "via: 10.80.0.1 under routes in /etc/netplan/50-cloud-init.yaml, then sudo netplan apply. ip neigh show 10.80.0.1 should give the virtual MAC, 00:00:5e:00:01:01."
+
+[[check]]
+name = "pc-office reaches pc-edge through the virtual gateway"
+node = "pc-office"
+shell = "sh"
+script = "ping -c 2 -W 2 10.81.0.10 >/dev/null 2>&1 && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "OSPF from the first lesson must still be up: the master needs a route to 10.81.0.0/24"

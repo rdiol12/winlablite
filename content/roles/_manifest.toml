@@ -1,0 +1,449 @@
+# Role library. The orchestrator compiles a node's roles, in dependency
+# order, into one DSC configuration (winlab/dsc.py, winlab/dscroles.py); the
+# guest's Local Configuration Manager tests, sets and verifies it, rebooting
+# where a resource needs it.
+#
+#   engine = "dsc"      every Windows role: desired state, one definition of
+#                       "configured" for apply, test and grading.
+#   script = "x.sh"     a sh script for Linux nodes (the Alpine probe, the
+#                       Ubuntu appliance).
+#   pack = "p"          a sh role's packages: a pack (winlab packs fetch p),
+#                       plugged in as a stick before the role runs
+#   image = "ubuntu"    the appliance image a sh role is written for
+#   apk = ["p"]         Alpine packages an Alpine appliance's role needs: fetched
+#                       into the package volume at preparation, installed on
+#                       that machine only (the router does not carry them)
+#
+#   needs    roles applied first (pulled in automatically)
+#   reboots  informational: the LCM handles the reboot itself
+
+[ad-ds]
+engine = "dsc"
+needs = []
+reboots = true
+description = "Promote to domain controller (forest root or replica), install DNS"
+
+[dns]
+engine = "dsc"
+needs = []
+reboots = false
+description = "DNS zones, forwarders, conditional forwarders, scavenging"
+
+[dhcp]
+engine = "dsc"
+needs = ["ad-ds"]
+reboots = false
+description = "DHCP scopes, reservations, options; authorize in AD"
+
+[domain-join]
+engine = "dsc"
+needs = []
+reboots = true
+description = "Join the domain (points DNS at a DC first)"
+
+[ou-structure]
+engine = "dsc"
+needs = ["ad-ds"]
+reboots = false
+description = "Organizational units and delegation"
+
+[users-groups]
+engine = "dsc"
+needs = ["ad-ds"]
+reboots = false
+description = "Users and groups: security/distribution, all three scopes"
+
+[gpo]
+engine = "dsc"
+needs = ["ad-ds", "ou-structure"]
+reboots = false
+description = "Group Policy objects, links, drive maps, password policy"
+
+[file]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "File shares with NTFS + share permissions and ABE"
+
+[dfs]
+engine = "dsc"
+needs = ["file"]
+reboots = false
+description = "DFS namespace and replication"
+
+[adcs]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "Enterprise CA, certificate templates, web enrolment"
+
+[iis]
+engine = "dsc"
+needs = []
+reboots = false
+description = "IIS web server with HTTP and HTTPS bindings"
+
+[firewall]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Windows Firewall rules, open/close ports, profiles"
+
+[ntp]
+engine = "dsc"
+needs = ["ad-ds"]
+reboots = false
+description = "Authoritative time on the PDC emulator"
+
+[fsrm]
+engine = "dsc"
+needs = ["file"]
+reboots = false
+description = "Quotas and file screening (FSRM)"
+
+[wsus]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "Windows Server Update Services: patch management + client GPO"
+
+[backup]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Windows Server Backup + scheduled system-state (AD recovery)"
+
+[rds]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = true
+description = "Remote Desktop Session Host + licensing"
+
+[storage]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Storage Spaces pool + iSCSI target server"
+
+[monitoring]
+engine = "dsc"
+needs = []
+reboots = false
+description = "PerfMon baseline data collector + event log collector"
+
+[wac]
+engine = "dsc"
+download = "windows-admin-center"
+needs = ["domain-join"]
+reboots = false
+description = "Windows Admin Center gateway on https 443 (Microsoft's installer, fetched onto the PC and signature-checked in the machine), to run the lab's servers from a browser"
+
+[cluster-storage]
+engine = "dsc"
+needs = []
+reboots = false
+description = "iSCSI target 'cluster' with a 1 GB witness LUN and two 20 GB LUNs (file server, virtual machines), offered only to the lab's cluster-node machines"
+
+[cluster-node]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "Failover Clustering feature and tools, and the cluster's shared disks connected over iSCSI; the student creates the cluster"
+
+[rras]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Routing and Remote Access: software router + VPN gateway"
+
+[nps]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "Network Policy Server (RADIUS) for VPN/802.1x"
+
+[laps]
+engine = "dsc"
+needs = ["ad-ds"]
+reboots = false
+description = "Windows LAPS: per-machine local admin password rotation in AD"
+
+[printer]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Print server with a shared, AD-published queue"
+
+[hardening]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Security baseline: audit policy, SMB signing, LSA/NTLM, Defender"
+
+[dsc]
+engine = "dsc"
+needs = []
+reboots = false
+description = "PowerShell DSC: configuration-as-code with drift auto-correction"
+
+[devices]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Host and share this node's printers and scanners"
+
+[connect-devices]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = false
+description = "Connect this machine to shared printers and scan folders"
+
+[drivers]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Install vendor drivers (.inf) from the staged driver store via pnputil"
+
+[lean]
+engine = "dsc"
+needs = []
+reboots = true
+description = "Lean profile (default on every Windows machine): idle services, telemetry, Widgets, OneDrive and, on a server no role wants it on, Defender off"
+
+[vpn-s2s]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Site-to-site IKEv2 VPN (RRAS) to the other site's gateway, with routes for its prefixes; peer and key from the lab's [[site]] entries"
+
+[sql]
+engine = "dsc"
+media = "sql2022"
+needs = []
+reboots = true
+description = "SQL Server 2022 Developer: Database Engine installed unattended from your own ISO (TCP 1433 open, Agent running, Domain Admins sysadmin, the LabInventory database on the data disk)"
+
+[adfs]
+engine = "dsc"
+needs = ["domain-join"]
+reboots = true
+description = "Active Directory Federation Services: a one-server farm (Windows Internal Database), a group managed service account, the TLS certificate from the lab's enterprise CA, the federation name in DNS"
+
+[vpn-gateway]
+script = "vpn-gateway.sh"
+needs = []
+reboots = false
+description = "Linux site gateway: strongSwan IKEv2 site-to-site tunnel to the other site's gateway, forwarding between the tunnel and the site"
+
+[capture]
+script = "capture.sh"
+needs = []
+reboots = false
+description = "Linux probe: address the NIC, VLAN sub-interfaces on the trunk, tcpdump/tshark/nmap ready"
+
+[netprinter]
+script = "netprinter.sh"
+image = "alpine"
+apk = ["net-snmp", "busybox-extras", "cups", "cups-doc", "cups-filters", "e2fsprogs"]
+needs = []
+reboots = false
+description = "Network printer appliance: DHCP or the lab's address, CUPS with its web pages on port 631 (root, the lab password; no queue until the student adds one), raw printing on port 9100, pages into its output tray, SNMP status"
+
+[admin-desktop]
+script = "admin-desktop.sh"
+image = "alpine"
+apk = ["xorg-server", "xf86-input-libinput", "xf86-video-vesa", "eudev", "xauth", "openbox", "tint2", "xterm", "firefox-esr", "font-dejavu", "dbus-x11"]
+needs = []
+reboots = false
+description = "Admin workstation appliance: a light Linux desktop (Xorg, Openbox, tint2) on its screen with Firefox ESR, signed in to its own unprivileged user, to open the devices' web pages from the lab network; no bookmarks"
+
+[nas]
+script = "nas.sh"
+image = "debian13-cloud"
+pack = "omv"
+needs = []
+reboots = false
+minutes = 90
+description = "NAS appliance: OpenMediaVault 8 on Debian 13 from the omv pack, its web UI on port 80 (admin, the lab password); file systems, shares, users and SMB/NFS are the student's, in that web UI"
+
+[pbx]
+script = "pbx.sh"
+image = "debian12"
+pack = "freepbx"
+needs = []
+reboots = false
+description = "Office phone system appliance on Debian 12: FreePBX 17 on Asterisk 22, installed offline from the freepbx pack at first power-on; factory state, no administrator, extension or trunk until the student makes them in FreePBX (http, port 80)"
+
+[doc-tools]
+script = "doc-tools.sh"
+image = "debian12"
+needs = []
+reboots = false
+description = "Admin tools server on Debian 12: a plain server and a message of the day, nothing else; GLPI, DokuWiki and Vaultwarden are installed by the student from the glpi, dokuwiki and vaultwarden package sticks (winlab/doctools.py)"
+
+[ipphone]
+script = "ipphone.sh"
+image = "alpine"
+apk = ["calls", "cage", "seatd", "gnome-keyring", "dbus", "eudev", "gst-plugins-base", "gst-plugins-good",
+       "adwaita-icon-theme", "font-dejavu", "e2fsprogs"]
+needs = []
+reboots = false
+description = "IP desk phone appliance: GNOME Calls, a SIP softphone, full screen on its own screen; no account until the student signs it in to the phone system in Calls (menu > VoIP Accounts)"
+
+[ipcam]
+script = "ipcam.sh"
+image = "alpine"
+apk = ["busybox-extras"]
+needs = []
+reboots = false
+description = "IP camera appliance: BusyBox httpd serves its web pages and a snapshot on port 80; DHCP address; first visit sets the admin password; name, NTP server and overlay text set in its pages"
+
+[ntp-server]
+script = "ntp-server.sh"
+image = "alpine"
+apk = ["chrony"]
+needs = ["webmin"]
+reboots = false
+description = "NTP server appliance: chrony serves its own clock (lab time, no upstream) on UDP 123 to the lab's networks, at the stratum set on its panel; the PDC emulator syncs from it; Webmin on https 10000"
+
+[san]
+script = "san.sh"
+image = "alpine"
+apk = ["scsi-tgt", "scsi-tgt-scripts", "mdadm", "lvm2", "e2fsprogs"]
+needs = ["webmin"]
+reboots = false
+description = "iSCSI storage array (SAN) appliance: empty bays, two ports, tgt and md; the student builds RAID groups, volumes and iSCSI targets in its Webmin (https 10000)"
+
+# The management pages of the Alpine appliances that have none of their own
+# (winlab/webmin.py): Webmin from the release tarball on the repository
+# volume, installed onto the appliance's internal disk at its first power-on.
+[webmin]
+script = "webmin.sh"
+image = "alpine"
+apk = ["perl", "perl-net-ssleay", "perl-io-tty", "openssl", "e2fsprogs"]
+needs = []
+reboots = false
+description = "Webmin (BSD-3-Clause) on an Alpine appliance: https 10000, root with the lab password, nothing configured; kept on the appliance's internal disk"
+
+[inet-host]
+script = "inet-host.sh"
+image = "alpine"
+apk = ["busybox-extras"]
+needs = []
+reboots = false
+description = "A host on the Internet side (the ISP segment): HTTP on ports 80 and 8080, each connection's source address logged, so a firewall lesson can tell NAT and a blocked port from the inside"
+
+[inet-sites]
+script = "inet-sites.sh"
+image = "alpine"
+apk = ["nginx", "openssl"]
+needs = []
+reboots = false
+description = "The Internet of a web-filtering lab: made-up .example web sites on one address (HTTP and HTTPS by name, a certificate from the lab Internet's own CA, published at pki.example) and the Internet's DNS server for them, each visit logged with its source address"
+
+[home-router]
+script = "home-router.sh"
+image = "alpine"
+needs = []
+reboots = false
+description = "A home worker's broadband router: the house's network behind NAT on one public address of the lab Internet, DHCP and DNS for the house (forwarded to the Internet's DNS), nothing in from outside"
+
+[ntp-client]
+script = "ntp-client.sh"
+apk = ["chrony"]
+needs = []
+reboots = false
+description = "Linux time client: chrony (or systemd-timesyncd on Ubuntu without chrony) against the lab's NTP server, or the domain controller when there is none"
+
+[linux-member]
+script = "linux-member.sh"
+image = "ubuntu"
+pack = "sssd"
+needs = []
+reboots = false
+description = "Ubuntu: join the AD domain with realmd and SSSD; domain users log in, Domain Admins get sudo"
+
+[syslog-server]
+script = "syslog-server.sh"
+image = "ubuntu"
+needs = []
+reboots = false
+description = "Ubuntu: rsyslog receives the lab's syslog on UDP and TCP 514, one log tree per host under /var/log/remote"
+
+[grafana]
+script = "grafana.sh"
+image = "ubuntu"
+pack = "grafana"
+needs = []
+reboots = false
+description = "Ubuntu: Prometheus scrapes every machine with the metrics role, Grafana (port 3000, admin with the lab password) draws the generated dashboards; the node exporter watches the appliance itself"
+
+[metrics]
+engine = "dsc"
+download = "windows-exporter"
+needs = []
+reboots = false
+description = "Prometheus Windows exporter (windows_exporter) as a service on 9182 with the collectors the machine's roles call for, firewall open for the monitoring appliance"
+
+[mecm]
+engine = "dsc"
+media = "mecm"
+needs = ["domain-join"]
+reboots = true
+minutes = 180
+description = "Microsoft Configuration Manager (evaluation): a primary site with management and distribution point, its database on the lab's SQL Server (your SQL Server ISO), installed from the disc winlab mecm prepare builds from your Microsoft downloads"
+
+# Remote administration between lab machines (winlab/remoteadmin.py): the
+# per-machine switches in the Machines window.
+[remote-desktop]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Remote Desktop on, Network Level Authentication required, the Remote Desktop firewall group enabled (who may sign in stays yours to grant)"
+
+[winrm]
+engine = "dsc"
+needs = []
+reboots = false
+description = "PowerShell remoting: WinRM running at boot, its HTTP listener on 5985 and the firewall rule (Windows 11 has it off out of the box)"
+
+[rsat]
+engine = "dsc"
+media = "fod-win11"
+media_on = "windows-client"
+needs = []
+reboots = false
+description = "Admin tools (RSAT): AD, Group Policy, DNS, DHCP, file services and Server Manager; Windows features on a server, Features on Demand from your own Languages and Optional Features ISO on Windows 11"
+
+# Windows Server Backup (winlab/wsbackup.py): model answers for `winlab roles
+# apply` and CI; in the app the backup is the student's work.
+[server-backup]
+engine = "dsc"
+needs = []
+reboots = false
+description = "Windows Server Backup: the feature, wbadmin and its console (wbadmin.msc); the backup itself is yours to write"
+
+[backup-nas]
+engine = "dsc"
+needs = ["server-backup"]
+reboots = false
+description = "A nightly full-server backup (bare-metal recovery and system state) to \\\\<nas>\\Backups on the lab's NAS as its svc-backup account, at 21:00 lab time (vars.backup_at); the share and the account are built in the NAS's web UI first"
+
+# Imaging (winlab/imaging.py): golden images captured and deployed over PXE.
+[wds]
+engine = "dsc"
+media = "ws2022"
+media_on = "windows-server"
+needs = []
+reboots = false
+description = "Windows Deployment Services: RemoteInstall on the data disk, answering PXE clients, a Setup and a capture boot image from your Windows Server 2022 DVD's boot.wim, an image group for golden images, and a domain-join answer file to attach to them"
+
+# The web-farm lab's proxy (winlab/webfarm.py): the model answer of the nginx
+# lesson, for `winlab roles apply` and CI.
+[web-proxy]
+script = "web-proxy.sh"
+image = "ubuntu"
+pack = "nginx"
+needs = []
+reboots = false
+description = "Ubuntu: nginx from the pack as reverse proxy for intranet.<domain>, an upstream of the machines in vars.backends with passive health checks, HTTP to HTTPS when /etc/ssl/winlab/intranet.pem is there"

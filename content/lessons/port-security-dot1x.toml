@@ -1,0 +1,114 @@
+[lesson]
+id = "port-security-dot1x"
+title = "Port security and 802.1X: who may plug into a switch port"
+module = "network"
+order = 47
+lab = "ad-ds-basics"
+node = "pc01"
+nodes = ["dc01", "pc01"]
+exercise = "port-security-dot1x"
+minutes = 60
+summary = "Lock a desk port to the PC that belongs there, watch a visitor's laptop err-disable it, then make the port ask NPS who is plugging in."
+why = '''
+A switch port takes frames from whoever is plugged into it. Anyone who
+finds a free wall jack, or unplugs a desk PC and plugs a laptop in, is on
+your network with an address from your DHCP server, next to your domain
+controller. Two things close that door, and real networks use both.
+
+Port security is the switch's own list: a port allows the addresses it
+knows (typed in, or learnt from the first frames and kept: sticky), up to a
+maximum, and anything else is a violation. Shutdown, the default,
+err-disables the port: the link light goes out, the PC behind it loses the
+network too, and the port stays down until someone looks. It stops the
+casual laptop, but an address is easy to copy.
+
+802.1X asks who is there. Until a RADIUS server (NPS, or FreeRADIUS) says
+yes, the port passes nothing but EAPOL, the frames that carry the
+conversation. The switch is the authenticator: it relays between the
+machine (the supplicant, Wired AutoConfig on Windows) and the server, which
+checks a user or a computer against Active Directory and your policies.
+
+In this lab both are real on the router, where every machine's cable is a
+port of its bridge: port security is nftables' bridge family (the kernel
+learns the addresses into a set sized to the maximum, and counts what it
+drops), and 802.1X is hostapd's wired driver on the port, talking RADIUS to
+the server you build. Nothing on the server or the PC is set up for you.
+'''
+concepts = [
+  "Secure addresses: configured (typed in), sticky (learnt, then kept in the running configuration), dynamic (learnt and forgotten when the link goes down); maximum 1 by default",
+  "Violation modes: shutdown (err-disable the port, the default), restrict (drop, count, log), protect (drop silently)",
+  "err-disabled: the switch shut the port itself; shutdown then no shutdown brings it back, or errdisable recovery cause psecure-violation with a timer",
+  "802.1X roles: supplicant (the machine), authenticator (the switch port), authentication server (RADIUS: NPS or FreeRADIUS)",
+  "EAPOL carries EAP between the machine and the switch; the switch wraps it in RADIUS to the server; PEAP with MS-CHAP v2 is the usual Windows method and needs a certificate on the server",
+  "The RADIUS client is the switch, known to the server by the address its requests come from and a shared key; a wrong key gets no answer at all, not a reject",
+]
+steps = [
+  "Open the Workbench, power on the router, dc01 and pc01. Open corp's switch's front panel (right-click it) and note pc01's port number (Fa0/N). The machines are numbered left to right on the canvas.",
+  "Lock pc01's port to pc01: open the switch's console, then enable, configure terminal, interface fa0/N (pc01's), switchport port-security, switchport port-security mac-address sticky. A small lock appears on that port on the canvas. Leave pc01 running a while (it chatters from boot), then show port-security interface fa0/N and show running-config: pc01's address is now a sticky line in the configuration.",
+  "Be the visitor: right-click pc01's cable and choose Plug a visitor's laptop in at this desk (a laptop on a small desk switch, sharing the wall jack). Within a second the lock turns red and pc01 shows Network cable unplugged. On the console: show interfaces status (err-disabled), show port-security (a violation counted), show port-security interface fa0/N (the last source address is the laptop's), show logging (PSECURE_VIOLATION with the laptop's address).",
+  "Bring the port back the right way: pull the visitor's laptop out first (its menu on the canvas), then interface fa0/N, shutdown, no shutdown. Try it the other way round once: with the laptop still in, the port goes straight back to err-disabled.",
+  "Try the gentler modes: switchport port-security violation restrict, plug the laptop in again. pc01 keeps working and the count in show port-security climbs. protect drops just as quietly and counts nothing. Pull the laptop out, then put violation shutdown back (no switchport port-security violation).",
+  "Let ports heal on their own if you want: errdisable recovery cause psecure-violation and errdisable recovery interval 60 in configure terminal; show errdisable recovery lists the timer and the ports waiting.",
+  "Build the RADIUS server on dc01: Install-WindowsFeature NPAS -IncludeManagementTools, then netsh nps add registeredserver (or in nps.msc, Register server in Active Directory). PEAP needs a certificate on NPS: one from your CA if you built AD CS, or for the lab New-SelfSignedCertificate -DnsName dc01.corp.lab -CertStoreLocation Cert:\\LocalMachine\\My. The lesson radius-with-nps goes further into policies.",
+  "Tell NPS about the switch. Requests leave the router from its address on dc01's network (show radius server-group all on the switch says which, 10.10.10.1 here): New-NpsRadiusClient -Name corp-switch -Address 10.10.10.1 -SharedSecret <a key you choose>. In nps.msc, Policies > Network Policies > New: condition NAS Port Type = Ethernet and Windows Groups = CORP\\Domain Computers (and Domain Users), access granted, authentication Microsoft: Protected EAP (PEAP) with your certificate.",
+  "Or, on a Linux machine instead of NPS: plug the freeradius package stick (winlab packs fetch freeradius on this PC first), apt install freeradius, add the switch to /etc/freeradius/3.0/clients.conf with the same key, a user to mods-config/files/authorize, and run freeradius -X to watch every request.",
+  "Point the switch at it: configure terminal, aaa new-model, aaa authentication dot1x default group radius, radius server NPS, address ipv4 10.10.10.10 auth-port 1812 acct-port 1813, key <the same key>, exit, dot1x system-auth-control. Then on pc01's port: interface fa0/N, authentication port-control auto, dot1x pae authenticator. The lock turns amber: pc01 is unauthorized and the port passes only EAPOL.",
+  "Make pc01 a supplicant: on pc01, Services: Wired AutoConfig, startup Automatic, Start (sc.exe config dot3svc start= auto, then net start dot3svc). In the network card's properties a new Authentication tab appears: tick Enable IEEE 802.1X authentication, choose Microsoft: Protected EAP (PEAP), and under Additional settings choose User or computer authentication. Trust the server's certificate (or, for this lab only, untick Verify the server's identity).",
+  "Watch it work: show authentication sessions on the switch (Auth, with pc01's address), show authentication sessions interface fa0/N (the user name NPS saw: host/pc01.corp.lab for the computer), show logging (DOT1X-5-SUCCESS). On dc01, the Security log has event 6272 (access granted). The lock turns green. On pc01, netsh lan show interfaces.",
+  "See a wrong key: on the switch, radius server NPS, key something-else. pc01's next authentication never finishes: show authentication sessions stays Running, show radius server-group all counts timeouts and no answers, and dc01's System log has NPS event 18 (the Message-Authenticator is not valid). Put the right key back.",
+  "Practise: click the switch, and under Port security and 802.1X choose Hide a rogue device or Break the RADIUS key. Find it with the canvas and the console, fix it, and Check my fix.",
+]
+pitfalls = [
+  "Turning port security on while the PC is off: the first address the port sees is the one it keeps. If a visitor's laptop got there first, clear port-security sticky interface fa0/N and let the PC speak.",
+  "no switchport port-security on an err-disabled port does not bring it back: shutdown, then no shutdown.",
+  "A RADIUS client registered with the switch's management address when its requests come from another one never matches: NPS logs an unknown client and answers nothing. Use the address the requests come from.",
+  "A wrong shared key looks like a dead server, not a reject: the server cannot verify the request, drops it and says so only in its own log.",
+  "PEAP without a certificate on NPS fails on the server side: event 6273 with reason 'the client could not be authenticated' or no matching policy; check the policy's authentication methods.",
+  "In this lab the switch has no management address of its own: RADIUS comes from the router's address on the server's network, the same box.",
+]
+further = [
+  "IEEE 802.1X-2020: port-based network access control",
+  "Microsoft Learn: Network Policy Server, and 802.1X authenticated wired access",
+  "Cisco: Configuring port security, and configuring IEEE 802.1X port-based authentication",
+  "Lesson radius-with-nps: NPS policies, RADIUS clients and their logs",
+]
+
+[[verify]]
+label = "the port rules on the router: allowed addresses, violation counters, what 802.1X let in"
+node = "fabric"
+shell = "sh"
+cmd = "nft list table bridge winlab_port 2>/dev/null; ls /run/winlab-port/ 2>/dev/null; cat /run/winlab-port/*.err 2>/dev/null"
+
+[[verify]]
+label = "hostapd's sessions on the ports that run 802.1X"
+node = "fabric"
+shell = "sh"
+cmd = "for c in /run/winlab-port/hapd-*.conf; do [ -e $c ] || continue; i=$(sed -n 's/^interface=//p' $c); echo \"== $i\"; hostapd_cli -p /run/hostapd -i $i all_sta; done"
+
+[[verify]]
+label = "NPS: the switch as a RADIUS client"
+node = "dc01"
+cmd = "Get-NpsRadiusClient | Select-Object Name, Address, Enabled | Format-Table -AutoSize"
+
+[[verify]]
+label = "pc01: Wired AutoConfig and its 802.1X state"
+node = "pc01"
+cmd = "Get-Service dot3svc | Select-Object Status, StartType; netsh lan show interfaces"
+
+[[quiz]]
+q = "A port has switchport port-security with the defaults. A second address appears on it. What happens?"
+answer = "The port is err-disabled: shutdown is the default violation mode and the maximum is 1"
+wrong = ["The second address is dropped and counted", "The first address is replaced by the second", "Nothing until an administrator approves it"]
+why = "Maximum 1, violation shutdown: the switch shuts the port itself, link light off, until shutdown / no shutdown or a recovery timer."
+
+[[quiz]]
+q = "In 802.1X, which device is the RADIUS client?"
+answer = "The switch (the authenticator)"
+wrong = ["The PC (the supplicant)", "The domain controller", "The NPS server"]
+why = "The machine speaks EAPOL to the switch; the switch is what NPS knows, by its address and the shared key."
+
+[[quiz]]
+q = "The shared key on the switch does not match NPS's. What does the PC see?"
+answer = "Authentication never finishes: NPS drops the requests it cannot verify and answers nothing"
+wrong = ["An Access-Reject at once", "It is let in without authentication", "The switch port err-disables"]
+why = "Without the right key NPS cannot check the Message-Authenticator, so it drops the request and logs event 18; the switch only sees timeouts."

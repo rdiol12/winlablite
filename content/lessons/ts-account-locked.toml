@@ -1,0 +1,71 @@
+[lesson]
+id = "ts-account-locked"
+title = "A user is locked out again and again"
+module = "troubleshoot"
+order = 30
+lab = "ad-ds-basics"
+node = "dc01"
+problem = "account-locked"
+minutes = 25
+summary = "Alice is locked out within minutes of being unlocked; she swears she typed it right."
+why = '''
+Lockouts are not caused by the user at the desk nearly as often as by
+something that remembers an old password: a phone, a mapped drive on another PC,
+a scheduled task, a service. Unlocking is the symptom fix; the cause is the
+caller computer in event 4740 on the domain controller that processed the
+lockout, which is why this lesson runs on dc01.
+
+Learn the two commands: Search-ADAccount -LockedOut to see who, and the 4740
+query to see from where.
+'''
+concepts = [
+  "Lockout policy: threshold, observation window, duration; set in the Default Domain Policy or a PSO",
+  "Event 4740: the lockout, with the caller computer name",
+  "Event 4625 on the source: the failed logons, with the logon type and process",
+  "The badPwdCount and lastBadPasswordAttempt attributes are per-DC counters, so read them with -Server against the PDC emulator",
+]
+steps = [
+  "Press Break above (or run winlab break dc01 account-locked). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Unlocking without finding the source means the next lockout arrives in one observation window.",
+  "Bad password counts are kept per DC and forwarded to the PDC emulator; query the PDC when counts look inconsistent.",
+]
+further = [
+  "Microsoft Learn: Account lockout policy",
+  "Microsoft Learn: Troubleshooting account lockouts",
+  "Next: ts-lockout-stale-credential, the same hunt across two DCs to a stale credential on a PC",
+]
+
+[[verify]]
+label = "locked-out accounts"
+node = "dc01"
+cmd = "Search-ADAccount -LockedOut | Select-Object SamAccountName, LockedOut, LastLogonDate"
+
+[[verify]]
+label = "recent lockout events"
+node = "dc01"
+cmd = "Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4740} -MaxEvents 3 -ErrorAction SilentlyContinue | Select-Object TimeCreated, Message | Format-List"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which event records a lockout with the caller computer name?"
+answer = "4740"
+wrong = ["4625", "4720", "4771"]
+why = "The caller computer is where the bad passwords come from."
+
+[[quiz]]
+q = "Why query the PDC emulator for bad password counts?"
+answer = "Counts are per DC and failures are forwarded to the PDC"
+wrong = ["Only the PDC stores users", "Other DCs hide the attribute", "The PDC is faster"]
+why = "Read with -Server against the PDC."
+
+[[quiz]]
+q = "You unlock the user without finding the source. What happens next?"
+answer = "They are locked out again within one observation window"
+wrong = ["The problem goes away", "The account is deleted", "The lockout threshold rises"]
+why = "Find the device with the old password."

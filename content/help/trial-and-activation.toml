@@ -1,0 +1,25 @@
+[topic]
+id = "trial-and-activation"
+title = "The trial and activating winlab"
+category = "Start here"
+order = 30
+keywords = ["trial", "license", "licence", "activate", "activation", "product key", "key", "offline", "purchase", "buy", "seat"]
+summary = "What works before you activate, and how to enter your product key."
+body = '''
+**The free trial.** Before you activate, the first lab, ad-ds-basics, works completely: its machines, its lessons, exercises and its scenario days (Company merger and Monday morning lockouts). The other labs, their lessons, the scenario days built on them and the exam-prep tracks are listed with a lock. They are stored encrypted on this PC and open once you activate.
+
+**Activate.** Open Settings, then Activation (or click any locked lab). Type the product key from your purchase email (it starts with WLAB-) and press Activate. winlab checks the key with the licensing server once, when you activate, and ties it to this PC. The window then shows who the license belongs to and how many PCs use the key. From a command prompt:
+
+```
+winlab license activate <your product key>
+winlab license status
+```
+
+**After that.** A lifetime key never needs the internet again. A monthly key renews itself once at the end of each paid month; if this PC is offline then, it keeps working for 14 more days, and `winlab license refresh` renews it once you are back online.
+
+**A PC with no internet.** Run `winlab license fingerprint` and send the result with your key to support. You get a token back; save it as a file and run `winlab license activate-offline @token.json`.
+
+**Moving to another PC.** Press Move to another PC in the Activation window, or run `winlab license deactivate` on the old PC. That frees its place on the key, and you then activate on the new PC.
+
+**School keys.** A school key works on as many classroom PCs as it allows, and it unlocks Class results for the teacher.
+'''

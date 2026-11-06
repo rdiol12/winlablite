@@ -1,0 +1,19 @@
+[topic]
+id = "machines-and-screens"
+title = "Machines and their screens"
+category = "Using winlab"
+order = 20
+keywords = ["machine", "screen", "console", "vm", "ctrl+alt+del", "full screen", "checkpoint", "snapshot", "password", "power", "suspend", "keyboard"]
+summary = "Power, screens, the keyboard, checkpoints and the Administrator password."
+body = '''
+**Machines** lists every machine in the lab with its power state, memory and processors.
+
+- Double-click a machine to open its screen in a Virtual Machine Connection window. You see it from the firmware to the sign-in screen.
+- **Ctrl+Alt+Del** is a button on the window's toolbar (Ctrl+Alt+End does the same). **Type text** sends text as keystrokes.
+- Hold Esc to leave full screen. The View menu fits the screen to the window or opens it in a window of its own.
+- The **Administrator password** is behind the key in the taskbar. Each lab has its own, made on this PC.
+- **Checkpoints** save a machine's disks. Take one before something risky, and go back to it from the Action menu.
+- **Suspend** hibernates a machine, and its next start resumes it.
+
+From a command prompt: `winlab lab up <lab>`, `winlab lab down <lab>`, `winlab console <machine> --lab <lab>` and `winlab snap <lab> save <name>`.
+'''

@@ -1,0 +1,94 @@
+[lesson]
+id = "mover-changes-department"
+title = "A mover: someone changes department"
+module = "identity"
+order = 33
+lab = "ad-ds-basics"
+node = "dc01"
+nodes = ["dc01"]
+problem = "mover-to-finance"
+exercise = "mover-sales-to-finance"
+minutes = 35
+summary = "Move a person from Sales to Finance: same account, new attributes, swapped groups, no leftover access, and the home folder on Finance's share."
+why = '''
+Joiners and leavers get a process; movers get forgotten. Someone moves from
+Sales to Finance, IT adds the Finance groups because Finance asks loudly, and
+nobody takes the Sales groups away because Sales does not ask at all. Three
+moves later the person can read half the company: privilege creep, and the
+first thing an auditor's access review finds.
+
+A mover keeps the account. The SID, the mailbox, the sign-in history and the
+files stay; what hangs on the account changes. Department and title (address
+books, dynamic groups and HR reports read them), the role groups swapped, not
+added, the permissions that were never in a group found and removed, and data
+that lives per department moved where the new department keeps it.
+
+Press Break and Dan Price (dprice) is set up in Sales on dc01, with a home
+folder on Home$ and, as in most real companies, one permission somebody once
+gave him directly on a Sales folder. He starts in Finance on Monday, and
+Finance's home folders live on their own share, HomeFinance$.
+'''
+concepts = [
+  "Joiner, mover, leaver: the three events of the identity lifecycle, each with a checklist",
+  "Privilege creep: access that only ever grows, because nobody asks for access to be taken away",
+  "Attributes that drive other things: Department, Title, Manager (address book, dynamic distribution lists, HR reports)",
+  "Group-based access (AGDLP): G-Sales in DL-Sales-Share; a move is two membership changes, never an ACL edit",
+  "Direct permissions: an ACE for a person, not a group, survives every group change; find them with Get-Acl and IsInherited",
+  "Moving a home folder with its permissions: robocopy /E /MOVE /COPYALL, then HomeDirectory; the mailbox moves the same way in Exchange (New-MoveRequest) and stays put on a single mail server",
+]
+steps = [
+  "Press Break (or winlab break dc01 mover-to-finance). Read the account first: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List.",
+  "List every group, including how he got there: Get-ADPrincipalGroupMembership dprice | Select-Object Name, GroupScope, GroupCategory.",
+  "Set the attributes: Set-ADUser dprice -Department Finance -Title 'Finance analyst'.",
+  "Swap the role groups: Remove-ADGroupMember G-Sales -Members dprice -Confirm:$false; Remove-ADGroupMember 'Sales Team' -Members dprice -Confirm:$false; Add-ADGroupMember G-Finance -Members dprice; Add-ADGroupMember 'Finance Team' -Members dprice.",
+  "Find the access that is not in a group: Get-ChildItem C:\\Shares\\Sales -Recurse -Directory | ForEach-Object { $p = $_.FullName; (Get-Acl $p).Access | Where-Object { -not $_.IsInherited } | Select-Object @{n='Path';e={$p}}, IdentityReference, FileSystemRights }.",
+  "Remove the direct grant: icacls 'C:\\Shares\\Sales\\Key accounts' /remove CORP\\dprice.",
+  "Move the home folder with its permissions: robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL /R:1 /W:1. Check Get-Acl C:\\Shares\\HomeFinance\\dprice lists dprice with Modify, and that the old folder is gone.",
+  "Point the account at it: Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:. At his next sign-in H: is the new folder.",
+  "Read the result back: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List, then press Check my work.",
+]
+pitfalls = [
+  "Adding the new groups and leaving the old ones is the most common access-review finding there is.",
+  "Deleting the account and creating a new one for the new job loses the SID: files, mailbox permissions and audit history then point at an unknown account.",
+  "Copying the home folder without /COPYALL (or with Copy-Item) gives the files the new folder's inherited ACL: the person may lose access, or everybody may gain it.",
+  "Move the folder while the person is not signed in; an open file is skipped by robocopy, and the log (robocopy /LOG:) says which.",
+]
+further = [
+  "Microsoft Learn: Set-ADUser, Get-ADPrincipalGroupMembership",
+  "Microsoft Learn: robocopy",
+  "NIST SP 800-53: AC-2 Account management (review on transfer)",
+]
+
+[[verify]]
+label = "the mover's account"
+node = "dc01"
+cmd = "Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List SamAccountName, Department, Title, HomeDirectory, MemberOf"
+
+[[verify]]
+label = "explicit permissions on the Sales folders"
+node = "dc01"
+cmd = "Get-ChildItem C:\\Shares\\Sales -Recurse -Directory | ForEach-Object { $p = $_.FullName; (Get-Acl $p).Access | Where-Object { -not $_.IsInherited } | Select-Object @{n='Path';e={$p}}, IdentityReference, FileSystemRights }"
+
+[[verify]]
+label = "the old and the new home folder"
+node = "dc01"
+cmd = "Test-Path C:\\Shares\\Home\\dprice; Get-ChildItem C:\\Shares\\HomeFinance\\dprice; (Get-Acl C:\\Shares\\HomeFinance\\dprice).Access | Format-Table IdentityReference, FileSystemRights"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Someone moves from Sales to Finance. What happens to the Sales groups?"
+answer = "They are removed in the same change that adds the Finance groups"
+wrong = ["They stay for a month in case they need something", "They stay; only Finance's groups are added", "The account is recreated without them"]
+why = "Swapping, not adding, is what stops privilege creep."
+
+[[quiz]]
+q = "Why keep the same account for a mover rather than create a new one?"
+answer = "The SID, mailbox, files and history all point at the existing account"
+wrong = ["Accounts cannot be created mid-year", "A new account would have no password", "Only a mover's account can be renamed"]
+why = "Permissions and audit records reference the SID; a new account is a stranger to all of them."
+
+[[quiz]]
+q = "Which permission survives every group change you make for a mover?"
+answer = "An access control entry granted to the person directly"
+wrong = ["A share permission on Everyone", "An inherited permission from the parent folder", "A deny on Domain Users"]
+why = "Find them with Get-Acl, Access, and IsInherited -eq $false: they are invisible to group reviews."

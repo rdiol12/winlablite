@@ -1,0 +1,18 @@
+[topic]
+id = "inherited-company"
+title = "The inherited company and the locked server room"
+category = "Using winlab"
+order = 42
+keywords = ["inherited", "company", "handover", "pre-built", "scenario", "server room", "locked", "walk", "access log", "remote", "first 30 days", "harbourline"]
+summary = "A pre-built scenario lab where you take over a company, and the setting that keeps servers in a locked room you run from your desk."
+body = '''
+Every lab starts empty except one. **inherited-company** is a pre-built scenario: you arrive at Harbourline on the previous admin's last day.
+
+- Start the lab's machines, open **Inherited company** (on the desktop) and press **Hand over the company**. winlab builds the domain from the lab's roles, then the predecessor's years inside the machines: about three hundred staff, leavers never removed, service accounts whose passwords never expire, a bloated Domain Admins, overlapping Group Policy, open shares on a full disk, undocumented scheduled tasks, old DNS records, expiring certificates and every FSMO role on the old DC. Every password is made inside the machines.
+- The handover notes from the previous admin land on pc01's desktop. Some of them are wrong.
+- The **First 30 days** lessons (audit, document, clean up, fix) are graded by the end state inside the machines.
+
+**Locked server room.** In this lab, and in any lab where you tick **Locked server room** in the Machines window, the servers' screens do not open from your desk. Run them from your admin PC: Remote Desktop, PowerShell remoting, Server Manager, Windows Admin Center, SSH, and the BMC's virtual console. **Walk to the server room** moves the lab clock on 5 minutes each way (you do not wait in real time), asks for a reason and writes the access log; while you are there, your desk's screens wait for you.
+
+From a command prompt: `winlab inherited inherited-company handover`, `winlab inherited inherited-company status`, `winlab inherited inherited-company notes`; `winlab room <lab> status`, `winlab room <lab> walk <reason>`, `winlab room <lab> back`, `winlab room <lab> on|off`.
+'''

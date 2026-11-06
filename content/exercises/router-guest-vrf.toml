@@ -1,0 +1,54 @@
+[exercise]
+id = "router-guest-vrf"
+title = "The guest network in a VRF of its own: its gateway answers, the office does not"
+lab = "router-protocols"
+reset_nodes = []
+nodes = ["pc-guest", "pc-office"]
+brief = """
+Guests and the office hang off the same router, and the router routes between
+them. Put the guest network into a VRF named GUEST at the lab router's console,
+so the guests' routing table holds only their own network. The checks read the
+router's kernel (the VRF device and its table) and ping from the guest's laptop.
+"""
+tasks = [
+  "vrf definition GUEST with rd 65000:20 and address-family ipv4",
+  "interface g0/0/0: vrf forwarding GUEST, then its address again (ip address 10.80.20.1 255.255.255.0)",
+  "show ip route vrf GUEST lists the guest network; show ip route no longer does",
+  "pc-guest still reaches its gateway and no longer reaches pc-office",
+]
+
+[[check]]
+name = "the router has a VRF named GUEST"
+node = "fabric"
+shell = "sh"
+script = "ip -d link show GUEST 2>/dev/null | grep -q ' vrf table ' && echo yes || echo no"
+expect = "yes"
+weight = 1
+hint = "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 on the console; show vrf lists it"
+
+[[check]]
+name = "the guest network's interface is in GUEST, with its address"
+node = "fabric"
+shell = "sh"
+script = "d=$(ip -o -4 addr show 2>/dev/null | awk '$4==\"10.80.20.1/24\"{print $2; exit}'); [ -n \"$d\" ] && ip -o link show dev \"$d\" | grep -q ' master GUEST ' && echo yes || echo no"
+expect = "yes"
+weight = 3
+hint = "interface g0/0/0, vrf forwarding GUEST: IOS removes the address when the VRF changes, so type ip address 10.80.20.1 255.255.255.0 again afterwards"
+
+[[check]]
+name = "the guest network is in GUEST's table and not in the global one"
+node = "fabric"
+shell = "sh"
+script = "ip route show vrf GUEST 2>/dev/null | grep -q '^10\\.80\\.20\\.0/24 ' && ! ip route show table main | grep -q '^10\\.80\\.20\\.0/24 ' && echo yes || echo no"
+expect = "yes"
+weight = 2
+hint = "show ip route vrf GUEST and show ip route on the console: the guest's C line belongs only in the first"
+
+[[check]]
+name = "pc-guest reaches its gateway and not the office"
+node = "pc-guest"
+shell = "sh"
+script = "ping -c 2 -W 2 10.80.20.1 >/dev/null 2>&1 && ! ping -c 2 -W 2 10.80.0.10 >/dev/null 2>&1 && echo yes || echo no"
+expect = "yes"
+weight = 3
+hint = "The gateway does not answer: the interface lost its address with vrf forwarding (type it again). The office still answers: the interface is not in the VRF yet (show ip vrf)."

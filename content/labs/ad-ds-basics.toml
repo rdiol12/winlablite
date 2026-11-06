@@ -1,0 +1,80 @@
+[lab]
+name = "ad-ds-basics"
+description = "One domain, one subnet: promote a DC, join a member server and a client."
+domain = "corp.lab"
+netbios = "CORP"
+timezone = "UTC"
+exercises = [
+  "promote-first-dc",
+  "join-a-member",
+  "create-ou-and-user",
+  "onboard-new-starters",
+  "who-is-hammering",
+  "map-a-drive",
+  "dns-forwarders-aging-records",
+  "dhcp-reserve-and-exclude",
+  "finance-folder-permissions",
+  "switch-named-from-console",
+]
+# Every machine is a regular PC running stock Windows: Intel devices Windows
+# drives with its own drivers, every service as installed. On a PC where
+# three machines do not fit, `lean = true` here (or on one [[node]], or the
+# Low-memory switch in the Machines window) trims the search indexer,
+# prefetch, telemetry, Widgets, OneDrive and, on servers, Defender.
+
+[[network]]
+id = "corp"
+cidr = "10.10.10.0/24"
+gateway = "10.10.10.1"
+description = "the only segment; the fabric is its default gateway"
+
+# ---------------------------------------------------------------------------
+# A domain controller is pinned to a static address and boots first, because
+# every other machine needs it for DNS before it can even find the domain.
+# ---------------------------------------------------------------------------
+[[node]]
+id = "dc01"
+image = "ws2025"
+kind = "windows-server"
+cpus = 2
+memory_mb = 2048
+roles = ["ad-ds", "dns", "dhcp"]
+boot_order = 10
+wait_ready = true
+description = "forest root domain controller, DNS and DHCP"
+
+  [node.vars]
+  forest_root = true
+  dhcp_scope = "10.10.10.50-10.10.10.150"
+
+  [[node.nic]]
+  network = "corp"
+  ip = "10.10.10.10"
+
+[[node]]
+id = "fs01"
+image = "ws2025"
+kind = "windows-server"
+cpus = 2
+memory_mb = 2048
+roles = ["domain-join", "file"]
+data_disks_gb = [20]
+boot_order = 60
+description = "member file server with a separate data disk to share"
+
+  [[node.nic]]
+  network = "corp"
+  ip = "10.10.10.20"
+
+[[node]]
+id = "pc01"
+image = "win11"
+kind = "windows-client"
+cpus = 2
+memory_mb = 2048   # the installer's 4 GB check is bypassed; stock Windows 11 runs at 2 GB
+roles = ["domain-join"]
+boot_order = 80
+description = "workstation; takes its address and DNS from DHCP on purpose"
+
+  [[node.nic]]
+  network = "corp"

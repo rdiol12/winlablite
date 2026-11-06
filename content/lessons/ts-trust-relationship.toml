@@ -1,0 +1,68 @@
+[lesson]
+id = "ts-trust-relationship"
+title = "Domain users cannot sign in to one server"
+module = "troubleshoot"
+order = 100
+lab = "ad-ds-basics"
+node = "fs01"
+nodes = ["fs01"]
+problem = "secure-channel-broken"
+minutes = 25
+summary = "Local accounts sign in, domain accounts get 'the trust relationship failed'; the network is fine."
+why = '''
+Every domain member holds a password for its computer account and changes it
+every 30 days, and the domain controller keeps the matching copy. Revert a
+virtual machine to an old checkpoint, restore a server from last month's
+backup, or reset the account on the DC, and the two copies differ: the DC no
+longer believes the machine is who it says it is. Domain sign-ins, Group
+Policy and Kerberos to that machine all stop.
+
+The habit to build: test the secure channel directly, and repair it in place.
+Unjoining and rejoining "fixes" it too, and throws away the computer's group
+memberships and SPNs.
+'''
+concepts = [
+  "The computer account and its password: a secret shared by the member and the domain",
+  "The secure channel: Netlogon's authenticated link from a member to a DC",
+  "Test-ComputerSecureChannel and nltest /sc_verify: ask the channel itself",
+  "Repair in place: Test-ComputerSecureChannel -Repair or Reset-ComputerMachinePassword",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 secure-channel-broken). Do not read the hints yet.",
+  "Reproduce the symptom: sign in to fs01 as a domain user, then as the local Administrator.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Rejoining the domain works but creates a new trust and loses the computer's group memberships; repair first.",
+  "A domain admin signed in earlier may still work from cached credentials: test with a fresh sign-in.",
+]
+further = [
+  "Microsoft Learn: Test-ComputerSecureChannel",
+  "Microsoft Learn: Machine account password process",
+]
+
+[[verify]]
+label = "is the secure channel healthy"
+node = "fs01"
+cmd = "Test-ComputerSecureChannel -Verbose"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Which command repairs a broken secure channel in place?"
+answer = "Test-ComputerSecureChannel -Repair"
+wrong = ["Remove-Computer", "gpupdate /force", "ipconfig /renew"]
+why = "Reset-ComputerMachinePassword works too."
+
+[[quiz]]
+q = "Why repair rather than rejoin the domain?"
+answer = "Rejoining creates a new account relationship and loses group memberships"
+wrong = ["Rejoining is impossible", "Repair is the only supported way", "Rejoining changes the hostname"]
+why = "Repair first."
+
+[[quiz]]
+q = "A domain admin can still log on to the broken server. Why?"
+answer = "Cached credentials from an earlier sign-in"
+wrong = ["Admins bypass the secure channel", "The trust is fine", "Admins use NTLM always"]
+why = "Test with a fresh sign-in."

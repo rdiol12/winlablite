@@ -1,0 +1,71 @@
+[exercise]
+id = "ssh-to-the-switch"
+title = "Manage corp's switch over SSH from pc01, and only over SSH"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["pc01"]
+brief = """
+corp's switch is managed with the console cable only. Give it an address,
+an RSA key of 2048 bits, SSH version 2, a local admin and vty lines that
+take SSH alone with login local, then log in from pc01 with ssh. The checks
+read the router, where the switch's SSH server runs and every login over it
+is logged, and pc01's known_hosts.
+"""
+tasks = [
+  "On corp's switch: interface vlan 1 with 10.10.10.2/24, no shutdown, and ip default-gateway 10.10.10.1",
+  "hostname, ip domain-name corp.lab, crypto key generate rsa modulus 2048, ip ssh version 2",
+  "username admin privilege 15 with a secret of your own",
+  "line vty 0 4: login local, transport input ssh; then save the configuration",
+  "From pc01: ssh admin@10.10.10.2, accept the host key after comparing its fingerprint with show ip ssh, and log in",
+]
+
+[[check]]
+name = "the switch's SSH server runs on its management address, with a key of 2048 bits or more"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /run/winlab-ssh/sw-*.line; do [ -e $f ] || continue
+  b=$(sed -n 's/.*bits=\([0-9]*\).*/\1/p' $f); p=/run/winlab-ssh/$(basename $f .line).pid
+  [ "${b:-0}" -ge 2048 ] && [ -f $p ] && kill -0 $(cat $p) 2>/dev/null && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "SSH starts when the switch has a key and an address: interface vlan 1 (ip address, no shutdown), hostname, ip domain-name, crypto key generate rsa modulus 2048. show ip ssh says SSH Enabled."
+
+[[check]]
+name = "SSH version 2 only, and the vty lines take SSH alone with login local"
+node = "fabric"
+shell = "sh"
+script = '''
+r=False
+for f in /run/winlab-ssh/sw-*.line; do [ -e $f ] || continue
+  grep -q 'login=local transport=ssh version=2.0' $f && r=True; done
+echo $r
+'''
+expect = "True"
+weight = 2
+hint = "ip ssh version 2 in configure terminal; under line vty 0 4: login local and transport input ssh (not all, not telnet ssh)."
+
+[[check]]
+name = "someone logged in to the switch over SSH from a lab machine"
+node = "fabric"
+shell = "sh"
+script = '''
+if grep -q ' login sw:' /var/log/winlab-vty.log 2>/dev/null; then echo True; else echo False; fi
+'''
+expect = "True"
+weight = 3
+hint = "From pc01: ssh admin@10.10.10.2, then the password you gave username admin. % Login invalid means the secret did not match; a connection that closes at once means the vty lines do not take SSH."
+
+[[check]]
+name = "pc01 knows the switch's host key"
+node = "pc01"
+script = '''
+$hit = Get-ChildItem 'C:\Users\*\.ssh\known_hosts' -ErrorAction SilentlyContinue | Select-String -SimpleMatch '10.10.10.2 '
+if ($hit) { 'True' } else { 'no host key for 10.10.10.2 in any known_hosts on pc01' }
+'''
+expect = "True"
+weight = 1
+hint = "The first ssh admin@10.10.10.2 asks to confirm the fingerprint; answering yes stores it in your profile's .ssh\\known_hosts."

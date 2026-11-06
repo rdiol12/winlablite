@@ -1,0 +1,17 @@
+[topic]
+id = "updates"
+title = "Updates: winlab, and Windows inside the lab"
+category = "Common problems"
+order = 70
+keywords = ["update", "updates", "new version", "upgrade", "windows update", "patch", "wsus", "msu", "check for updates"]
+summary = "How to get a newer winlab, and why Windows Update does not work inside a lab."
+body = '''
+**A newer winlab.** winlab never checks on its own. Press Check for updates in the About section of this window, or run `winlab update`. Only winlab's version number is sent. Your labs, machines and progress stay where they are when you install a newer version.
+
+**Windows Update inside a machine fails.** That is expected: the lab has no internet. A lab is patched the way a disconnected network is:
+
+1. On this PC, download the update packages (.msu) from the Microsoft Update Catalog.
+2. Save them in the images\updates folder, or leave them in Downloads.
+3. On the media shelf, Updates lists them; write them to a patch stick or burn them to a disc and give it to the machine.
+4. Inside the machine, install them yourself with wusa, or run WSUS on a lab server. The patching lab teaches both.
+'''

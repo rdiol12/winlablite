@@ -1,0 +1,21 @@
+[topic]
+id = "scenario-days"
+title = "Scenario days"
+category = "Using winlab"
+order = 40
+keywords = ["scenario", "day", "story", "ransomware", "branch", "merger", "inbox", "mail", "manager", "debrief", "score",
+            "lockout", "phishing", "audit", "maintenance", "change", "migration", "certificate", "service level", "sla"]
+summary = "A working day in a story: mail from your manager, problems that arrive on a clock, a debrief."
+body = '''
+A scenario day plays out on a lab you have already built. Open **Scenarios** from the Start menu, pick a day and press Start. The list shows the days for the lab this desktop is on; **All labs** shows every day, and the chips filter by kind: incidents, planned work (a maintenance window, a migration), audits and projects.
+
+- Mail from your manager and from users arrives in the Scenarios inbox over the day, and a notification pops up when it does.
+- Some messages bring a problem: something really breaks inside a machine at that moment, sometimes on several machines at once.
+- You do all the work yourself, inside the machines. The scenario never fixes or sets anything up for you.
+- **Check my work** grades the tasks that are open so far. Some tasks unlock the next part of the story, and some messages only come once a problem is fixed.
+- The day branches on what you do: a fallback order (roll the change back) only arrives if the work it covers is not done by its minute.
+- Some tasks have a service level: the task list counts down to it. Done late keeps half the points.
+- When the clock runs out or you end the day, the debrief shows your score, the service levels you met, how long each problem kept the business waiting, and what was missed.
+
+Each day lists the lessons to finish first; it will not start until the lab is in that state. From a command prompt: `winlab scenario list`, `winlab scenario start <id>`, `winlab scenario status`, `winlab scenario check` and `winlab scenario stop`.
+'''

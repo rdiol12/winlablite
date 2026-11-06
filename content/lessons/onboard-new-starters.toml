@@ -1,0 +1,110 @@
+[lesson]
+id = "onboard-new-starters"
+title = "Onboard the new starters"
+module = "identity"
+order = 31
+lab = "ad-ds-basics"
+node = "dc01"
+role = "users-groups"
+answer_lab = "every-role"
+answer_node = "dc01"
+exercise = "onboard-new-starters"
+minutes = 60
+summary = "Turn HR's new-starter sheet into accounts, groups, folders and home drives, then watch the staff sign in and work."
+why = '''
+Onboarding is the most common directory job there is, and the one people notice
+first: a new starter who cannot sign in on day one rings the helpdesk before
+nine. HR sends a sheet (names, departments, job titles, the user names agreed);
+IT turns every row into an account with the right attributes, puts it in the
+groups its role needs, and gives it somewhere to work: the department's folder
+and a home folder of its own.
+
+Done by hand for one person this is ten clicks. Done from the sheet with
+Import-Csv and a loop it is one reviewed script, the same every time, and the
+sheet stays the record of who was set up and how. The groups are what make it
+scale: grant the department folder to a department group once, and every new
+starter in that department only needs one membership.
+
+In this lab the staff then really come to work. With the workday on (the Office
+window), each person arrives at their PC around half past eight, signs in with
+the first password you gave them, opens their department's folder, saves
+documents, keeps notes in their home folder and, if the lab has them, prints and
+mails. What you got wrong comes back as helpdesk tickets in their own words.
+'''
+concepts = [
+  "The new-starter sheet: one row per person, columns that map onto New-ADUser parameters (GivenName, Surname, SamAccountName, Department, Title, EmailAddress, OfficePhone)",
+  "Import-Csv turns the sheet into objects; ForEach-Object runs New-ADUser once per row",
+  "A first password set by IT with ChangePasswordAtLogon: the person picks their own at the first sign-in, and IT never knows it",
+  "One global group per department (G-Finance); the department folder is granted to the group, not to people",
+  "Home folders: a hidden share (Home$), one folder per user that only that user and the admins can open, and the HomeDirectory and HomeDrive attributes that map it as H: at sign-in",
+  "Sign-ins land in the domain controller's Security log: 4624 is a successful logon, 4625 a failed one with the reason in its status code",
+]
+steps = [
+  "Start the workday: open Office from the Start menu and switch Workday on (or run winlab workday start). HR's sheet arrives on the media shelf as the stick 'HR: new-starter sheet'.",
+  "Plug the stick into dc01 from the media shelf and find its drive letter: Get-Volume | Where-Object DriveType -eq Removable.",
+  "Read the sheet: Import-Csv 'E:\\New starters.csv' | Format-Table DisplayName, Department, Title, SamAccountName.",
+  "Give the staff a home in the directory: New-ADOrganizationalUnit -Name Staff -Path 'DC=corp,DC=lab'.",
+  "One global group per department, named G- and the department without spaces: 'Front desk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { New-ADGroup -Name ('G-' + ($_ -replace ' ', '')) -GroupScope Global -GroupCategory Security -Path 'OU=Staff,DC=corp,DC=lab' }.",
+  "Create the accounts from the sheet, typing a first password for each person when asked: Import-Csv 'E:\\New starters.csv' | ForEach-Object { New-ADUser -Name $_.DisplayName -GivenName $_.FirstName -Surname $_.LastName -SamAccountName $_.SamAccountName -UserPrincipalName $_.EmailAddress -EmailAddress $_.EmailAddress -Department $_.Department -Title $_.Title -OfficePhone $_.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString \"First password for $($_.SamAccountName)\") -ChangePasswordAtLogon $true -Enabled $true }.",
+  "Put each person in their department's group: Import-Csv 'E:\\New starters.csv' | ForEach-Object { Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName }.",
+  "On fs01, give each department a folder in the Company share that only its group can change: 'FrontDesk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { $d = New-Item -ItemType Directory -Force \"D:\\Shares\\Company\\$_\"; icacls $d.FullName /grant \"CORP\\G-$($_):(OI)(CI)M\" }.",
+  "On fs01, make the home folders' share: New-Item -ItemType Directory D:\\Shares\\Home, then New-SmbShare -Name 'Home$' -Path D:\\Shares\\Home -FullAccess 'CORP\\Domain Admins' -ChangeAccess 'CORP\\Domain Users'.",
+  "For each person, a folder only they can open, mapped as H: at sign-in: on fs01 New-Item -ItemType Directory D:\\Shares\\Home\\<account>, icacls D:\\Shares\\Home\\<account> /inheritance:r /grant 'CORP\\Domain Admins:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'CORP\\<account>:(OI)(CI)M'; on dc01 Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:.",
+  "Hand out the first passwords: in Office > Staff list, type the first password you gave each person (or run winlab staff password <account>; it asks, it is never part of the command). It is kept only in this lab's folder on this PC.",
+  "Watch them work: Office > Today shows who is in, at which PC, doing what; the feed shows each sign-in, save and print. On dc01: Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents 30 | Format-Table TimeCreated, Id, Message -Wrap.",
+  "Read the tickets that come in (anyone you missed, a folder they cannot open) and fix the cause, not the symptom.",
+]
+pitfalls = [
+  "An account created with no password is disabled, and a person whose account is disabled calls on day one; check Enabled on every row.",
+  "Typing a password into the staff list that differs from the one you set is a wrong password at the DC: a 4625 in its Security log, and after a few tries a locked account if the domain has a lockout policy.",
+  "With ChangePasswordAtLogon the person chooses a new password at the first sign-in; from then on the first one no longer works, which is the point.",
+  "A department's group gets Modify on its folder, never Full Control: Full Control lets members change the permissions themselves.",
+  "Home folders must not inherit the parent's permissions, or everyone can read everyone's home folder.",
+  "Department names with spaces (Front desk) make awkward group and folder names; agree one rule (here: drop the spaces) and use it everywhere.",
+]
+further = [
+  "Microsoft Learn: New-ADUser",
+  "Microsoft Learn: Import-Csv",
+  "Microsoft Learn: 4624(S) An account was successfully logged on, 4625(F) An account failed to log on",
+  "Next: automate-joiners turns this loop into a checked, scheduled script; mover-changes-department handles the move",
+]
+
+[[verify]]
+label = "the staff accounts from the sheet"
+node = "dc01"
+cmd = "Get-ADUser -SearchBase 'OU=Staff,DC=corp,DC=lab' -Filter * -Properties Department, Title, EmailAddress, HomeDirectory | Format-Table SamAccountName, Enabled, Department, Title, HomeDirectory"
+
+[[verify]]
+label = "the department groups and their members"
+node = "dc01"
+cmd = "Get-ADGroup -Filter \"Name -like 'G-*'\" | ForEach-Object { '{0}: {1}' -f $_.Name, ((Get-ADGroupMember $_ | ForEach-Object SamAccountName) -join ', ') }"
+
+[[verify]]
+label = "the latest sign-ins on the DC"
+node = "dc01"
+cmd = "Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents 20 | Format-Table TimeCreated, Id -AutoSize"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "HR sends a sheet of twelve new starters. What turns its rows into accounts in one reviewed step?"
+answer = "Import-Csv piped into ForEach-Object running New-ADUser"
+wrong = ["Twelve runs of the New Object wizard in dsa.msc", "csvde with the default options", "Copying an existing user twelve times"]
+why = "Import-Csv makes one object per row and New-ADUser takes its columns as parameters, so the sheet stays the record of what was created."
+
+[[quiz]]
+q = "A new starter's account was created without a password. What happens when they try to sign in?"
+answer = "It fails: an account created without a password is disabled"
+wrong = ["They sign in with an empty password", "Windows asks them to choose one", "It works until the first password change"]
+why = "New-ADUser leaves an account disabled until it has a password that meets policy; the DC logs a 4625 for the attempt."
+
+[[quiz]]
+q = "Where is a failed sign-in against the domain recorded, and as which event?"
+answer = "In the domain controller's Security log, event 4625"
+wrong = ["In the PC's System log, event 7036", "In the DC's Directory Service log, event 1644", "Nowhere unless auditing is set per user"]
+why = "4624 is a successful logon and 4625 a failed one; its status code says why (unknown user, wrong password, disabled, locked)."
+
+[[quiz]]
+q = "Why grant the Finance folder to G-Finance rather than to each finance person?"
+answer = "A new starter then needs one group membership, and the folder's ACL never changes"
+wrong = ["Users cannot appear in an ACL", "Groups make the files load faster", "Only groups can be given Modify"]
+why = "Permissions follow the group; onboarding and offboarding become membership changes, and an audit reads one group."

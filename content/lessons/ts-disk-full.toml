@@ -1,0 +1,66 @@
+[lesson]
+id = "ts-disk-full"
+title = "The disk that filled up"
+module = "troubleshoot"
+order = 80
+lab = "ad-ds-basics"
+node = "fs01"
+problem = "disk-full"
+minutes = 20
+summary = "Logons are slow, services fail to write, and the server says low disk space."
+why = '''
+A full system volume breaks things in strange orders: profiles fail to load,
+event logs stop, services that write temp files crash, updates fail. The method
+is the same every time: how much is free, what grew, when, and why. Delete only
+what you understand; a file that reappears means a process is still writing it.
+'''
+concepts = [
+  "Get-PSDrive and Get-Volume: free space per volume",
+  "Finding big files versus big folders: Get-ChildItem -Recurse sorted by Length; TreeSize-style tools do the same",
+  "Usual suspects: logs, update caches, memory dumps, old profiles, a backup written to the wrong disk",
+  "Prevention: FSRM quotas and thresholds, separate data from system volumes",
+]
+steps = [
+  "Press Break above (or run winlab break fs01 disk-full). Do not read the hints yet.",
+  "Reproduce the symptom as a user would see it, from another machine where that makes sense.",
+  "Form one hypothesis and test it with a command; write down what you ruled out.",
+  "Fix the cause, not the symptom. Then press Verify my fix: it checks the machine, not your answer.",
+  "Find the evidence in the logs that would have told you earlier, and note what monitoring would have caught it.",
+]
+pitfalls = [
+  "Deleting files from C:\\Windows to make space breaks Windows; the growth is almost always elsewhere.",
+  "A volume that fills repeatedly at the same hour has a scheduled task behind it; look at what runs then.",
+]
+further = [
+  "Microsoft Learn: Get-Volume",
+  "Microsoft Learn: Disk Cleanup and storage settings",
+]
+
+[[verify]]
+label = "free space"
+node = "fs01"
+cmd = "Get-Volume | Where-Object DriveLetter | Select-Object DriveLetter, FileSystemLabel, @{n='FreeGB';e={[math]::Round($_.SizeRemaining/1GB,1)}}, @{n='SizeGB';e={[math]::Round($_.Size/1GB,1)}} | Format-Table -AutoSize"
+
+[[verify]]
+label = "largest files on C:"
+node = "fs01"
+cmd = "Get-ChildItem C:\\ -Recurse -File -ErrorAction SilentlyContinue | Sort-Object Length -Descending | Select-Object -First 5 FullName, @{n='MB';e={[int]($_.Length/1MB)}} | Format-Table -AutoSize"
+
+# Recall questions, answered from memory after the lesson.
+[[quiz]]
+q = "Where does disk growth almost never come from?"
+answer = "C:\\Windows itself: deleting there breaks Windows"
+wrong = ["Logs", "Memory dumps", "Old profiles"]
+why = "Look at logs, caches, dumps, profiles, misdirected backups."
+
+[[quiz]]
+q = "A volume fills at the same hour each day. What is behind it?"
+answer = "A scheduled task"
+wrong = ["A virus, always", "A bad disk", "Windows Search"]
+why = "Look at what runs then."
+
+[[quiz]]
+q = "Which cmdlet shows free space per volume?"
+answer = "Get-Volume"
+wrong = ["Get-Disk", "Get-Partition", "Get-PhysicalDisk"]
+why = "Get-PSDrive works too."

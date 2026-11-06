@@ -1,0 +1,85 @@
+[lab]
+name = "firewall-by-hand"
+description = "A firewall you install yourself: OPNsense (or pfSense CE) from the project's installer on a two-port PC, between a LAN with one Windows PC and the ISP's segment with a test host. Install, assign the interfaces, set it up from the PC's browser, write the first rules."
+domain = "corp.lab"
+netbios = "CORP"
+timezone = "UTC"
+bare = true
+exercises = [
+  "first-rules-on-your-firewall",
+]
+
+# ---------------------------------------------------------------------------
+# Two segments and nothing in between but fw01. The LAN switch is not cabled
+# to the lab router, so pc01's only way anywhere is the firewall: its address
+# comes from the firewall's DHCP server once you have installed it (both
+# OPNsense and pfSense CE serve 192.168.1.0/24 on LAN out of the box). The ISP
+# segment is the Internet: the lab router hands the firewall's WAN an address
+# by DHCP, as an ISP does, and inet01 answers there (HTTP on 80 and 8080,
+# writing down where each connection came from).
+#
+# fw01 is a regular PC with an empty disk and the firewall's installer in the
+# drive (winlab/bsdfw.py): Intel e1000 cards em0 (cabled to the ISP) and em1
+# (cabled to the LAN), SATA, a VGA screen and a serial console. For pfSense CE
+# instead, set image = "pfsense-ce" after importing the ISO you downloaded
+# from Netgate, or add a second firewall from the Workbench shelf.
+# ---------------------------------------------------------------------------
+[[network]]
+id = "lan"
+cidr = "192.168.1.0/24"
+vlan = 10
+routed = false
+description = "the LAN: pc01, and the firewall's LAN port; the firewall serves DHCP here"
+
+[[network]]
+id = "isp"
+cidr = "198.51.100.0/24"
+vlan = 99
+wan = true
+dhcp = true
+description = "the ISP handoff: the lab router leases the firewall's WAN address; inet01 is the Internet"
+
+[[node]]
+id = "fw01"
+image = "opnsense-dvd"
+kind = "custom"
+cpus = 1
+memory_mb = 2048
+boot_order = 5
+description = "the firewall you install: em0 to the ISP (WAN), em1 to the LAN; installer in the drive"
+
+  [node.vars]
+  disk_gb = 16
+
+  [[node.nic]]
+  network = "isp"
+
+  [[node.nic]]
+  network = "lan"
+
+[[node]]
+id = "inet01"
+image = "alpine"
+kind = "linux"
+cpus = 1
+memory_mb = 512
+roles = ["inet-host"]
+boot_order = 8
+description = "the Internet: answers HTTP on 80 and 8080 and logs where each connection came from"
+
+  [[node.nic]]
+  network = "isp"
+  ip = "198.51.100.10"
+
+[[node]]
+id = "pc01"
+image = "win11"
+kind = "windows-client"
+cpus = 2
+memory_mb = 2048
+roles = []
+boot_order = 30
+description = "a PC on the LAN: leases its address from the firewall and opens its web GUI"
+
+  [[node.nic]]
+  network = "lan"

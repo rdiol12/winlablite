@@ -1,0 +1,91 @@
+[exercise]
+id = "joiners-from-hr-csv"
+title = "Automate joiners: HR's weekly CSV into accounts, checked, logged and scheduled"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01"]
+brief = """
+HR drops the joiners for next week as a CSV in C:\\HR\\Joiners on dc01, every
+week. Press Break in the lesson first: it puts this week's sheet there. Write
+the script that turns it into accounts without you watching: every valid row
+becomes an enabled account in its department's group that must change its
+first password; a row it cannot do is refused and logged; the sheet moves to
+Processed; running it twice changes nothing; a scheduled task runs it daily.
+"""
+tasks = [
+  "Write C:\\Scripts\\New-Starters.ps1: skip accounts that exist, refuse rows whose G-<department> group does not exist, log every decision in C:\\HR\\Joiners\\Logs",
+  "Create the valid rows' accounts enabled, outside the default Users container, in their G- group, with a random first password that must be changed at the first sign-in",
+  "Move the processed sheet into C:\\HR\\Joiners\\Processed",
+  "Register a scheduled task that runs the script every day",
+]
+
+[[check]]
+name = "every valid joiner has an enabled account in the right group"
+node = "dc01"
+script = '''
+$want = @{ nokafor = 'Finance'; tbecker = 'Sales'; lferreira = 'Operations'; amehta = 'Finance' }
+$bad = @()
+foreach ($k in $want.Keys) {
+  $u = Get-ADUser -Filter "SamAccountName -eq '$k'" -Properties Department, MemberOf
+  if (-not $u) { $bad += ($k + ' missing') }
+  elseif (-not $u.Enabled) { $bad += ($k + ' disabled') }
+  elseif ($u.Department -ne $want[$k]) { $bad += ($k + ' wrong department') }
+  elseif (-not (@($u.MemberOf) -match ('^CN=G-' + $want[$k] + ','))) { $bad += ($k + ' not in G-' + $want[$k]) }
+}
+if ($bad.Count) { $bad -join '; ' } else { 'True' }
+'''
+expect = "True"
+weight = 3
+hint = "Press Break in the lesson first. Each row: New-ADUser with the sheet's columns, -Enabled $true, then Add-ADGroupMember ('G-' + Department)"
+
+[[check]]
+name = "they live in an OU and must pick their own password"
+node = "dc01"
+script = '''
+$bad = @()
+foreach ($k in 'nokafor', 'tbecker', 'lferreira', 'amehta') {
+  $u = Get-ADUser -Filter "SamAccountName -eq '$k'" -Properties pwdLastSet, LastLogonDate
+  if (-not $u) { $bad += ($k + ' missing') }
+  elseif ($u.DistinguishedName -match ',CN=Users,DC=') { $bad += ($k + ' in the default Users container') }
+  elseif (([int64]$u.pwdLastSet -ne 0) -and -not $u.LastLogonDate) { $bad += ($k + ' need not change the first password') }
+}
+if ($bad.Count) { $bad -join '; ' } else { 'True' }
+'''
+expect = "True"
+weight = 1
+hint = "-Path 'OU=Staff,DC=corp,DC=lab' and -ChangePasswordAtLogon $true on New-ADUser (no GPO links to CN=Users)"
+
+[[check]]
+name = "the Marketing row was refused, and the log says why"
+node = "dc01"
+script = '''
+$made = [bool](Get-ADUser -Filter "SamAccountName -eq 'glin'")
+$said = [bool](Get-ChildItem -Path 'C:\HR\Joiners\Logs' -File -ErrorAction SilentlyContinue | Select-String -Pattern 'glin' -SimpleMatch)
+if ($made) { 'glin was created, but Marketing has no group' } elseif (-not $said) { 'no log line in C:\HR\Joiners\Logs mentions glin' } else { 'True' }
+'''
+expect = "True"
+weight = 2
+hint = "if (-not (Get-ADGroup -Filter \"Name -eq '$g'\")) { Add-Content $log \"refuse $($r.SamAccountName): no group $g\"; continue }"
+
+[[check]]
+name = "the sheet was moved to Processed"
+node = "dc01"
+script = '''
+$left = @(Get-ChildItem -Path 'C:\HR\Joiners' -Filter *.csv -File -ErrorAction SilentlyContinue).Count
+$done = @(Get-ChildItem -Path 'C:\HR\Joiners\Processed' -Filter *.csv -File -ErrorAction SilentlyContinue).Count
+[bool]($left -eq 0 -and $done -ge 1)
+'''
+expect = "True"
+weight = 1
+hint = "Move-Item $file.FullName C:\\HR\\Joiners\\Processed -Force once its rows are done, so tomorrow's run does not read it again"
+
+[[check]]
+name = "a scheduled task runs New-Starters.ps1"
+node = "dc01"
+script = '''
+$t = @(Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.State -ne 'Disabled' -and (@($_.Actions | ForEach-Object { [string]$_.Execute + ' ' + [string]$_.Arguments }) -join ' ') -match 'New-Starters[.]ps1' })
+[bool]($t.Count -ge 1 -and @($t[0].Triggers).Count -ge 1)
+'''
+expect = "True"
+weight = 2
+hint = "Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM"

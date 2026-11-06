@@ -1,0 +1,86 @@
+[lesson]
+id = "firewall-install-by-hand"
+title = "Install a firewall by hand: OPNsense or pfSense CE, interfaces, first rules"
+module = "security"
+order = 35
+lab = "firewall-by-hand"
+node = "fw01"
+nodes = ["fw01", "inet01", "pc01"]
+exercise = "first-rules-on-your-firewall"
+minutes = 60
+summary = "Put a real BSD firewall on an empty two-port PC from its own installer, assign WAN and LAN on its console, finish it from a lab PC's browser, then write the first rule and compare OPNsense with pfSense CE."
+why = '''
+The firewall in a small office is very often a plain PC with two network
+cards and OPNsense or pfSense on it. Both are FreeBSD with the pf packet
+filter and a web GUI; the person who installs one meets the same three
+moments: the installer, the console's interface assignment (which card is the
+Internet, which is the office) and the first login to the web GUI from a PC
+inside. Get the cards the wrong way round and the office has no way out and
+the GUI faces the Internet.
+
+fw01 is a regular PC: an empty 16 GB SATA disk, two Intel e1000 cards that
+FreeBSD calls em0 and em1 (port 1 and port 2 on its front panel), a VGA
+screen and a serial console (COM1, its Terminal window), and the installer in
+its DVD drive. OPNsense's installer was fetched from the project's mirror and
+checked against its SHA-256; pfSense CE is only handed out by Netgate behind
+a store account, so for it you import the ISO you downloaded yourself. The
+LAN switch is not cabled to the lab router: until fw01 runs, pc01 is alone.
+The ISP segment is the Internet: the lab router leases the firewall's WAN an
+address by DHCP and inet01 answers HTTP there on ports 80 and 8080.
+'''
+concepts = [
+  "Interface assignment: the installer names cards by driver (em0, em1); you decide which is WAN and which LAN, and every default rule follows from that choice",
+  "Out of the box both serve LAN 192.168.1.1/24 with a DHCP server, take WAN by DHCP, allow everything from LAN out, and allow nothing in on WAN",
+  "Outbound NAT: what leaves on WAN carries the WAN address; inet01 never sees 192.168.1.x",
+  "Rules are per interface, read top down, first match wins: a block for one port has to sit above LAN's default allow rule",
+  "The web GUI listens on LAN only; pfSense adds an anti-lockout rule so a bad LAN rule cannot lock you out of it",
+  "OPNsense (BSD 2-Clause, Deciso) forked from pfSense in 2015: twice-yearly major releases, a live system on the installer, an MVC GUI and API; pfSense CE (Apache 2.0, Netgate) sits beside the commercial pfSense Plus",
+]
+steps = [
+  "Get the installer onto this PC: Setup, Firewall installers. Fetch OPNsense from its mirror; for pfSense CE download the AMD64 ISO from Netgate (it asks for an account) and import it with Browse… (the .iso.gz is fine). For pfSense set fw01's image to pfsense-ce, or drag a Firewall from the Workbench shelf and pick pfSense CE.",
+  "On the Workbench, look at fw01's ports: port 1 is em0, cabled to the isp switch; port 2 is em1, cabled to the lan switch. That is the order the installer will show.",
+  "OPNsense: power on fw01 and open its screen. UEFI finds nothing on the empty disk and boots the installer into a live system. At the login prompt log in as installer (its password is the product's name in lower case, as OPNsense's documentation says), keep the keymap, pick Install (UFS), the 16 GB disk ada0, set a root password, then Complete Install and reboot: the disk boots from now on.",
+  "pfSense CE: the BIOS boots its installer. Accept the copyright notice, Install pfSense, keep the keymap, Auto (UFS) on the whole disk, and Reboot when it is done. At the first boot it asks for VLANs (n), then the WAN interface (em0) and the LAN interface (em1), and shows the console menu.",
+  "OPNsense's console menu: 1) Assign interfaces, no LAGGs or VLANs, WAN em0, LAN em1, confirm. Read the banner: WAN has a 198.51.100.x lease from the lab router, LAN is 192.168.1.1/24. The menu, or the Terminal window on COM1, is where you come back when the GUI is gone.",
+  "Start pc01 and log on. ipconfig shows a 192.168.1.x lease and 192.168.1.1 as gateway: the firewall's DHCP server. Open Edge at https://192.168.1.1, accept the self-signed certificate (it is the firewall's own) and log in: root and the password you set on OPNsense; on pfSense admin, with the default its documentation gives.",
+  "Run the setup wizard: hostname fw01, domain corp.lab, leave DNS empty (the lab has no resolver), your time zone. On the WAN page keep DHCP and untick Block bogon networks: the lab's Internet is TEST-NET space, which the bogon list contains. Keep LAN 192.168.1.1/24, change the admin password on pfSense, and reload.",
+  "From pc01 try the Internet: Test-NetConnection 198.51.100.10 -Port 80 succeeds, and (Invoke-WebRequest http://198.51.100.10/ -UseBasicParsing).Content says which address you arrived from: the firewall's WAN lease, not 192.168.1.x. That is outbound NAT.",
+  "Write the first rule: Firewall, Rules, LAN. Add a rule above the default allow: Block, protocol TCP, source LAN net, destination any, destination port 8080, tick Log, description 'no 8080 from the office'. Save and Apply. Test-NetConnection 198.51.100.10 -Port 8080 now fails, -Port 80 still works.",
+  "Watch it work: Firewall, Log Files, Live View on OPNsense (Status, System Logs, Firewall on pfSense) shows your rule dropping the 8080 attempt. On the console's shell, pfctl -sr | grep 8080 shows the rule as pf holds it.",
+  "Compare the two (install the other one as a second firewall from the shelf, cabled the same way, if you have time): the installer (a live system you log into, or a menu-driven installer), where interface assignment happens, the default LAN rules (pfSense's anti-lockout rule), the menus, and the release model. Then press Check my work.",
+]
+pitfalls = [
+  "em0 and em1 swapped: LAN on the ISP side means pc01 gets no lease and the GUI faces the Internet; use 1) Assign interfaces again, matching the ports on the Workbench.",
+  "A block rule below LAN's default allow never matches: first match wins, so drag it above.",
+  "Block bogon networks left on: replies to connections you opened still pass, but anything the Internet side starts, and some lab tests, are dropped, because 198.51.100.0/24 is documentation space.",
+  "The Netgate Installer download needs Netgate's servers during the install; the lab has no internet, so it stops. Use the offline pfSense-CE-<version>-RELEASE-amd64.iso if you have it, or OPNsense.",
+  "A firewall that boots the installer again after the install still has the DVD first in its boot order: set the boot order back to the disk in its Workbench panel.",
+]
+further = [
+  "OPNsense documentation: Installation and setup",
+  "Netgate documentation: Installing pfSense software",
+  "FreeBSD Handbook: Firewalls, PF",
+]
+
+[[verify]]
+label = "the firewall from the LAN"
+node = "pc01"
+cmd = "Test-NetConnection 198.51.100.10 -Port 80 | Select-Object RemoteAddress, TcpTestSucceeded; Test-NetConnection 198.51.100.10 -Port 8080 | Select-Object RemoteAddress, TcpTestSucceeded"
+
+[[quiz]]
+q = "fw01's installer lists em0 and em1. On the Workbench, port 1 is cabled to the ISP switch. Which card is WAN?"
+answer = "em0"
+wrong = ["em1", "Whichever gets a DHCP lease first", "Both: the firewall bridges them"]
+why = "FreeBSD numbers the cards in bus order, port 1 first; the cable on port 1 runs to the ISP, so em0 is WAN."
+
+[[quiz]]
+q = "pc01 opens http://198.51.100.10/. Which source address does inet01 see?"
+answer = "The firewall's WAN address"
+wrong = ["pc01's 192.168.1.x address", "The lab router's address", "192.168.1.1"]
+why = "Automatic outbound NAT rewrites everything that leaves on WAN to the WAN address."
+
+[[quiz]]
+q = "A block rule for TCP 8080 sits below LAN's default allow-any rule. What happens to pc01's connection to port 8080?"
+answer = "It passes: the allow rule matches first"
+wrong = ["It is blocked: block rules always win", "It is blocked and logged", "It is rejected with a reset"]
+why = "pf rules on OPNsense and pfSense are quick rules: the first match decides, so the block has to be above."
