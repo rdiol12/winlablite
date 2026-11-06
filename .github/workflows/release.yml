@@ -66,7 +66,9 @@ jobs:
         env:
           WINLAB_SIGN_PFX_BASE64: ${{ secrets.WINLAB_SIGN_PFX_BASE64 }}
           WINLAB_SIGN_PASSWORD: ${{ secrets.WINLAB_SIGN_PASSWORD }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\build-exe.ps1 -Edition core
+        # In this pwsh (PowerShell 7), as the winlab CI runs it: Windows
+        # PowerShell 5.1 turns a native command's stderr into an error.
+        run: .\packaging\build-exe.ps1 -Edition core
 
       - name: The exe is winlab core
         shell: pwsh
