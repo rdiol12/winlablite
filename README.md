@@ -26,6 +26,25 @@ clusters, Hyper-V, mail, web farms, SAN, security operations and more), the
 whole hardware workbench, scenarios, exam prep and updates:
 https://smartcartapp.net/pricing
 
+## Screenshots
+
+The desktop the first time it opens, with the trial notice and the guided setup:
+
+![Welcome screen](docs/screenshots/welcome.png)
+
+The network workbench: the lab's machines, switch and router, cabled. Double-click
+the router or the switch for its front panel and its console.
+
+![Network workbench](docs/screenshots/workbench.png)
+
+The lessons, in order; each one is checked inside the machines:
+
+![Lessons](docs/screenshots/lessons.png)
+
+The network map: every device, its addresses, routes and DHCP:
+
+![Network map](docs/screenshots/network-map.png)
+
 ## Install
 
 Run `winlab-core-<version>-setup.exe` from the Releases page (or unzip
