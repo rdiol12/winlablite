@@ -70,9 +70,14 @@ On Windows with Inno Setup 6.3+:
 
     powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1 -Edition core
 
-It writes `dist\winlab-core-<version>-setup.exe` and `-win64.zip`. Pushing a
-tag `core-v<version>` builds and publishes them as a GitHub release
-(.github/workflows/release-core.yml).
+It writes `dist\winlab-core-<version>-setup.exe` and `-win64.zip`.
+
+**Releases:** publish a release on GitHub's Releases page (tag it with the
+version, e.g. `v0.2.0`) and `.github/workflows/release.yml` builds the
+installer and the zip on Windows and attaches them to that release in about
+15 minutes. Pushing a tag `core-v<version>` does the same and creates the
+release itself; running the workflow by hand keeps the files as the run's
+artifact.
 
 ## What winlab does not ship
 

@@ -1,19 +1,26 @@
-name: release-core
+name: release
 
-# Builds and publishes winlab core (winlab/edition.py: one lab, its lessons
-# and drills, no licence) when a core tag is pushed: git tag core-v1.2.3,
-# git push origin core-v1.2.3. Never on pull requests or branch pushes.
+# Builds the winlab trial's installer (winlab-core-<version>-setup.exe) and
+# the portable zip, and attaches both to a GitHub release:
+#   - publish a release on the Releases page (any tag, e.g. v0.2.0): the
+#     files are added to that release when the build finishes;
+#   - or push a tag core-v<version>: the release is created with them;
+#   - or run it by hand (Actions > release > Run workflow): the files are
+#     kept as the run's artifact, no release is touched.
 # No secrets are needed; a code-signing certificate is used when set
 # (WINLAB_SIGN_PFX_BASE64, WINLAB_SIGN_PASSWORD; see packaging/sign.ps1).
 on:
+  release:
+    types: [published]
   push:
     tags: ["core-v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-core-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -26,17 +33,18 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: The tag matches winlab.__version__
+      - name: Version
         id: ver
         shell: bash
         run: |
-          tag="${GITHUB_REF_NAME#core-v}"
           code="$(python -c 'import winlab; print(winlab.__version__)')"
-          if [ "$tag" != "$code" ]; then
-            echo "::error::tag core-v$tag does not match winlab/__init__.py __version__ = $code"
-            exit 1
-          fi
           echo "version=$code" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            tag="${GITHUB_REF_NAME#core-}"; tag="${tag#v}"
+            if [ "$tag" != "$code" ]; then
+              echo "::warning::the tag $GITHUB_REF_NAME is not winlab's version $code (winlab/__init__.py); the files are named for $code"
+            fi
+          fi
 
       - name: Unit tests
         run: python tests/test_winlab.py
@@ -63,20 +71,41 @@ jobs:
           $labs = & "$d\winlab.exe" lab list
           $labs
           if (-not ($labs -match 'ad-ds-basics')) { throw 'the core lab is missing' }
-          if (($labs | Select-String -Pattern '^\s+\S+\s+\d+ nodes').Count -ne 1) { throw 'core lists more than one lab' }
+          foreach ($lab in 'firewall-by-hand', 'router-protocols') { if (-not ($labs -match $lab)) { throw "the trial lab $lab is missing" } }
+          if (($labs | Select-String -Pattern '^\s+\S+\s+\d+ nodes').Count -ne 3) { throw 'the trial lists other than its three labs' }
 
-      - name: Release notes from the tag message
-        shell: bash
-        run: |
-          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
-          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > release-notes.md
-          [ -s release-notes.md ] || echo "winlab core ${{ steps.ver.outputs.version }}" > release-notes.md
+      - name: Keep the files with the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: winlab-trial-${{ steps.ver.outputs.version }}
+          path: |
+            dist/winlab-core-${{ steps.ver.outputs.version }}-setup.exe
+            dist/winlab-core-${{ steps.ver.outputs.version }}-win64.zip
+          if-no-files-found: error
 
-      - name: GitHub release
+      - name: Attach to the release
+        if: github.event_name == 'release'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${{ steps.ver.outputs.version }}"
-          gh release create "$GITHUB_REF_NAME" --title "winlab core $v" --notes-file release-notes.md \
+          gh release upload "$GITHUB_REF_NAME" --clobber "dist/winlab-core-$v-setup.exe" "dist/winlab-core-$v-win64.zip"
+
+      - name: Release notes from the tag message
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          git tag -l --format='%(contents)' "$GITHUB_REF_NAME" > release-notes.md
+          [ -s release-notes.md ] || echo "winlab trial ${{ steps.ver.outputs.version }}" > release-notes.md
+
+      - name: Create the release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${{ steps.ver.outputs.version }}"
+          gh release create "$GITHUB_REF_NAME" --title "winlab trial $v" --notes-file release-notes.md \
             "dist/winlab-core-$v-setup.exe" "dist/winlab-core-$v-win64.zip"
