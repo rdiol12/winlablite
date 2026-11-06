@@ -77,7 +77,8 @@ version, e.g. `v0.2.0`) and `.github/workflows/release.yml` builds the
 installer and the zip on Windows and attaches them to that release in about
 15 minutes. Pushing a tag `core-v<version>` does the same and creates the
 release itself; running the workflow by hand keeps the files as the run's
-artifact.
+artifact, and attaches them to a release when you type its tag (to rebuild
+a release from the latest main).
 
 ## What winlab does not ship
 
