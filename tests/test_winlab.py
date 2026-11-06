@@ -6372,10 +6372,14 @@ def test_real_guis_bmc_redfish():
     if not shutil.which("sh"):
         check("the BMC's Redfish API (no sh here: skipped)", True)
         return
-    if shutil.which("bash"):   # Git's sh on Windows is bash outside POSIX mode
+    # Git's sh on Windows is bash outside POSIX mode (a bare "bash" there may
+    # be WSL's launcher instead), so on Windows that sh is the bash to try
+    import os
+    bash = shutil.which("sh") if os.name == "nt" else shutil.which("bash")
+    if bash:
         import subprocess
         from winlab import paths
-        r = subprocess.run(["bash", "-n", str(paths.CONTENT / "agent" / "bmc.sh")], capture_output=True, text=True)
+        r = subprocess.run([bash, "-n", str(paths.CONTENT / "agent" / "bmc.sh")], capture_output=True, text=True)
         check("the BMC's script parses as bash too, not only as busybox sh", r.returncode == 0, r.stderr[:300])
     with tempfile.TemporaryDirectory() as td:
         folder, tag = _bmc_folder(Path(td))
