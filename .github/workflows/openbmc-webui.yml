@@ -1,0 +1,95 @@
+name: openbmc-webui
+
+# Builds OpenBMC's web UI (webui-vue, Apache-2.0) from upstream source at the
+# commit winlab pins (winlab/openbmcui.py: COMMIT) and publishes it as the
+# release asset winlab fetches at preparation for the servers' BMCs:
+#   release openbmc-webui-<short sha>, asset openbmc-webui-<short sha>.tar.gz
+# The pack (tools/pack_openbmc_webui.py) is reproducible: the job refuses to
+# publish when its SHA-256 is not the one pinned in winlab/openbmcui.py
+# (ASSET_SHA256), so what customers download is what the code checks for.
+# Run by hand only (Actions > openbmc-webui > Run workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the release (off: build and check the digest only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: openbmc-webui
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The pinned commit, digest and node version
+        id: pin
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import winlab.openbmcui as o
+          print(f"commit={o.COMMIT}")
+          print(f"tag={o.TAG}")
+          print(f"asset={o.ASSET}")
+          print(f"sha256={o.ASSET_SHA256}")
+          print(f"node={o.NODE_VERSION}")
+          print(f"upstream={o.UPSTREAM}")
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ steps.pin.outputs.node }}
+
+      - name: webui-vue at the pinned commit
+        run: |
+          git init -q webui-vue
+          git -C webui-vue fetch -q --depth 1 "${{ steps.pin.outputs.upstream }}" "${{ steps.pin.outputs.commit }}"
+          git -C webui-vue checkout -q FETCH_HEAD
+          test "$(git -C webui-vue rev-parse HEAD)" = "${{ steps.pin.outputs.commit }}"
+
+      - name: Build it as upstream does (npm ci, npm run build)
+        working-directory: webui-vue
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+          ls -l dist dist/*
+
+      - name: Pack it (dist, LICENSE, NOTICE, third-party licences) and check the digest
+        run: |
+          python tools/pack_openbmc_webui.py --src webui-vue --commit "${{ steps.pin.outputs.commit }}" --out "${{ steps.pin.outputs.asset }}"
+          got="$(sha256sum "${{ steps.pin.outputs.asset }}" | cut -d' ' -f1)"
+          echo "sha256 $got"
+          if [ "$got" != "${{ steps.pin.outputs.sha256 }}" ]; then
+            echo "::error::the pack's SHA-256 is $got, winlab/openbmcui.py pins ${{ steps.pin.outputs.sha256 }}: not published. Find what differs (node or npm version, the lockfile) or pin the new digest and size."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pin.outputs.tag }}
+          path: ${{ steps.pin.outputs.asset }}
+
+      - name: Publish the release
+        # Published from rdiol12/winlablite only: that repository is public, so a
+        # customer's PC can download the asset; a run in rdiol12/winlab builds only.
+        if: ${{ inputs.publish && github.repository == 'rdiol12/winlablite' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.pin.outputs.tag }}"
+          notes="OpenBMC web UI (webui-vue, Apache-2.0) built from ${{ steps.pin.outputs.upstream }} at ${{ steps.pin.outputs.commit }}, unmodified (npm ci, npm run build on node ${{ steps.pin.outputs.node }}). winlab fetches it at preparation for the servers' management processors. LICENSE, NOTICE and THIRD-PARTY-LICENSES.txt are inside the archive. SHA-256 ${{ steps.pin.outputs.sha256 }}."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "${{ steps.pin.outputs.asset }}" --clobber
+          else
+            gh release create "$tag" "${{ steps.pin.outputs.asset }}" --title "OpenBMC web UI ${tag#openbmc-webui-}" --notes "$notes" --target "$GITHUB_SHA" --latest=false
+          fi

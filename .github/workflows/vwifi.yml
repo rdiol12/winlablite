@@ -1,0 +1,116 @@
+name: vwifi
+
+# Builds vwifi (LGPL-3.0, github.com/Raizo62/vwifi) from upstream source at the
+# commit winlab pins (winlab/vwifi.py: COMMIT) as static Linux x86-64 programs
+# (Alpine's musl, libnl built from its pinned release and linked in), and
+# publishes them with the complete source of both as the release asset winlab
+# fetches at preparation:
+#   release vwifi-<short sha>, asset vwifi-<short sha>.tar.gz
+# While winlab/vwifi.py pins no SHA-256 (ASSET_SHA256 = ""), the first run
+# publishes and prints the digest to pin. Once one is pinned the job refuses to
+# publish anything else, so what customers download is what the code checks for.
+# Run by hand only (Actions > vwifi > Run workflow).
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish the release (off: build and print the digest only)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vwifi
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: The pinned commits and digests
+        id: pin
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import winlab.vwifi as v
+          print(f"commit={v.COMMIT}")
+          print(f"short={v.SHORT}")
+          print(f"tag={v.TAG}")
+          print(f"asset={v.ASSET}")
+          print(f"sha256={v.ASSET_SHA256}")
+          print(f"upstream={v.UPSTREAM}")
+          print(f"libnl_url={v.LIBNL_URL}")
+          print(f"libnl_sha256={v.LIBNL_SHA256}")
+          print(f"libnl_version={v.LIBNL_VERSION}")
+          print(f"alpine={v.ALPINE}")
+          PY
+
+      - name: Sources at the pinned commit and release
+        run: |
+          git init -q vwifi
+          git -C vwifi fetch -q --depth 1 "${{ steps.pin.outputs.upstream }}" "${{ steps.pin.outputs.commit }}"
+          git -C vwifi checkout -q FETCH_HEAD
+          test "$(git -C vwifi rev-parse HEAD)" = "${{ steps.pin.outputs.commit }}"
+          git -C vwifi archive --format=tar --prefix="vwifi-${{ steps.pin.outputs.short }}/" HEAD | gzip -n -9 > "vwifi-${{ steps.pin.outputs.short }}-source.tar.gz"
+          curl -fsSL -o "libnl-${{ steps.pin.outputs.libnl_version }}.tar.gz" "${{ steps.pin.outputs.libnl_url }}"
+          echo "${{ steps.pin.outputs.libnl_sha256 }}  libnl-${{ steps.pin.outputs.libnl_version }}.tar.gz" | sha256sum -c -
+
+      - name: Build static programs in Alpine (libnl, then vwifi)
+        run: |
+          docker run --rm -v "$PWD:/w" -w /w "${{ steps.pin.outputs.alpine }}" sh -euxc '
+            apk add --no-cache build-base cmake pkgconf linux-headers flex bison git
+            mkdir -p /tmp/nl && tar -xzf libnl-${{ steps.pin.outputs.libnl_version }}.tar.gz -C /tmp/nl --strip-components=1
+            cd /tmp/nl && ./configure --prefix=/opt/nl --enable-static --disable-shared --disable-cli && make -j"$(nproc)" && make install
+            cd /w/vwifi
+            PKG_CONFIG_PATH=/opt/nl/lib/pkgconfig cmake -S . -B /w/build -DENABLE_VHOST=OFF -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXE_LINKER_FLAGS=-static
+            cmake --build /w/build -j"$(nproc)"
+            strip /w/build/vwifi-server /w/build/vwifi-client /w/build/vwifi-ctrl /w/build/vwifi-add-interfaces
+            file /w/build/vwifi-* || true
+            /w/build/vwifi-ctrl -h | head -n 3
+          '
+
+      - name: Pack it (programs, LICENSE, NOTICE, complete source) and check the digest
+        run: |
+          python tools/pack_vwifi.py --bin build \
+            --vwifi-src "vwifi-${{ steps.pin.outputs.short }}-source.tar.gz" \
+            --libnl-src "libnl-${{ steps.pin.outputs.libnl_version }}.tar.gz" \
+            --license vwifi/LICENSE.md --out "${{ steps.pin.outputs.asset }}"
+          got="$(sha256sum "${{ steps.pin.outputs.asset }}" | cut -d' ' -f1)"
+          echo "sha256 $got"
+          echo "::notice::vwifi pack SHA-256 $got (pin it as ASSET_SHA256 in winlab/vwifi.py)"
+          pinned="${{ steps.pin.outputs.sha256 }}"
+          if [ -n "$pinned" ] && [ "$got" != "$pinned" ]; then
+            echo "::error::the pack's SHA-256 is $got, winlab/vwifi.py pins $pinned: not published."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pin.outputs.tag }}
+          path: ${{ steps.pin.outputs.asset }}
+
+      - name: Publish the release
+        # Published from rdiol12/winlablite only: that repository is public, so a
+        # customer's PC can download the asset; a run in rdiol12/winlab builds only.
+        if: ${{ inputs.publish && github.repository == 'rdiol12/winlablite' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.pin.outputs.tag }}"
+          notes="vwifi (LGPL-3.0) built from ${{ steps.pin.outputs.upstream }} at ${{ steps.pin.outputs.commit }}, unmodified, as static Linux x86-64 programs in ${{ steps.pin.outputs.alpine }} with libnl ${{ steps.pin.outputs.libnl_version }} (LGPL-2.1) linked in. The archive carries LICENSE.md, a NOTICE and the complete source of both. winlab fetches it at preparation for real Wi-Fi between the lab's Linux machines."
+          if gh release view "$tag" >/dev/null 2>&1; then
+            if [ -z "${{ steps.pin.outputs.sha256 }}" ]; then
+              echo "::error::release $tag exists and winlab/vwifi.py pins no digest yet: pin the first build's SHA-256 instead of replacing it."
+              exit 1
+            fi
+            gh release upload "$tag" "${{ steps.pin.outputs.asset }}" --clobber
+          else
+            gh release create "$tag" "${{ steps.pin.outputs.asset }}" --title "vwifi ${{ steps.pin.outputs.short }}" --notes "$notes" --target "$GITHUB_SHA" --latest=false
+          fi
