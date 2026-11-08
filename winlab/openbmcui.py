@@ -11,7 +11,7 @@ Nothing is bundled. The project publishes webui-vue as source only, so it is
 built from upstream source at a pinned commit by this repository's workflow
 (.github/workflows/openbmc-webui.yml: npm ci, npm run build, then
 tools/pack_openbmc_webui.py) and published as an asset of a release of
-rdiol12/winlab, with webui-vue's LICENSE, a NOTICE and the licences of the npm
+rdiol12/winlablite, with webui-vue's LICENSE, a NOTICE and the licences of the npm
 packages built into it. At preparation (``winlab images prepare fabric``)
 this module fetches that asset onto this PC, checked against the SHA-256
 pinned here; the repository volume carries it to the router beside the
@@ -39,11 +39,11 @@ COMMIT = "50e92abc421665c1d7aac2d05a7dc38d6c86ade3"  # 2026-10-19, "Fix the miss
 SHORT = COMMIT[:7]
 TAG = f"openbmc-webui-{SHORT}"
 ASSET = f"{TAG}.tar.gz"
-RELEASE = f"https://github.com/rdiol12/winlab/releases/download/{TAG}"
+RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{TAG}"
 # The reproducible pack of that commit's build (tools/pack_openbmc_webui.py,
 # node 22.22.0, npm ci): computed from two clean local builds that gave the
 # same bytes. The workflow refuses to publish anything else.
-ASSET_SHA256 = "c662fc3d540591a967eb449cc5a2ef69d715e140c238b20639bea3e626048c93"
+ASSET_SHA256 = ""
 ASSET_SIZE = 595867
 NODE_VERSION = "22.22.0"
 # On the repository volume: <volume>/openbmc-webui/<asset>; the router finds it
