@@ -53,7 +53,7 @@ ASSET = f"{TAG}.tar.gz"
 RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{TAG}"
 # Pinned from the first published build (the workflow prints it); empty
 # means not published yet, and nothing is fetched.
-ASSET_SHA256 = ""
+ASSET_SHA256 = "76b1832ce7f45d7ed455fedd24ab1e90a8d41ee90edc748fcc34b1357a0ca2b7"
 PROGRAMS = ("mstpd", "mstpctl")
 # On the repository volume: <volume>/mstpd/<asset>; the router finds it under
 # Alpine's mount of the volume.
