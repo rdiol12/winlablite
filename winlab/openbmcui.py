@@ -43,7 +43,7 @@ RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{TAG}"
 # The reproducible pack of that commit's build (tools/pack_openbmc_webui.py,
 # node 22.22.0, npm ci): computed from two clean local builds that gave the
 # same bytes. The workflow refuses to publish anything else.
-ASSET_SHA256 = ""
+ASSET_SHA256 = "c662fc3d540591a967eb449cc5a2ef69d715e140c238b20639bea3e626048c93"
 ASSET_SIZE = 595867
 NODE_VERSION = "22.22.0"
 # On the repository volume: <volume>/openbmc-webui/<asset>; the router finds it

@@ -69,8 +69,8 @@ RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{TAG}"
 # Pinned from the first published build (the workflow printed it, 6 Nov
 # 2026: release vwifi-c3822ba); empty would mean not published, and nothing
 # would be fetched.
-ASSET_SHA256 = ""
-ASSET_SIZE = 2796693
+ASSET_SHA256 = "29c18f590ef85e6438b6b1649105ea42096f7fc3ab90f39adac1ec2a703f69b5"
+ASSET_SIZE = 2796700
 PROGRAMS = ("vwifi-server", "vwifi-client", "vwifi-ctrl", "vwifi-add-interfaces")
 # vwifi's own defaults: the clients' port, the spy's, the control port.
 PORT_TCP, PORT_SPY, PORT_CTRL = 8212, 8213, 8214
