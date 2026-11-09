@@ -95,10 +95,21 @@ def remember_lab(name: str) -> None:
 PAGE_PATH = Path(__file__).resolve().parent / "webui_page.html"
 
 
+def _with_language(page: bytes) -> bytes:
+    """<html lang/dir> set to Settings > Language before the page is sent, so
+    the browser sees the chosen language from the first byte and does not offer
+    to translate the page (the runtime translator keeps it current)."""
+    from . import i18n
+    lang = i18n.current()
+    rtl = i18n.LANGS.get(lang, ("", False))[1]
+    head = '<html lang="%s" dir="%s"' % (lang, "rtl" if rtl else "ltr")
+    return page.replace(b'<html lang="en"', head.encode(), 1)
+
+
 def page_bytes() -> bytes:
     """The desktop page; winlab core tells it which windows to leave out
     before its script runs (winlab/edition.py)."""
-    page = PAGE_PATH.read_bytes()
+    page = _with_language(PAGE_PATH.read_bytes())
     if not edition.is_core():
         return page
     tag = ("<script>window.WINLAB_EDITION='core';window.WINLAB_HIDDEN="

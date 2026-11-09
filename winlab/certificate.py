@@ -128,7 +128,7 @@ def _render_track(f: dict) -> str:
 
 def _page(name: str, heading: str, what: str, rows: str, date: str, code: str, verify: str = "",
           title_suffix: str = "") -> str:
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    return f"""<!doctype html><html lang="en" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">
 <title>winlab certificate: {html.escape(name)}{' · ' + html.escape(title_suffix) if title_suffix else ''}</title>
 <style>{_STYLE}</style></head><body>
 <div class="print"><button onclick="print()">Print or save as PDF</button></div>

@@ -227,7 +227,7 @@ def render(name: str = "") -> str:
                   for t, p in e["areas"]) + "</table>"
         for e in f["exams"])
     empty = "" if f["lessons_done"] or f["problems"] else "<p class='sub'>Nothing finished yet: pass a lesson's graded check or fix a problem and it appears here.</p>"
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+    return f"""<!doctype html><html lang="en" translate="no"><head><meta charset="utf-8"><meta name="google" content="notranslate">
 <title>winlab skills transcript: {esc(name)}</title>
 <style>
 @page {{ size: A4; margin: 14mm }}

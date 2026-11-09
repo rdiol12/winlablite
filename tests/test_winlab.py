@@ -11132,6 +11132,13 @@ def test_desktop_languages():
             v = i18n.view()
             check("the choice holds and the view carries direction and table",
                   v["lang"] == "he" and v["rtl"] and v["table"].get("Settings") and len(v["langs"]) == 4)
+            from winlab import webui as _webui
+            head = _webui.page_bytes()[:120]
+            check("the page is sent with <html lang/dir> of the chosen language",
+                  head.startswith(b'<!doctype html>\n<html lang="he" dir="rtl" translate="no"'), head)
+            i18n.choose("en")
+            check("and back to English, left to right",
+                  b'<html lang="en" dir="ltr" translate="no"' in _webui.page_bytes()[:120])
         finally:
             paths.VAR = saved
     page = (root / "winlab" / "webui_page.html").read_text(encoding="utf-8")
@@ -11141,6 +11148,8 @@ def test_desktop_languages():
                     capture_output=True, text=True, encoding="utf-8")
         miss = _json.loads(r.stdout or "[]")
         check(f"{code}: every desktop text has a translation (docs/TRANSLATING.md)", not miss, str(miss[:5]))
+    check("the browser is told not to offer translating the page (it translates itself)",
+          'translate="no"' in page.split("<head>", 1)[0] and '<meta name="google" content="notranslate">' in page)
     check("the Settings page has the language picker and the page translates as it draws",
           'id="pref-lang"' in page and "function setLanguage(" in page and "MutationObserver" in page
           and "/api/i18n" in page)
