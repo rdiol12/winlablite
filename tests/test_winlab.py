@@ -3221,11 +3221,14 @@ def test_hardware_events():
 
 
 def test_native_window():
-    """winlab's own program window on Windows: a Win32 window with WebView2
-    (part of Windows) drawing the desktop; Microsoft's loader DLL fetched from
-    nuget.org at setup, never bundled; the Edge app window when it is missing."""
+    """winlab's own program window: a Win32 window with WebView2 (part of
+    Windows) or a GTK window with WebKitGTK (Linux) drawing the desktop;
+    Microsoft's loader DLL fetched from nuget.org at setup, never bundled; the
+    Edge app window when it cannot start, saying why; closing it stops winlab;
+    no console window beside it."""
     import io
     import json
+    import os
     import struct
     import sys
     import tempfile
@@ -3290,9 +3293,8 @@ def test_native_window():
             asked.clear()
             nativewin.fetch(get=get, say=lambda m: None)
             check("a second fetch downloads nothing", asked == [])
-            if sys.platform != "win32":
-                check("off Windows the native window is not offered", not nativewin.available()
-                      and "Edge" in nativewin.render_status())
+            check("on Windows without the loader the window is not offered, and says why",
+                  nativewin.unavailable({}, "win32")[0] == "loader" if not nativewin.loader_path().exists() else True)
         finally:
             paths.RUNTIME = old
 
@@ -3303,12 +3305,22 @@ def test_native_window():
     check("the window runs as `winlab window <url>`", cmd[-2:] == ["window", "http://127.0.0.1:8780/"])
     args = cli.build_parser().parse_args(["window", "http://127.0.0.1:8780/"])
     check("`winlab window` is a command", args.cmd == "window" and args.url == "http://127.0.0.1:8780/")
-    try:
-        nativewin.run("http://127.0.0.1:8780/", Path("var/appwindow")) if sys.platform != "win32" else None
-        ran = sys.platform == "win32"
-    except nativewin.NativeWindowError:
-        ran = True
-    check("off Windows the window refuses to run (so the caller falls back)", ran)
+    check("Linux without a graphical session: no window, and the reason",
+          nativewin.unavailable({}, "linux")[0] == "display")
+    check("macOS has no native window", nativewin.unavailable({}, "darwin")[0] == "platform")
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        try:
+            nativewin.run("http://127.0.0.1:8780/", Path("var/appwindow"))
+            ok = False
+        except nativewin.NativeWindowError as exc:
+            ok = exc.code in nativewin.FALLBACK_CODES
+        check("a window that cannot open refuses with a reason code (so the caller falls back)", ok)
+    home = "http://127.0.0.1:8780/"
+    check("winlab's own pop-outs stay winlab windows",
+          nativewin.is_local("http://127.0.0.1:8780/?screen=dc01", home) and nativewin.is_local("about:blank", home))
+    check("the outside world goes to the user's browser",
+          not nativewin.is_local("https://www.microsoft.com/en-us/evalcenter/", home)
+          and not nativewin.is_local("http://127.0.0.1:9999/", home))
 
     class Proc:
         def __init__(self, code):
@@ -3317,23 +3329,107 @@ def test_native_window():
         def poll(self):
             return self.code
 
+        def wait(self):
+            return self.code
+
     started = []
-    ok = appwindow.open_native("http://x/", wait=0.05, popen=lambda a, **k: started.append(a) or Proc(None))
-    check("a native window that stays up counts as opened", ok and started and started[0][-2] == "window")
-    check("one that quits at once does not",
-          not appwindow.open_native("http://x/", wait=0.3, popen=lambda a, **k: Proc(3)))
-    real_native, real_web = appwindow.open_native, appwindow.webbrowser.open
-    opened = []
-    try:
-        appwindow.open_native = lambda url: True
-        how = appwindow.open_window("http://x/", Path("var/appwindow"), env={}, native=True)
-        check("the native window comes first when it is there", how == "native")
-        appwindow.open_native = lambda url: False
-        appwindow.webbrowser.open = lambda url: opened.append(url)
-        how = appwindow.open_window("http://x/", Path("var/appwindow"), env={"WINLAB_BROWSER": "tab"}, native=True)
-        check("a native window that fails falls back to the browser", how == "tab" and opened == ["http://x/"])
-    finally:
-        appwindow.open_native, appwindow.webbrowser.open = real_native, real_web
+    proc = appwindow.open_native("http://x/", wait=0.05, popen=lambda a, **k: started.append(a) or Proc(None))
+    check("a native window that stays up counts as opened", proc is not None and started and started[0][-2] == "window")
+    check("one that quits at once with an error does not",
+          appwindow.open_native("http://x/", wait=0.3, popen=lambda a, **k: Proc(3)) is None)
+    check("one that went to a browser tab by itself still counts",
+          appwindow.open_native("http://x/", wait=0.3, popen=lambda a, **k: Proc(appwindow.UNTRACKED)) is not None)
+
+    old_var = paths.VAR
+    real_native, real_web, real_follow = appwindow.open_native, appwindow.webbrowser.open, appwindow._follow
+    opened, followed = [], []
+    with tempfile.TemporaryDirectory() as td:
+        paths.VAR = Path(td)
+        try:
+            nativewin.note_fallback("webkit", "no WebKitGTK")
+            got = nativewin.fallback()
+            check("why the desktop is in a browser window is remembered for the page",
+                  got.get("code") == "webkit" and got.get("detail") == "no WebKitGTK")
+            nativewin.note_fallback("nonsense")
+            check("an unknown reason is filed as failed", nativewin.fallback().get("code") == "failed")
+            appwindow._follow = lambda target, *a: followed.append((target, a))
+            appwindow.open_native = lambda url: Proc(None)
+            how = appwindow.open_window("http://x/", Path(td) / "aw", env={}, native=True, on_closed=lambda: None)
+            check("the native window comes first when it is there, and the desktop follows it",
+                  how == "native" and followed and followed[0][0] is appwindow._follow_native
+                  and nativewin.fallback() == {})
+            appwindow.open_native = lambda url: None
+            appwindow.webbrowser.open = lambda url: opened.append(url)
+            how = appwindow.open_window("http://x/", Path(td) / "aw", env={"WINLAB_BROWSER": "tab"}, native=True)
+            check("a native window that fails falls back to the browser and says why",
+                  how == "tab" and opened == ["http://x/"] and nativewin.fallback().get("code") == "crashed")
+            appwindow.open_native = lambda url: (_ for _ in ()).throw(AssertionError("not asked"))
+            opened.clear()
+            how = appwindow.open_window("http://x/", Path(td) / "aw", env={"WINLAB_BROWSER": "tab", "DISPLAY": ""},
+                                        on_closed=lambda: None)
+            check("WINLAB_BROWSER=tab is the user's choice: no native window, no complaint",
+                  how == "tab" and opened == ["http://x/"])
+
+            closed = []
+            appwindow._follow_native(Proc(0), "http://x/", Path(td) / "aw", {}, lambda: closed.append(1))
+            check("closing winlab's window stops the desktop", closed == [1])
+            appwindow._follow_native(Proc(appwindow.UNTRACKED), "http://x/", Path(td) / "aw", {},
+                                     lambda: closed.append(2))
+            check("a browser tab cannot be followed, so the desktop keeps running", closed == [1])
+            opened.clear()
+            appwindow._follow_native(Proc(9), "http://x/", Path(td) / "aw", {"WINLAB_BROWSER": "tab"},
+                                     lambda: closed.append(3))
+            check("a window that crashes brings the desktop back in the browser, saying why",
+                  opened == ["http://x/"] and nativewin.fallback().get("code") == "crashed" and closed == [1])
+
+            real_bw, real_run = appwindow.open_browser_window, nativewin.run
+            try:
+                def fail(url, profile, title="winlab"):
+                    raise nativewin.NativeWindowError("no runtime here", "runtime")
+                nativewin.run = fail
+                appwindow.open_browser_window = lambda url, profile, env=None: ("tab", None)
+                code = cli.main(["window", "http://127.0.0.1:8780/"])
+                check("`winlab window` that cannot start notes why, opens the browser window and exits untracked",
+                      code == appwindow.UNTRACKED and nativewin.fallback().get("code") == "runtime")
+                code = cli.main(["window", "--no-fallback", "http://127.0.0.1:8780/"])
+                check("--no-fallback only fails", code == 3)
+            finally:
+                appwindow.open_browser_window, nativewin.run = real_bw, real_run
+        finally:
+            paths.VAR = old_var
+            appwindow.open_native, appwindow.webbrowser.open, appwindow._follow = real_native, real_web, real_follow
+
+    from winlab import quietstart
+    check("double-clicked (only winlab on its console): run quietly",
+          quietstart.owns_console_alone([10, 11], 11, 10))
+    check("typed in a terminal (the shell shares the console): stay where it was typed",
+          not quietstart.owns_console_alone([4, 10, 11], 11, 10) and not quietstart.owns_console_alone([], 11, 10))
+    spawned = []
+    check("off Windows nothing is relaunched",
+          not quietstart.relaunch_hidden({}, "linux", pids=[os.getpid()], popen=lambda *a, **k: spawned.append(a)))
+    hidden = quietstart.relaunch_hidden({}, "win32", pids=[os.getpid()],
+                                        popen=lambda a, **k: spawned.append((a, k)))
+    check("the quiet copy has no console window and knows it is the quiet one",
+          hidden and spawned and spawned[0][1]["creationflags"] == quietstart.CREATE_NO_WINDOW
+          and spawned[0][1]["env"].get(quietstart.ENV) == "1")
+    spawned.clear()
+    check("from a terminal nothing is relaunched",
+          not quietstart.relaunch_hidden({}, "win32", pids=[1, 2, 3], popen=lambda *a, **k: spawned.append(a))
+          and not spawned)
+
+    page = Path("winlab/webui_page.html").read_text(encoding="utf-8")
+    web = Path("winlab/webui.py").read_text(encoding="utf-8")
+    check("the desktop says why it is in a browser window, a sentence per reason",
+          "function appWindowNotice(" in page and all(f"{c}:" in page for c in nativewin.FALLBACK_CODES)
+          and '"/api/appwindow"' in web)
+    check("the desktop stops when its window is closed",
+          "on_closed=window_closed" in web and "httpd.shutdown" in web)
+    iss = Path("packaging/winlab.iss").read_text(encoding="utf-8")
+    ps = Path("packaging/build-exe.ps1").read_text(encoding="utf-8")
+    check("the shortcuts start winlab without a console window (winlab-start.exe, built from our own C#)",
+          'Filename: "{app}\\winlab-start.exe"; WorkingDir' in iss and "winlab-start.cs" in ps
+          and "/target:winexe" in ps and Path("packaging/launcher/winlab-start.cs").is_file()
+          and "WINLAB_QUIET" in Path("packaging/launcher/winlab-start.cs").read_text(encoding="utf-8"))
 
     lic = Path("LICENSING.md").read_text(encoding="utf-8")
     boot = Path("winlab/bootstrap.py").read_text(encoding="utf-8")

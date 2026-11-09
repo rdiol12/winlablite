@@ -13,7 +13,7 @@
 #   dist\winlab.exe                      the product
 #   dist\winlab-<version>-setup.exe      the installer customers run (needs
 #                                        Inno Setup 6.3+, free, on the build machine)
-#   dist\winlab-<version>-win64.zip      portable: exe + README, LICENSING, CURRICULUM, EULA (+ translations)
+#   dist\winlab-<version>-win64.zip      portable: exe + winlab-start.exe + README, LICENSING, CURRICULUM, EULA (+ translations)
 #
 # What is and is not inside the exe (see LICENSING.md):
 #   in   CPython (PSF), winlab (yours), content pack (yours), PyInstaller's
@@ -175,6 +175,17 @@ if (-not (Test-Path $exe)) { throw "expected $exe" }
 $mb = (Get-Item $exe).Length / 1MB
 Write-Host ("  built: {0} ({1:N1} MB)" -f $exe, $mb) -ForegroundColor Green
 
+# 3b. winlab-start.exe: what the shortcuts run, so no console window opens
+#     beside the app (packaging\launcher\winlab-start.cs). Compiled with the
+#     C# compiler that is part of Windows' own .NET Framework 4.
+$csc = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
+if (-not (Test-Path $csc)) { throw "the C# compiler of .NET Framework 4 is missing ($csc)" }
+$starter = Join-Path $root 'dist\winlab-start.exe'
+Invoke-Native { & $csc /nologo /target:winexe /optimize+ "/win32icon:$ico" "/out:$starter" `
+                  (Join-Path $PSScriptRoot 'launcher\winlab-start.cs') }
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path $starter)) { throw 'compiling winlab-start.exe failed' }
+Write-Host ("  built: {0} ({1:N0} KB, starts winlab without a console window)" -f $starter, ((Get-Item $starter).Length / 1KB)) -ForegroundColor Green
+
 # 4. Sign the exe when a certificate is available (packaging\sign.ps1).
 $pfxTemp = ''
 if (-not $SignPfx -and $env:WINLAB_SIGN_PFX_BASE64) {
@@ -189,6 +200,10 @@ if (-not $env:WINLAB_SIGN_TIMESTAMP) { $env:WINLAB_SIGN_TIMESTAMP = $TimestampUr
 $signScript = Join-Path $PSScriptRoot 'sign.ps1'
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $signScript $exe
 $signed = $LASTEXITCODE -eq 0
+if ($signed) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $signScript $starter
+    if ($LASTEXITCODE -ne 0) { throw 'signing winlab-start.exe failed' }
+}
 if ($LASTEXITCODE -eq 2) {
     Write-Host '  signed: no (set WINLAB_SIGN_COMMAND, WINLAB_SIGN_THUMBPRINT or WINLAB_SIGN_PFX(_BASE64); SmartScreen will warn)' -ForegroundColor Yellow
 } elseif (-not $signed) {
@@ -227,7 +242,7 @@ if (-not $SkipZip) {
     $zip = Join-Path $root "dist\$prefix-$version-win64.zip"
     Remove-Item $zip -ErrorAction SilentlyContinue
     $docs = @("$root\README.md", "$root\LICENSING.md", "$root\CURRICULUM.md") + @(Get-ChildItem "$root\EULA*.txt" | ForEach-Object FullName)
-    Compress-Archive -Path (@($exe) + $docs) -DestinationPath $zip
+    Compress-Archive -Path (@($exe, $starter) + $docs) -DestinationPath $zip
     Write-Host "  zip  : $zip" -ForegroundColor Green
 }
 

@@ -976,9 +976,11 @@ def build_parser() -> argparse.ArgumentParser:
     vwf = vwsub.add_parser("fetch", help="fetch (or re-verify) the pinned viewer files")
     vwf.add_argument("--refresh", action="store_true", help="re-download every file")
 
-    wn = sub.add_parser("window", help="open a URL in winlab's own program window (what gui starts on Windows)")
+    wn = sub.add_parser("window", help="open a URL in winlab's own program window (what gui starts)")
     wn.add_argument("url")
     wn.add_argument("--fetch", action="store_true", help="fetch the WebView2 loader first")
+    wn.add_argument("--no-fallback", action="store_true",
+                    help="fail (exit 3) instead of opening an Edge/Chrome window when the native one cannot start")
 
     up = sub.add_parser("update", help="check whether a newer winlab is published (sends only a version string)")
     up.add_argument("--install", action="store_true",
@@ -2699,15 +2701,26 @@ def cmd_viewer(args) -> int:
 
 
 def cmd_window(args) -> int:
-    from . import nativewin
+    """winlab's own window on a URL, as a process the desktop follows: exit 0
+    when the user closed it. When it cannot start, the reason is noted for the
+    desktop to show and the Edge/Chrome app window opens in its place (and is
+    followed the same way); a plain browser tab exits UNTRACKED."""
+    from . import appwindow, nativewin
 
+    profile = paths.VAR / "appwindow"
     try:
         if args.fetch:
             nativewin.fetch()
-        return nativewin.run(args.url, paths.VAR / "appwindow")
-    except (nativewin.NativeWindowError, OSError) as exc:
+        return nativewin.run(args.url, profile)
+    except (nativewin.NativeWindowError, OSError, ValueError) as exc:
+        nativewin.note_fallback(getattr(exc, "code", "failed"), str(exc))
         print(f"winlab window: {exc}", file=sys.stderr)
-        return 3
+        if args.no_fallback:
+            return 3
+    how, proc = appwindow.open_browser_window(args.url, profile)
+    if proc is None:
+        return appwindow.UNTRACKED
+    return 0 if appwindow.wait_browser(proc) else appwindow.UNTRACKED
 
 
 def cmd_icon(args) -> int:
@@ -3815,6 +3828,12 @@ def main(argv: list[str] | None = None) -> int:
         # open the desktop on the last lab used. `winlab -h` still lists
         # the commands.
         args.cmd, args.lab, args.port, args.no_browser = "gui", "", 8780, False
+        from . import quietstart
+
+        if quietstart.relaunch_hidden():
+            # Double-clicked: the copy that runs the desktop has no console
+            # window; this one (and its console) goes away.
+            return 0
 
     if args.cmd == "doctor":
         return cmd_doctor(getattr(args, "bundle", None))

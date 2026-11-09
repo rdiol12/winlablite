@@ -480,6 +480,8 @@ border:1px solid var(--line2);border-radius:8px;box-shadow:var(--shadow);display
 #toast{position:fixed;bottom:62px;right:16px;background:var(--mica);color:var(--fg);padding:12px 16px;border-radius:8px;border:1px solid var(--line2);
 box-shadow:var(--shadow);font-size:13px;opacity:0;transition:opacity .25s;pointer-events:none;max-width:60ch;z-index:9500;border-left:4px solid var(--accent)}
 #toast.show{opacity:1}
+#aw-note{position:fixed;top:12px;left:50%;transform:translateX(-50%);width:min(720px,calc(100% - 24px));z-index:9400;box-shadow:var(--shadow);display:flex;gap:10px;align-items:flex-start}
+#aw-note .aw-txt{flex:1}#aw-note .aw-detail{display:block;margin-top:4px;font-size:11px;color:var(--muted)}
 #welcome{position:fixed;inset:0;bottom:48px;background:rgba(0,0,0,.35);z-index:8900;display:none;place-items:center;padding:20px}
 #welcome.show{display:grid}
 .setup-adv{padding:0}.setup-adv>summary{padding:12px 16px;cursor:default;font-weight:600;font-size:14px}.setup-adv[open]>summary{border-bottom:1px solid var(--line)}
@@ -3043,6 +3045,25 @@ function i18nPicker(){const s=document.getElementById('pref-lang');if(!s)return;
 // the browser's own message boxes take the page's English too
 ['alert','confirm','prompt'].forEach(f=>{const o=window[f].bind(window);window[f]=(m,...a)=>o(tr(m),...a);});
 i18nLoad();
+// The desktop belongs in winlab's own window (nativewin.py: WebView2 on Windows, WebKitGTK on
+// Linux). When that window could not start and the desktop opened in a browser window instead,
+// /api/appwindow says why: one sentence per reason, the technical detail under it.
+const AW_WHY={
+  loader:"Its WebView2 part is not downloaded yet: open Setup and choose Let winlab download the rest.",
+  runtime:"This PC has no Microsoft Edge WebView2 Runtime. Windows Update installs it, or get it from Microsoft's WebView2 page.",
+  webkit:"This PC has no WebKitGTK. Install the package libwebkit2gtk-4.1-0 (Debian, Ubuntu), webkit2gtk4.1 (Fedora) or webkit2gtk-4.1 (Arch).",
+  display:"There is no desktop session to open a window on.",
+  platform:"winlab's own window is made for Windows and Linux.",
+  failed:"It started and then stopped with an error.",
+  crashed:"It closed unexpectedly."};
+async function appWindowNotice(){
+  if(SOLO||$('#aw-note'))return;
+  let r;try{r=await (await fetch('/api/appwindow')).json();}catch(e){return;}
+  if(!r||!AW_WHY[r.code])return;
+  const d=document.createElement('div');d.id='aw-note';d.className='notice';d.setAttribute('role','status');
+  d.innerHTML=`<div class="aw-txt"><b>winlab opened in a browser window because its own window could not start.</b> <span>${esc(AW_WHY[r.code])}</span>${r.detail?`<span class="aw-detail mono">${esc(r.detail)}</span>`:''}</div><button class="btn" onclick="this.parentNode.remove()">Close</button>`;
+  document.body.appendChild(d);}
+setTimeout(appWindowNotice,1200);
 // Inline SVG icons (no external images — artifact CSP blocks them).
 const _s=(p,vb='0 0 24 24')=>`<svg viewBox="${vb}" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
 const ICONS={
