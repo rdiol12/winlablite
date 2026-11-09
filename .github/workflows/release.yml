@@ -53,6 +53,10 @@ jobs:
           fi
 
       - name: Unit tests
+        # One group at a time: the drive-bay and media groups each write
+        # gigabytes of disk images, and two at once fill the hosted runner.
+        env:
+          WINLAB_TEST_JOBS: "1"
         run: python tests/test_winlab.py
 
       - name: Inno Setup
