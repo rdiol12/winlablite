@@ -48,8 +48,18 @@ def load() -> dict:
     out["shifts"] = [x for x in (raw.get("shifts") or []) if isinstance(x, dict)]
     if isinstance(raw.get("helpdesk"), list):
         out["helpdesk"] = [x for x in raw["helpdesk"] if isinstance(x, dict)]
+    if isinstance(raw.get("ticketgame"), dict):
+        out["ticketgame"] = raw["ticketgame"]
     if isinstance(raw.get("companies"), list):
         out["companies"] = [x for x in raw["companies"] if isinstance(x, dict)]
+    if isinstance(raw.get("breakfix"), list):
+        out["breakfix"] = [x for x in raw["breakfix"] if isinstance(x, dict)]
+    if isinstance(raw.get("interviews"), list):
+        out["interviews"] = [x for x in raw["interviews"] if isinstance(x, dict)]
+    if isinstance(raw.get("incidents"), list):
+        out["incidents"] = [x for x in raw["incidents"] if isinstance(x, dict)]
+    if isinstance(raw.get("certificates"), dict):
+        out["certificates"] = {k: v for k, v in raw["certificates"].items() if isinstance(v, dict)}
     out["updated"] = float(raw.get("updated") or 0.0)
     return out
 
@@ -192,8 +202,21 @@ def problem_broken(scenario_id: str, node: str, broken: bool) -> dict:
         e["broken_on"] = node
         e["broken_at"] = time.time()
         e["tries"] = 0
+        e.pop("break_error", None)
     else:
         e.pop("broken_on", None)
+    e["updated"] = time.time()
+    save(data)
+    return e
+
+
+def problem_break_failed(scenario_id: str, node: str, message: str) -> dict:
+    """A break that ran beside the request (from outside the machine)
+    failed: the Problems card says so instead of showing a problem that
+    never arrived."""
+    data = load()
+    e = data["problems"].setdefault(scenario_id, {})
+    e["break_error"] = f"{node}: {message}"[:300]
     e["updated"] = time.time()
     save(data)
     return e
@@ -270,6 +293,30 @@ def record_helpdesk(result: dict) -> dict:
     return result
 
 
+def record_breakfix(result: dict) -> dict:
+    """Keeps a break-and-fix run's report card (winlab/breakfix.py): the newest 50."""
+    data = load()
+    data["breakfix"] = (data.get("breakfix", []) + [dict(result)])[-50:]
+    save(data)
+    return result
+
+
+def record_interview(result: dict) -> dict:
+    """Keeps a job interview's result (winlab/interview.py): the newest 50."""
+    data = load()
+    data["interviews"] = (data.get("interviews", []) + [dict(result)])[-50:]
+    save(data)
+    return result
+
+
+def record_incident(result: dict) -> dict:
+    """Keeps a security incident drill's report card (winlab/incidents.py): the newest 50."""
+    data = load()
+    data["incidents"] = (data.get("incidents", []) + [dict(result)])[-50:]
+    save(data)
+    return result
+
+
 def record_company(result: dict) -> dict:
     """Keeps a company run's totals (winlab/company.py), one entry per run
     (its lab and start), brought up to date each day: the newest 50."""
@@ -280,6 +327,21 @@ def record_company(result: dict) -> dict:
     data["companies"] = (runs + [dict(result)])[-50:]
     save(data)
     return result
+
+
+def record_certificate(track_id: str, fields: dict) -> dict:
+    """An issued track certificate (winlab/certshare.py): its code, the name
+    on it, when, and the verification link once it is shared."""
+    data = load()
+    certs = data.setdefault("certificates", {})
+    e = certs.setdefault(track_id, {})
+    for k, v in fields.items():
+        if v is None:
+            e.pop(k, None)
+        else:
+            e[k] = v
+    save(data)
+    return e
 
 
 def student() -> str:
@@ -294,7 +356,14 @@ def set_student(name: str) -> None:
 
 def reset(lesson_id: str = "") -> None:
     if not lesson_id:
-        save(_empty())
+        # Starting over forgets scores and ticks, not what was earned: issued
+        # track certificates (and their verification links) stay listed.
+        old = load()
+        fresh = _empty()
+        for k in ("certificates", "student"):
+            if old.get(k):
+                fresh[k] = old[k]
+        save(fresh)
         return
     data = load()
     data["lessons"].pop(lesson_id, None)

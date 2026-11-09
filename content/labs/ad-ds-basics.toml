@@ -15,6 +15,7 @@ exercises = [
   "dhcp-reserve-and-exclude",
   "finance-folder-permissions",
   "switch-named-from-console",
+  "first-look-at-dc01",
 ]
 # Every machine is a regular PC running stock Windows: Intel devices Windows
 # drives with its own drivers, every service as installed. On a PC where

@@ -1,0 +1,18 @@
+{
+ "Machines and their screens": "המכונות והמסכים שלהן",
+ "Using winlab": "שימוש ב-winlab",
+ "machine": "מכונה",
+ "screen": "מסך",
+ "console": "קונסולה",
+ "vm": "vm",
+ "ctrl+alt+del": "ctrl+alt+del",
+ "full screen": "מסך מלא",
+ "checkpoint": "נקודת ביקורת",
+ "snapshot": "תמונת מצב",
+ "password": "סיסמה",
+ "power": "הפעלה",
+ "suspend": "השהיה",
+ "keyboard": "מקלדת",
+ "Power, screens, the keyboard, checkpoints and the Administrator password.": "הפעלה, מסכים, המקלדת, נקודות ביקורת וסיסמת מנהל המערכת.",
+ "**Machines** lists every machine in the lab with its power state, memory and processors.\n\n- Double-click a machine to open its screen in a Virtual Machine Connection window. You see it from the firmware to the sign-in screen.\n- **Ctrl+Alt+Del** is a button on the window's toolbar (Ctrl+Alt+End does the same). **Type text** sends text as keystrokes.\n- Hold Esc to leave full screen. The View menu fits the screen to the window or opens it in a window of its own.\n- The **Administrator password** is behind the key in the taskbar. Each lab has its own, made on this PC.\n- **Checkpoints** save a machine's disks. Take one before something risky, and go back to it from the Action menu.\n- **Suspend** hibernates a machine, and its next start resumes it.\n\nFrom a command prompt: `winlab lab up <lab>`, `winlab lab down <lab>`, `winlab console <machine> --lab <lab>` and `winlab snap <lab> save <name>`.": "**מכונות** מציג כל מכונה במעבדה עם מצב ההפעלה, הזיכרון והמעבדים שלה.\n\n- לחץ פעמיים על מכונה כדי לפתוח את המסך שלה בחלון חיבור למכונה וירטואלית. אתה רואה אותה מהקושחה ועד מסך הכניסה.\n- **Ctrl+Alt+Del** הוא לחצן בסרגל הכלים של החלון (Ctrl+Alt+End עושה אותו דבר). **הקלד טקסט** שולח טקסט כהקשות מקשים.\n- החזק את Esc כדי לצאת ממסך מלא. התפריט תצוגה מתאים את המסך לחלון או פותח אותו בחלון משלו.\n- **סיסמת מנהל המערכת** נמצאת מאחורי המפתח בשורת המשימות. לכל מעבדה יש סיסמה משלה, שנוצרה במחשב הזה.\n- **נקודות ביקורת** שומרות את הדיסקים של מכונה. צור אחת לפני משהו מסוכן, וחזור אליה מהתפריט פעולה.\n- **השהיה** מכניסה מכונה למצב שינה, וההפעלה הבאה שלה ממשיכה ממנו.\n\nמשורת פקודה: `winlab lab up <lab>`, `winlab lab down <lab>`, `winlab console <machine> --lab <lab>` ו-`winlab snap <lab> save <name>`."
+}

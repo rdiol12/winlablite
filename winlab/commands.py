@@ -119,6 +119,8 @@ def load_catalog() -> dict[str, Command]:
     """The entries of commands.toml, without their uses."""
     with COMMANDS.open("rb") as fh:
         raw = tomllib.load(fh)
+    from . import content
+    raw = content.localized(COMMANDS, raw)
     unknown = set(raw) - set(KIND_IDS) - {"match"}
     if unknown:
         raise CommandError(f"commands.toml: unknown section(s) {', '.join(sorted(unknown))}")

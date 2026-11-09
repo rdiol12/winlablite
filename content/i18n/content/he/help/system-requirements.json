@@ -1,0 +1,16 @@
+{
+ "System requirements": "דרישות מערכת",
+ "Start here": "התחל כאן",
+ "requirements": "דרישות",
+ "ram": "ram",
+ "memory": "זיכרון",
+ "disk": "דיסק",
+ "cpu": "מעבד",
+ "cores": "ליבות",
+ "windows 10": "windows 10",
+ "windows 11": "windows 11",
+ "hardware": "חומרה",
+ "pc": "מחשב",
+ "What this PC needs to run a lab, and how many machines fit.": "מה המחשב הזה צריך כדי להריץ מעבדה, וכמה מכונות נכנסות.",
+ "- A 64-bit PC with virtualization turned on in its firmware (Intel VT-x or AMD-V).\n- **8 GB of memory** at least. 16 GB runs every lesson; 24 GB runs the biggest labs as they are defined.\n- About **40 GB of free disk** for a Windows Server base and a Windows client base (about 25 GB with the Server base alone). Each machine you boot adds 2 to 6 GB.\n- Windows 10 or 11, any edition, Home included. winlab uses the Windows Hypervisor Platform, an optional feature on all of them.\n- 4 processor cores or more for a lab with several machines.\n\n| Memory | What runs |\n|---|---|\n| 8 GB | every one- and two-machine lesson, and on a quiet PC the whole ad-ds-basics lab |\n| 16 GB | every lesson, and the enterprise-multisite lab trimmed for that run |\n| 24 GB | enterprise-multisite and every-role as defined |\n\nSetup checks all of this for you. From a command prompt, `winlab doctor` prints the same checks with more detail.": "- מחשב 64 סיביות עם וירטואליזציה מופעלת בקושחה שלו (Intel VT-x או AMD-V).\n- **8 GB זיכרון** לפחות. 16 GB מריצים כל שיעור; 24 GB מריצים את המעבדות הגדולות ביותר כפי שהן מוגדרות.\n- כ-**40 GB דיסק פנוי** לבסיס Windows Server ולבסיס לקוח Windows (כ-25 GB עם בסיס ה-Server בלבד). כל מכונה שאתה מאתחל מוסיפה 2 עד 6 GB.\n- Windows 10 או 11, כל מהדורה, כולל Home. winlab משתמש ב-Windows Hypervisor Platform, תכונה אופציונלית בכולן.\n- 4 ליבות מעבד או יותר למעבדה עם כמה מכונות.\n\n| זיכרון | מה רץ |\n|---|---|\n| 8 GB | כל שיעור של מכונה אחת ושתי מכונות, ובמחשב שקט כל מעבדת ad-ds-basics |\n| 16 GB | כל שיעור, ומעבדת enterprise-multisite מקוצצת להרצה הזו |\n| 24 GB | enterprise-multisite ו-every-role כפי שהן מוגדרות |\n\nההתקנה בודקת את כל זה בשבילך. משורת פקודה, `winlab doctor` מציג את אותן בדיקות עם יותר פרטים."
+}

@@ -215,6 +215,9 @@ def _build_network(entry: dict, path: Path) -> Network:
         switch=str(entry.get("switch", "")),
         tag=int(entry.get("tag", 0) or 0),
         upstream=str(entry.get("upstream", "")),
+        link=bool(entry.get("link", False)),
+        vswitch=str(entry.get("vswitch", "private") or "private").lower(),
+        host_ports=[str(x) for x in entry.get("host_ports", []) or []],
         impair=Impairment(
             delay_ms=int(imp.get("delay_ms", 0)),
             jitter_ms=int(imp.get("jitter_ms", 0)),
@@ -444,8 +447,9 @@ def validate(lab: Lab) -> None:
                             f"(expected six hex pairs like 52:54:00:12:34:56)")
             if not nic.plugged:
                 # A lesson lab may leave a second port for the student to cable
-                # (a storage array's port 2); a machine's first port is its address.
-                if not lab.workbench and idx == 0:
+                # (a storage array's port 2); a machine's first port is its address,
+                # unless it is a laptop's radio card on the real air (winlab/vwifi.py).
+                if not lab.workbench and idx == 0 and str(node.vars.get("air", "")) != "0":
                     errs.append(f"node '{node.id}' nic{idx}: has no network (only a "
                                 f"workbench network leaves a port without a cable)")
                 if nic.ip or nic.trunk:
@@ -523,7 +527,8 @@ def validate(lab: Lab) -> None:
 
     _validate_domain_shape(lab, errs)
 
-    from . import firewall, naming, sites
+    from . import firewall, naming, sites, vswitch
+    errs.extend(vswitch.validate(lab))
     errs.extend(sites.validate(lab))
     errs.extend(firewall.validate(lab))
     errs.extend(naming.validate(lab))

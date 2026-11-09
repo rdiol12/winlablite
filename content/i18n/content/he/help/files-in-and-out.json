@@ -1,0 +1,20 @@
+{
+ "Files in and out of a lab": "קבצים אל מעבדה וממנה",
+ "Using winlab": "שימוש ב-winlab",
+ "file": "קובץ",
+ "copy": "העתקה",
+ "drag": "גרירה",
+ "drop": "שחרור",
+ "usb": "usb",
+ "stick": "דיסק-און-קי",
+ "dvd": "dvd",
+ "disc": "תקליטור",
+ "transfer": "העברה",
+ "isolated": "מבודד",
+ "isolation": "בידוד",
+ "internet": "אינטרנט",
+ "shared folder": "תיקייה משותפת",
+ "sealed": "אטום",
+ "The lab is sealed off from this PC. These are the ways a file crosses.": "המעבדה אטומה מהמחשב הזה. אלה הדרכים שבהן קובץ יכול לעבור.",
+ "The machines are cabled only to each other. They cannot reach this PC, your home network or the internet, so nothing you do in the lab can touch them. That is also why Windows Update and Microsoft sign-in do not work inside.\n\n**Into a machine**\n\n- Drop a file on a machine's window, or use Clipboard, Send a file. It lands on the machine's Public desktop in a folder called From this PC (up to 64 MB).\n- Plug in a USB stick from the machine's Settings or the media shelf. **Plug folder** copies a folder of yours onto a new stick; your folder itself is never shared.\n- Put a disc in the DVD drive: any image from Images, or a folder burned to a disc on the media shelf.\n- From a command prompt: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**Out of a machine**\n\n- `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` copies a file back over the same channel.": "המכונות מחוברות בכבלים רק זו לזו. הן לא יכולות להגיע למחשב הזה, לרשת הביתית שלך או לאינטרנט, כך ששום דבר שאתה עושה במעבדה לא יכול לגעת בהם. זו גם הסיבה ש-Windows Update והכניסה עם חשבון Microsoft לא עובדים בפנים.\n\n**אל מכונה**\n\n- שחרר קובץ על חלון של מכונה, או השתמש בלוח, שלח קובץ. הוא מגיע לשולחן העבודה Public של המכונה בתיקייה בשם From this PC (עד 64 MB).\n- חבר דיסק-און-קי מההגדרות של המכונה או ממדף המדיה. **חבר תיקייה** מעתיקה תיקייה שלך לדיסק-און-קי חדש; התיקייה שלך עצמה לעולם אינה משותפת.\n- הכנס תקליטור לכונן ה-DVD: כל תמונה מתמונות, או תיקייה שנצרבה לתקליטור במדף המדיה.\n- משורת הפקודה: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**ממכונה**\n\n- `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` מעתיק קובץ בחזרה דרך אותו ערוץ."
+}

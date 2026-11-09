@@ -25,6 +25,15 @@ Each tool is checked the way its publisher allows:
     checks that it is a whole zip with the Suite's programs in it, records
     its SHA-256, and the README says how to check Microsoft's signature on
     each program inside Windows (Get-AuthenticodeSignature).
+  WinDbg (Microsoft's WinDbg licence terms): the same rule. winlab fetches
+    it only when the customer asks and accepts Microsoft's terms (winlab
+    toolkit fetch --windbg): the App Installer file Microsoft publishes at
+    aka.ms/windbg/download names the current package, and the .msixbundle
+    comes from Microsoft's own download host. Microsoft publishes no
+    checksum: winlab checks it is a whole bundle whose manifest names
+    Microsoft.WinDbg and records its SHA-256; Windows checks Microsoft's
+    signature itself when Add-AppxPackage installs it. The blue-screen
+    lesson reads a crash dump with it.
 
 A tool that cannot be verified is not written to the stick.
 """
@@ -60,6 +69,11 @@ SYSINTERNALS_PAGE = "https://learn.microsoft.com/sysinternals/downloads/sysinter
 SYSINTERNALS_LICENSE = "https://learn.microsoft.com/sysinternals/license-terms"
 # Programs the Suite's zip must hold, or it is not the Suite.
 SYSINTERNALS_EXPECT = ("procexp.exe", "Autoruns.exe", "PsExec.exe", "tcpview.exe")
+# WinDbg: Microsoft's App Installer file names the current .msixbundle.
+WINDBG_APPINSTALLER = "https://aka.ms/windbg/download"
+WINDBG_PAGE = "https://learn.microsoft.com/windows-hardware/drivers/debugger/"
+WINDBG_LICENSE = "https://learn.microsoft.com/windows-hardware/drivers/debugger/windbg-install"
+WINDBG_NAME = "Microsoft.WinDbg"
 
 TOOLS = {
     "putty": {"product": "PuTTY", "license": "MIT", "folder": "PuTTY", "page": PUTTY_PAGE,
@@ -74,9 +88,15 @@ TOOLS = {
     "sysinternals": {"product": "Sysinternals Suite", "license": "Microsoft Sysinternals Software License Terms",
                      "folder": "Sysinternals", "page": SYSINTERNALS_PAGE, "source": "download.sysinternals.com",
                      "check": "a whole zip with the Suite's programs; Microsoft's signature on each program",
-                     "text": "Process Explorer, Process Monitor, Autoruns, PsExec, TCPView and the rest"},
+                     "text": "Process Explorer, Process Monitor, Autoruns, Sysmon, PsExec, TCPView, NotMyFault and the rest"},
+    "windbg": {"product": "WinDbg", "license": "Microsoft WinDbg licence terms",
+               "folder": "WinDbg", "page": WINDBG_PAGE, "source": "Microsoft's download host (aka.ms/windbg/download)",
+               "check": "a whole bundle whose manifest names Microsoft.WinDbg; Microsoft's signature checked by Windows at install",
+               "text": "the Windows debugger: opens crash dumps (C:\\Windows\\Minidump, MEMORY.DMP) and runs !analyze -v"},
 }
 OPEN_SOURCE = ("putty", "winscp", "notepadpp")
+# Microsoft's own tools: fetched only when the customer accepts their licence.
+ACCEPT = {"sysinternals": SYSINTERNALS_LICENSE, "windbg": WINDBG_LICENSE}
 
 
 class ToolkitError(Exception):
@@ -237,18 +257,59 @@ def check_sysinternals(data: bytes) -> list[str]:
     return sorted(n for n in names if n.lower().endswith(".exe"))
 
 
+def parse_appinstaller(xml: str) -> tuple[str, str]:
+    """(version, bundle url) from WinDbg's App Installer file: its
+    MainBundle must be Microsoft.WinDbg, over https from a microsoft.com host."""
+    m = re.search(r"<MainBundle\b([^>]*)/?>", xml)
+    if not m:
+        raise ToolkitError("WinDbg: Microsoft's App Installer file names no package")
+    attrs = dict(re.findall(r'(\w+)="([^"]*)"', m[1]))
+    url, name = attrs.get("Uri", ""), attrs.get("Name", "")
+    host = urllib.parse.urlparse(url).hostname or ""
+    if name != WINDBG_NAME or not url.startswith("https://") or not (host == "microsoft.com" or host.endswith(".microsoft.com")):
+        raise ToolkitError(f"WinDbg: the App Installer file names {name or 'nothing'} at {url or 'no address'}, "
+                           "not Microsoft's WinDbg package")
+    return attrs.get("Version", ""), url
+
+
+def check_windbg(data: bytes) -> str:
+    """The .msixbundle, checked: a whole zip whose bundle manifest names
+    Microsoft.WinDbg. Returns the version the manifest gives."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            bad = z.testzip()
+            if bad:
+                raise ToolkitError(f"WinDbg: {bad} is damaged in the bundle")
+            try:
+                man = z.read("AppxMetadata/AppxBundleManifest.xml").decode("utf-8", "replace")
+            except KeyError:
+                raise ToolkitError("WinDbg: the download has no bundle manifest: not an .msixbundle") from None
+    except zipfile.BadZipFile as exc:
+        raise ToolkitError("WinDbg: the download is not an .msixbundle") from exc
+    m = re.search(r"<Identity\b[^>]*\bName=\"([^\"]+)\"[^>]*>", man)
+    if not m or m[1] != WINDBG_NAME:
+        raise ToolkitError(f"WinDbg: the bundle is {m[1] if m else 'unnamed'}, not {WINDBG_NAME}")
+    v = re.search(r"<Identity\b[^>]*\bVersion=\"([^\"]+)\"", man)
+    return v[1] if v else ""
+
+
 # ------------------------------------------------------------------ fetching
 def fetch(tools: tuple[str, ...] | None = None, accept_sysinternals: bool = False, progress=None,
-          get=_get, download=_download_to) -> dict:
+          get=_get, download=_download_to, accept_windbg: bool = False) -> dict:
     """Fetches the tools (the open-source three unless named; the
-    Sysinternals Suite only with accept_sysinternals) and records them.
-    A tool that fails is reported; the others are kept."""
+    Sysinternals Suite only with accept_sysinternals, WinDbg only with
+    accept_windbg) and records them. A tool that fails is reported; the
+    others are kept."""
     say = progress or (lambda _m: None)
     tools = tuple(tools or OPEN_SOURCE)
     if "sysinternals" in tools and not accept_sysinternals:
         raise ToolkitError("the Sysinternals Suite is Microsoft's, under its own licence ("
                            f"{SYSINTERNALS_LICENSE}): fetch it only if you accept those terms, "
                            "with winlab toolkit fetch --sysinternals")
+    if "windbg" in tools and not accept_windbg:
+        raise ToolkitError("WinDbg is Microsoft's, under its own licence terms ("
+                           f"{WINDBG_LICENSE}): fetch it only if you accept those terms, "
+                           "with winlab toolkit fetch --windbg")
     m = meta()
     errors = []
     for tool in tools:
@@ -274,6 +335,27 @@ def fetch(tools: tuple[str, ...] | None = None, accept_sysinternals: bool = Fals
                           "programs": len(progs)}]
                 version = time.strftime("%Y-%m-%d")
                 checked = "zip whole, Suite programs present; SHA-256 recorded on this PC"
+            elif tool == "windbg":
+                say(f"WinDbg: reading Microsoft's App Installer file ({WINDBG_APPINSTALLER}; you accepted its licence)")
+                try:
+                    xml = get(WINDBG_APPINSTALLER, timeout=60).decode("utf-8", "replace")
+                except BootstrapError as exc:
+                    raise ToolkitError(f"WinDbg: {exc}") from exc
+                version, url = parse_appinstaller(xml)
+                dest = d / "windbg.msixbundle"
+                say(f"WinDbg {version} from {url}")
+                try:
+                    download(url, dest, expect_sha="", label=dest.name)
+                except BootstrapError as exc:
+                    raise ToolkitError(f"WinDbg: {exc}") from exc
+                data = dest.read_bytes()
+                try:
+                    version = check_windbg(data) or version
+                except ToolkitError:
+                    dest.unlink(missing_ok=True)
+                    raise
+                files = [{"file": dest.name, "url": url, "sha256": hashlib.sha256(data).hexdigest()}]
+                checked = "bundle whole, manifest names Microsoft.WinDbg; SHA-256 recorded on this PC"
             else:
                 version, files = {"putty": putty_files, "winscp": winscp_files,
                                   "notepadpp": notepadpp_files}[tool](get)
@@ -323,6 +405,11 @@ def readme(m: dict) -> str:
             lines.append("  Install: run WinSCP-<version>-Setup.exe. Portable: unzip the Portable zip and run WinSCP.exe.")
         elif tool == "notepadpp":
             lines.append("  Install: run the Installer.x64.exe. Portable: unzip the portable zip and run notepad++.exe.")
+        elif tool == "windbg":
+            lines.append("  Install: Add-AppxPackage -Path <stick>\\WinDbg\\windbg.msixbundle in PowerShell (Windows checks")
+            lines.append("  Microsoft's signature as it installs), then start WinDbg and use File > Open dump file.")
+            lines.append("  With no internet the debugger has no symbols: it still names the bug check and the driver.")
+            lines.append(f"  Licence: {WINDBG_LICENSE} (for your own use; not to be passed on).")
         else:
             lines.append("  Unzip SysinternalsSuite.zip to a folder (C:\\Tools\\Sysinternals) and run the programs from it.")
             lines.append("  Microsoft signs each program: Get-AuthenticodeSignature .\\procexp64.exe should say Valid,")
@@ -345,7 +432,7 @@ def licenses(m: dict) -> str:
 def stick_files() -> dict[str, bytes]:
     if not ready():
         raise ToolkitError("no admin tools on this PC yet: winlab toolkit fetch (and, if you accept Microsoft's "
-                           "licence, winlab toolkit fetch --sysinternals), or Setup > Images")
+                           "licences, winlab toolkit fetch --sysinternals --windbg), or Setup > Images")
     m = {t: v for t, v in meta().items() if t in TOOLS and tool_ready(t)}
     out = {}
     for tool, t in m.items():
@@ -406,6 +493,7 @@ def render_status() -> str:
         lines.append(f"  {'':<20} {r['license']}, from {TOOLS[r['id']]['source']}")
     lines += ["", "  fetch:   winlab toolkit fetch                 (PuTTY, WinSCP, Notepad++)",
               "           winlab toolkit fetch --sysinternals  (only if you accept Microsoft's Sysinternals licence)",
+              "           winlab toolkit fetch --windbg        (only if you accept Microsoft's WinDbg licence)",
               "  stick:   winlab toolkit stick <lab> [<machine>]", ""]
     return "\n".join(lines)
 
@@ -432,7 +520,9 @@ def add_cli(sub) -> None:
     f.add_argument("--sysinternals", action="store_true",
                    help="also fetch the Sysinternals Suite from download.sysinternals.com: you accept "
                         "Microsoft's Sysinternals licence terms")
-    f.add_argument("--only", default="", help="comma-separated tools to fetch (putty, winscp, notepadpp, sysinternals)")
+    f.add_argument("--windbg", action="store_true",
+                   help="also fetch WinDbg from Microsoft's download host: you accept Microsoft's WinDbg licence terms")
+    f.add_argument("--only", default="", help="comma-separated tools to fetch (putty, winscp, notepadpp, sysinternals, windbg)")
     st = s.add_parser("stick", help="write the Admin toolkit stick onto a lab's media shelf")
     st.add_argument("lab")
     st.add_argument("node", nargs="?", default="", help="plug it straight into this machine")
@@ -443,8 +533,11 @@ def run_cli(args) -> int:
     try:
         if args.tkcmd == "fetch":
             only = tuple(t.strip() for t in args.only.split(",") if t.strip())
-            tools = only or (OPEN_SOURCE + (("sysinternals",) if args.sysinternals else ()))
-            fetch(tools, accept_sysinternals=args.sysinternals, progress=lambda m: print(f"  {m}"))
+            windbg = bool(getattr(args, "windbg", False))
+            tools = only or (OPEN_SOURCE + (("sysinternals",) if args.sysinternals else ())
+                             + (("windbg",) if windbg else ()))
+            fetch(tools, accept_sysinternals=args.sysinternals, accept_windbg=windbg,
+                  progress=lambda m: print(f"  {m}"))
             print()
         elif args.tkcmd == "stick":
             r = to_stick(args.lab, args.node)

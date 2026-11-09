@@ -5,6 +5,7 @@ module = "start"
 order = 10
 lab = "ad-ds-basics"
 node = "dc01"
+exercise = "first-look-at-dc01"
 minutes = 20
 summary = "Boot the lab, reach a machine three ways, and learn how a lesson is checked."
 why = '''
@@ -32,11 +33,14 @@ steps = [
   "Hover the key in the taskbar to see the Administrator password, click it to copy.",
   "Double-click dc01 in Machines to open its screen, press Ctrl+Alt+Del from the window's menu and log on as Administrator with that password.",
   "Open PowerShell inside dc01 and run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion. In a lesson, the Type it on dc01 button types a command into the machine's screen for you; you still press Enter.",
+  "In the same PowerShell window (not the ISE: the check reads PowerShell's own history), look at the network from inside: ipconfig shows 10.10.10.10 with gateway 10.10.10.1. Test-NetConnection 10.10.10.1 says PingSucceeded True: that is the lab router. Test-NetConnection 1.1.1.1 fails: nothing outside the lab answers, by design.",
   "In Machines, take a checkpoint of the whole lab named clean, so every later lesson can start over from here.",
+  "Press Check my work. winlab asks dc01 itself who is signed in at its screen and what its PowerShell history holds: the machine is the evidence, not a form.",
 ]
 pitfalls = [
   "A machine that shows booting for a long time on first start is installing from the base image; give it time rather than restarting it.",
-  "The lab has no internet on purpose. Anything that needs a download (modules, updates) is staged by winlab over the agent.",
+  "The lab has no internet on purpose. Anything that needs a download is fetched on your PC by winlab and reaches the lab the way it would reach a closed network: on a stick or a disc you plug into the machine.",
+  "Typing the commands in the PowerShell ISE or over a remote session: the check reads the history file of PowerShell on dc01's own screen, which those do not write.",
 ]
 further = [
   "README.md in this folder: the quick start and the command reference",
@@ -71,3 +75,9 @@ q = "What is a checkpoint (snapshot) for in an exercise?"
 answer = "Returning a machine's disk to a known state: the undo button"
 wrong = ["Copying files from the PC into the machine", "Backing up the domain to the cloud", "Making the machine boot faster"]
 why = "A snapshot is a saved copy of the disk you can go back to."
+
+[[quiz]]
+q = "How does winlab decide that a lesson's work is done?"
+answer = "It asks the machines themselves and compares their answers with a correctly configured system"
+wrong = ["It counts the steps you ticked", "It reads what you typed into a form", "It records your screen"]
+why = "The machines are the evidence, as in a real environment."

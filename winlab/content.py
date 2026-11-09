@@ -18,7 +18,7 @@ import tomllib
 from pathlib import Path, PurePosixPath
 
 from . import edition, paths
-from .packs import EXT, Pack, PackError, env_name
+from .packs import EXT, TRIAL, Pack, PackError, env_name
 
 TRIAL_LAB = "ad-ds-basics"
 UNLOCK_HINT = ("Unlock it with a license key: open Activate winlab in Settings, "
@@ -65,11 +65,10 @@ def rel(path: str | Path) -> str | None:
 
 
 def _load_packs() -> list[Pack]:
-    if edition.is_core():
-        return []   # core has no paid packs (winlab/edition.py)
     d = packs_dir()
     try:
-        files = sorted(d.glob(f"*{EXT}"))
+        # The trial opens only its own pack (packaging/trialpack.py), never a paid one.
+        files = sorted(f for f in d.glob(f"*{EXT}") if not edition.is_core() or f.stem == TRIAL)
         stamp = tuple((f.name, f.stat().st_mtime_ns, f.stat().st_size) for f in files)
     except OSError:
         return []
@@ -216,7 +215,173 @@ def load_toml(path: str | Path) -> dict:
         hit = (data, tomllib.loads(data.decode("utf-8")))
         with _lock:
             _parsed[key] = hit
-    return _copy(hit[1])
+    return localized(path, _copy(hit[1]))
+
+
+# --- translations (docs/TRANSLATING.md) ---------------------------------------
+# Content other than lessons (which have their own per-field files) is
+# translated by a string table per file: content/i18n/content/<lang>/<path>.json
+# maps each English text of the file to its translation. Only the text keys
+# below are swapped, never scripts, commands, names of machines or ids, so a
+# check runs the same in every language. Lab definitions are never translated:
+# the desktop writes them back.
+TEXT_KEYS = frozenset({
+    "title", "brief", "tasks", "hint", "name", "summary", "description", "why", "q", "options",
+    "answer", "gaps", "body", "keywords", "category", "text", "show", "missed", "debrief", "say",
+    "story", "model", "ask", "subject", "hello", "letter", "checks", "notice", "weights_note",
+    "what", "about", "done", "from", "sender", "label", "prompt", "need", "intro", "outro",
+    "goal", "detail", "details", "note", "notes", "question", "explain", "explanation", "lead",
+    "role",  # a track's job title (tracks.toml)
+})
+TRANSLATED_DIRS = ("exercises", "exams", "guides", "scenarios", "sites", "help", "places")
+TRANSLATED_FILES = ("commands.toml", "interviews.toml", "tracks.toml")
+
+
+def translation_file(path: str | Path, lang: str) -> Path | None:
+    """Where a content file's <lang> string table lives, or None when the file
+    is not one that is translated this way."""
+    try:
+        rel = PurePosixPath(Path(path).resolve().relative_to(paths.CONTENT.resolve()).as_posix())
+    except (ValueError, OSError):
+        return None
+    if not (rel.parts and (rel.parts[0] in TRANSLATED_DIRS or str(rel) in TRANSLATED_FILES)):
+        return None
+    return paths.CONTENT / "i18n" / "content" / lang / rel.with_suffix(".json")
+
+
+def text_strings(path: str | Path, doc: dict) -> list[str]:
+    """The English texts of a content document that its translation covers."""
+    out: dict[str, None] = {}
+    _walk(doc, _all_text(path), lambda s: out.setdefault(s) or s)
+    return [s for s in out if s.strip()]
+
+
+def _all_text(path) -> bool:
+    # commands.toml: every value is a description, keyed by the command itself
+    return Path(path).name == "commands.toml"
+
+
+def _walk(o, every: bool, fn, key: str = ""):
+    if isinstance(o, dict):
+        return {k: (v if (every and k == "match") else _walk(v, every, fn, k if not every else "text"))
+                for k, v in o.items()}
+    if isinstance(o, list):
+        return [_walk(x, every, fn, key) for x in o]
+    if isinstance(o, str) and (key in TEXT_KEYS):
+        return fn(o)
+    return o
+
+
+def localized(path: str | Path, doc: dict, lang: str | None = None) -> dict:
+    """The document with its texts in the desktop's language."""
+    if lang is None:
+        from . import i18n
+        lang = i18n.current()
+    if lang == "en":
+        return doc
+    f = translation_file(path, lang)
+    if f is None:
+        return doc
+    try:
+        import json
+        table = json.loads(read_text(f))   # a plain file or a pack entry
+    except (OSError, ValueError):
+        return doc
+    if not isinstance(table, dict) or not table:
+        return doc
+    def swap(s: str) -> str:
+        t = table.get(s.strip())
+        return t if isinstance(t, str) and t.strip() else s
+    return _walk(doc, _all_text(path), swap)
+
+
+# The troubleshooting problems (guestfaults.SCENARIOS, faults.SCENARIOS) are
+# written in Python, not TOML: their title, symptom, teaches and hint ladder go
+# through one string table, content/i18n/content/<lang>/problems.json, keyed by
+# the English text before the lab's names are filled in, so {placeholders}
+# survive translation (python tools/i18n_content.py source problems).
+PROBLEMS = "problems"
+_PROBLEM_TABLES: dict[str, tuple[float, dict]] = {}
+
+
+def problem_strings() -> list[str]:
+    """Every English text a troubleshooting problem shows, in registry order."""
+    from . import faults, guestfaults
+    out: dict[str, None] = {}
+    for s in list(guestfaults.SCENARIOS.values()) + list(faults.SCENARIOS.values()):
+        for t in (s.title, s.symptom, s.teaches, *s.hints):
+            if t and t.strip():
+                out.setdefault(t.strip())
+    for t in drill_strings():
+        if t and t.strip():
+            out.setdefault(t.strip())
+    return list(out)
+
+
+def drill_strings() -> list[str]:
+    """The texts of the other graded drills a student reads (title, symptom,
+    teaches, hints, fix): nms, portsec, stp and bitlocker drills, the cabling
+    fault kinds, the scenario days' own faults, the rack audit, and the
+    single drills of wpaent, power, ups and nestedvirt, and the PC's hardware
+    faults and power-on verdicts."""
+    from . import (bitlocker, nestedvirt, nms, physfaults, portsec, power, rack,
+                   scenariofaults, stp, ups, wpaent)
+    out: list[str] = []
+    for reg in (nms.DRILLS, portsec.DRILLS, stp.DRILLS, bitlocker.DRILLS, physfaults.KINDS):
+        for d in reg.values():
+            out += [getattr(d, k, "") or "" for k in ("title", "symptom", "teaches")]
+            out += list(getattr(d, "hints", ()) or ())
+            out.append(getattr(d, "fix", "") or "")
+    out += [f.title for f in scenariofaults.FAULTS.values()]
+    for k in rack.AUDIT_KINDS.values():
+        out += [k.title, k.hint]
+    out += [wpaent.TITLE, wpaent.SYMPTOM, *wpaent.HINTS, wpaent.FIX]
+    out += [*power.FAULT_HINTS, *ups.DRILL_HINTS, *nestedvirt.HINTS, *nestedvirt.LINUX_HINTS]
+    # The PC's hardware faults (their ladders are problems too) and what the
+    # screen window says when a PC does not start (winlab/hwfaults.py, pcbuild.py).
+    from . import hwfaults, pcbuild
+    for k in hwfaults.KINDS.values():
+        out += [k.title, k.symptom, k.teaches, *k.hints, k.fix]
+    out += [*pcbuild.POWER_WHY.values(), *pcbuild.STAGE_WHY.values(), *(t for t, _ in pcbuild.BEEPS.values())]
+    return [t for t in out if isinstance(t, str)]
+
+
+def problem_file(lang: str) -> Path:
+    return paths.CONTENT / "i18n" / "content" / lang / f"{PROBLEMS}.json"
+
+
+def problem_table(lang: str) -> dict:
+    """The problems' English-to-<lang> table ({} for English or no file)."""
+    if lang == "en" or not lang.isalpha():
+        return {}
+    f = problem_file(lang)
+    try:
+        mt = f.stat().st_mtime
+    except OSError:
+        return {}
+    hit = _PROBLEM_TABLES.get(lang)
+    if hit and hit[0] == mt:
+        return hit[1]
+    try:
+        import json
+        table = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        table = {}
+    table = table if isinstance(table, dict) else {}
+    _PROBLEM_TABLES[lang] = (mt, table)
+    return table
+
+
+def problem_text(text: str, lang: str | None = None) -> str:
+    """A problem's text (still with its {placeholders}) in the desktop's
+    language; the English text when there is no translation."""
+    if not text:
+        return text
+    if lang is None:
+        from . import i18n
+        lang = i18n.current()
+    t = problem_table(lang).get(text.strip())
+    return t if isinstance(t, str) and t.strip() else text
 
 
 def _copy(v):

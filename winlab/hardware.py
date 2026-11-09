@@ -118,6 +118,37 @@ def put_back(lab_name: str, node, index: int) -> None:
     _save(lab_name, node.id, out)
 
 
+def reseat(lab_name: str, node, index: int, qmp=Qmp) -> None:
+    """The same disk back in its hot-swap bay while the machine runs: the
+    filter that failed every request comes off, and the drive answers again
+    with its data. Only a disk that was in the machine when it started (and
+    was pulled live) can go back live: a bay that was empty at power-on has
+    no drive the controller knows."""
+    _check(node, index)
+    out = pulled(lab_name, node.id)
+    if index not in out:
+        raise HardwareError(f"the disk in bay {index + 1} of {node.id} was never pulled")
+    port = _qmp_port(lab_name, node.id)
+    if not port:
+        put_back(lab_name, node, index)
+        return
+    from . import disks
+    try:
+        with qmp(port) as mon:
+            names = {n.get("node-name") for n in (mon.call("query-named-block-nodes") or [])}
+            if gone_node(index) not in names:
+                raise HardwareError(f"bay {index + 1} of {node.id} was empty when it started: shut it down to "
+                                    "put the disk back")
+            sick = index in disks.failing_in(paths.lab_dir(lab_name) / node.id)
+            under = disks.sick_node(index) if sick and disks.sick_node(index) in names else file_node(index)
+            mon.call("blockdev-reopen", options=[{"driver": "qcow2", "node-name": fmt_node(index), "file": under}])
+            mon.call("blockdev-del", **{"node-name": gone_node(index)})
+    except (QmpError, OSError) as exc:
+        raise HardwareError(f"{node.id}: could not put the disk back in bay {index + 1}: {exc}") from exc
+    out.discard(index)
+    _save(lab_name, node.id, out)
+
+
 def replace(lab_name: str, node, index: int, disk_path: Path) -> None:
     """A new blank disk of the same size in the bay: the old one's image is
     thrown away, and the next start makes an empty one."""

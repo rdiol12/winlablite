@@ -301,9 +301,16 @@ def build_image(cache: Path, dest: Path | None = None) -> Path:
     # Firmware beside the packages: the appliances' Webmin release tarball,
     # when it was fetched (winlab/webmin.py); the webmin role installs it.
     # And OpenBMC's web UI for the servers' BMCs on the router (winlab/openbmcui.py).
-    from . import openbmcui, webmin
+    # And Termshark for the capture probe (winlab/termshark.py).
+    # And mstpd, rapid spanning tree for the switch bridges on the router
+    # (winlab/mstpd.py), once its build is published and fetched.
+    # And vwifi for the real air of the Linux laptops (winlab/vwifi.py).
+    from . import mstpd, openbmcui, termshark, vwifi, webmin
     files += webmin.volume_files()
     files += openbmcui.volume_files()
+    files += termshark.volume_files()
+    files += vwifi.volume_files()
+    files += mstpd.volume_files()
     total = sum(f.stat().st_size for _, f in files)
     size_mb = max(16, (total + 4096 * len(files)) // (1024 * 1024) + SLACK_MB)
     img = fatfs.disk(int(size_mb), IMAGE_LABEL)

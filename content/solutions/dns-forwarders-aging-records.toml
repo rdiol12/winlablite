@@ -1,0 +1,11 @@
+[solution]
+exercise = "dns-forwarders-aging-records"
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99
+Set-DnsServerZoneAging -Name corp.lab -Aging $true
+Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20
+'''

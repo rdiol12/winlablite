@@ -1,0 +1,61 @@
+{
+ "title": "Un servidor de archivos: permisos de recurso compartido y NTFS, enumeración basada en el acceso",
+ "summary": "Dos capas de permisos deciden lo que un usuario ve y puede hacer; aprende cuál tocar.",
+ "why": "Un recurso compartido de Windows tiene dos puertas. El permiso del recurso compartido se comprueba cuando un usuario se conecta por la red; el permiso NTFS se comprueba cuando toca un archivo. El derecho efectivo es el más restrictivo de los dos. La convención que mantiene esto en orden: abre el recurso compartido de par en par (Authenticated Users: Change) y haz todo el control real en NTFS, donde también se aplica al acceso local y puede heredarse a lo largo de un árbol.\n\nLa enumeración basada en el acceso oculta lo que un usuario no puede abrir, así Finanzas no ve que existe una carpeta de RR. HH. Es una propiedad del recurso compartido, casi no cuesta nada y responde a la mitad de los tickets de \"por qué puedo ver esto\" antes de que se abran.",
+ "concepts": [
+  "Permiso de recurso compartido frente a permiso NTFS: puerta de conexión frente a puerta de archivo; gana el más restrictivo",
+  "Herencia: los permisos fluyen hacia abajo desde una carpeta; romper la herencia convierte una carpeta en una isla",
+  "AGDLP en la práctica: concede NTFS Modify a DL-Sales-Share, pon G-Sales en él, nunca concedas a usuarios",
+  "ABE: enumeración basada en el acceso, configurada por recurso compartido, oculta las carpetas que el usuario no puede leer",
+  "Acceso efectivo: la pestaña Advanced Security o Get-NTFSEffectiveAccess calcula el resultado para un usuario"
+ ],
+ "steps": [
+  "En fs01, lista los recursos compartidos y sus permisos: Get-SmbShare | Get-SmbShareAccess.",
+  "Lee la ACL NTFS de la carpeta del recurso compartido Company: Get-Acl D:\\Shares\\Company | Format-List.",
+  "Crea D:\\Shares\\Company\\Finance y rompe la herencia para que solo G-Finance (créalo en dc01) tenga Modify, conservando Administrators y SYSTEM Full Control: icacls, o la pestaña Security.",
+  "Inicia sesión en pc01 como jdoe (Sales) y abre \\\\fs01\\Company: con ABE activado, Finance es invisible; desactiva ABE (Set-SmbShare -Name Company -FolderEnumerationMode Unrestricted) y aparece, pero no se puede abrir.",
+  "Vuelve a activar ABE. Compara el permiso de recurso compartido Read con NTFS Modify para un usuario y muestra cuál gana.",
+  "Habilita la auditoría de acceso en la carpeta (SACL) y encuentra los eventos 4663 resultantes en el registro Security después de que un usuario abra un archivo."
+ ],
+ "pitfalls": [
+  "Full Control en un recurso compartido para Everyone no es el problema que la gente cree si NTFS está bien; Full Control en NTFS para Everyone sí lo es.",
+  "Las entradas Deny se evalúan primero y se acumulan con los años; mejor quitar un allow que añadir un deny."
+ ],
+ "verify": [
+  "recursos compartidos y ABE",
+  "permisos de los recursos compartidos",
+  "ACL NTFS de la carpeta"
+ ],
+ "quiz": [
+  {
+   "q": "El recurso compartido dice Full Control para Everyone, NTFS dice Read para Sales. ¿Qué puede hacer Sales por la red?",
+   "answer": "Leer",
+   "wrong": [
+    "Control total",
+    "Nada",
+    "Modificar"
+   ],
+   "why": "Gana el más restrictivo entre el recurso compartido y NTFS."
+  },
+  {
+   "q": "¿Qué hace la enumeración basada en el acceso?",
+   "answer": "Oculta las carpetas que el usuario no puede leer",
+   "wrong": [
+    "Cifra el recurso compartido",
+    "Bloquea los archivos ejecutables",
+    "Registra cada acceso"
+   ],
+   "why": "ABE se configura por recurso compartido."
+  },
+  {
+   "q": "¿Qué cambio es preferible cuando un usuario tiene demasiado acceso?",
+   "answer": "Quitar la entrada allow que se lo concede",
+   "wrong": [
+    "Añadir una entrada deny",
+    "Romper la herencia en todo el recurso compartido",
+    "Mover al usuario a Domain Users"
+   ],
+   "why": "Las entradas deny se acumulan con los años y se vuelven ilegibles."
+  }
+ ]
+}

@@ -7,6 +7,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -315,18 +316,34 @@ def _probe_dsc_modules(r: HostReport) -> None:
 def _probe_qemu(r: HostReport) -> None:
     exe = paths.qemu_exe()
     r.qemu_present = exe.exists()
+    linux = sys.platform.startswith("linux")
     if not r.qemu_present:
-        r.add(
-            "portable qemu",
-            "not installed",
-            "warn",
-            "run 'winlab bootstrap' to fetch it into ./runtime (nothing is installed "
-            "system-wide)",
-        )
+        if linux:
+            from . import linuxhost
+            r.add("qemu", "not set up", "warn",
+                  "run 'winlab bootstrap': it uses this PC's QEMU; "
+                  + (linuxhost.install_hint() if linuxhost.missing_parts() else "already installed"))
+        else:
+            r.add(
+                "portable qemu",
+                "not installed",
+                "warn",
+                "run 'winlab bootstrap' to fetch it into ./runtime (nothing is installed "
+                "system-wide)",
+            )
         r.accel_confirmed = False
         return
 
-    r.add("portable qemu", str(exe), "ok")
+    if linux:
+        from . import linuxhost
+        info = linuxhost.linked_info()
+        r.add("qemu", f"{exe.resolve()}  {info.get('version', '')}".strip(), "ok")
+        fw = info.get("firmware") or {}
+        r.add("uefi firmware", fw.get("code") or "none (machines start with the BIOS)",
+              "ok" if fw.get("code") else "warn",
+              "" if fw.get("code") else linuxhost.install_hint())
+    else:
+        r.add("portable qemu", str(exe), "ok")
     try:
         res = subprocess.run([str(exe), "-accel", "help"], capture_output=True, timeout=30)
         blob = (res.stdout or b"").decode("utf-8", "replace") + (res.stderr or b"").decode(

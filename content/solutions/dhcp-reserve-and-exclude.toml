@@ -1,0 +1,29 @@
+[solution]
+exercise = "dhcp-reserve-and-exclude"
+notes = "pc01's MAC address is read from its current lease on dc01."
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+ipconfig /renew | Out-Null
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+$lease = Get-DhcpServerv4Lease -ScopeId 10.10.10.0 | Where-Object { $_.HostName -like 'pc01*' } | Select-Object -First 1
+Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId $lease.ClientId -Name pc01
+Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+ipconfig /release | Out-Null
+ipconfig /renew | Out-Null
+Start-Sleep -Seconds 5
+ipconfig
+'''

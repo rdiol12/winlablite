@@ -7,6 +7,8 @@ across the reboots that promotion and domain-join require.
 
 from __future__ import annotations
 
+import re
+
 import json
 import shlex
 import time
@@ -101,7 +103,7 @@ def load_manifest() -> dict[str, RoleDef]:
                 raise RoleError(f"dsc role '{rd.name}' cannot depend on script role(s) {bad}")
         if rd.pack:
             from .debpacks import PACKS
-            if rd.pack not in PACKS:
+            if rd.pack not in PACKS and rd.pack not in STICK_SOURCES:
                 raise RoleError(f"role '{rd.name}': no pack '{rd.pack}' in debpacks.PACKS")
             if rd.engine == "dsc" or not rd.script.endswith(".sh"):
                 raise RoleError(f"role '{rd.name}': only a sh role can take a pack")
@@ -202,15 +204,18 @@ def check_media(node: Node, plan: list[RoleDef]) -> list[str]:
 # Roles that stand for somebody else's equipment, such as the cloud
 # provider's VPN gateway. Every lab starts empty for the student, but the
 # student is not that party, so the lab brings these up itself at start.
-PROVIDER_ROLES = ("vpn-gateway",)
+PROVIDER_ROLES = ("vpn-gateway", "cloud-edge", "azure-vpngw")
 # Roles that are a device's own firmware (a network printer, a NAS): they run
 # by themselves every time the device powers on, as the real ones do.
-APPLIANCE_ROLES = ("netprinter", "nas", "pbx", "ipphone", "ntp-server", "san", "admin-desktop", "doc-tools", "ipcam")
+APPLIANCE_ROLES = ("netprinter", "nas", "pbx", "ipphone", "ntp-server", "san", "admin-desktop", "doc-tools", "ipcam", "net-ops", "itops",
+                   "aws-workstation")
 # The Internet side of a lab: a test host a firewall lesson reaches from the
 # inside (content/roles/inet-host.sh), the web sites and DNS a proxy lesson
 # filters (content/roles/inet-sites.sh), the broadband router of a home
-# worker's house (content/roles/home-router.sh); nobody in the lab owns them.
-INTERNET_ROLES = ("inet-host", "inet-sites", "home-router")
+# worker's house (content/roles/home-router.sh), the DNS host, mail provider
+# and spam sender of the mail lab (content/roles/inet-mail.sh); nobody in the
+# lab owns them.
+INTERNET_ROLES = ("inet-host", "inet-sites", "home-router", "cloud-tenant", "cloud-azure", "cloud-aws", "inet-mail")
 SELF_STARTING = PROVIDER_ROLES + APPLIANCE_ROLES + INTERNET_ROLES
 
 
@@ -335,7 +340,12 @@ def sh_env(node: Node, plan: TopologyPlan | None, lab: Lab | None = None) -> str
     # The phone system and the phones are told nothing about each other: the
     # student makes the extensions in FreePBX and signs each phone in.
     for key, var in (("PRINTER_LOCATION", "location"), ("BACKENDS", "backends"),
-                     ("INET_NAMES", "inet_names")):
+                     ("INET_NAMES", "inet_names"), ("INET_PUBLIC", "inet_public"),
+                     ("INET_ROUTES", "inet_routes"), ("CLOUD_PUBLIC", "cloud_public"),
+                     ("CLOUD_APP", "cloud_app"), ("CLOUD_PEER", "cloud_peer"),
+                     ("CLOUD_ROUTES", "cloud_routes"), ("CLOUD_PSK", "cloud_psk"),
+                     ("CLOUD_NAME", "cloud_name"), ("CLOUD_ISP", "cloud_isp"),
+                     ("MAIL_PUBLIC", "mail_public")):
         if node.vars.get(var):
             v = node.vars[var]
             lines.append(f"WINLAB_{key}={shlex.quote(' '.join(map(str, v)) if isinstance(v, list) else str(v))}")
@@ -343,6 +353,8 @@ def sh_env(node: Node, plan: TopologyPlan | None, lab: Lab | None = None) -> str
         # The NTP server's stratum and networks; a time client's source.
         from .timesync import sh_env_lines
         lines += sh_env_lines(lab, node)
+        from . import vwifi  # a laptop on the real air: the server and its radio's MAC
+        lines += vwifi.sh_env_lines(lab, node)
     if plan is None:
         return "\n".join(lines) + "\n"
     for link in plan.links_for(node.id):
@@ -370,6 +382,11 @@ def sh_env(node: Node, plan: TopologyPlan | None, lab: Lab | None = None) -> str
             f"WINLAB_VPN_REMOTE_SUBNETS={shlex.quote(' '.join(t.remote_prefixes))}",
             f"WINLAB_VPN_PSK={shlex.quote(t.psk)}",
         ]
+    if node.vars.get("azure_gateway") and lab is not None:
+        # An Azure VPN gateway: its tunnel is what the student typed in the
+        # portal (winlab/azure.py), so it overrides the lab's own.
+        from .azure import vpn_env
+        lines += vpn_env(lab, node)
     return "\n".join(lines) + "\n"
 
 
@@ -448,9 +465,43 @@ class _Runner:
         if self.shell == "powershell":
             return self.ch.run_script(f"& C:\\winlab\\{rd.script}", timeout=timeout,
                                       reboot_ok=rd.reboots)
-        script = (paths.ROLES / rd.script).read_text(encoding="utf-8")
+        script = expand_payload((paths.ROLES / rd.script).read_text(encoding="utf-8"))
         return self.ch.run(self.env + script, shell="sh", timeout=timeout,
                            reboot_ok=rd.reboots)
+
+
+_PAYLOAD = re.compile(r"@payload:([a-z0-9-]+)@")
+# The agent runs a role as one `sh -c` argument, which Linux caps at 128 KiB.
+PAYLOAD_LIMIT = 96 * 1024
+
+
+def payload_b64(name: str) -> str:
+    """content/<name>/ as one line of base64 (a gzip'd tar, reproducible:
+    fixed stamps, sorted names), for a sh role that carries more than fits
+    in a script (the entra-hybrid lab's cloud service)."""
+    import base64
+    import gzip
+    import io
+    import tarfile
+    root = paths.CONTENT / name
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tar:
+        for f in sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts):
+            data = f.read_bytes()
+            ti = tarfile.TarInfo(f.relative_to(root).as_posix())
+            ti.size, ti.mtime, ti.mode = len(data), 1735689600, 0o644
+            tar.addfile(ti, io.BytesIO(data))
+    gz = gzip.compress(raw.getvalue(), compresslevel=9, mtime=0)
+    return base64.b64encode(gz).decode("ascii")
+
+
+def expand_payload(script: str) -> str:
+    """Puts each @payload:<dir>@ marker's base64 in place."""
+    out = _PAYLOAD.sub(lambda m: payload_b64(m.group(1)), script)
+    if len(out.encode()) > PAYLOAD_LIMIT:
+        raise RoleError(f"role script with its payload is {len(out.encode()) >> 10} KiB; the agent takes "
+                        f"{PAYLOAD_LIMIT >> 10} KiB at most")
+    return out
 
 
 def role_stick_files(lab: Lab | None, node: Node, role_name: str) -> dict[str, bytes]:
@@ -461,7 +512,17 @@ def role_stick_files(lab: Lab | None, node: Node, role_name: str) -> dict[str, b
     if role_name == "grafana":
         from . import metrics
         return metrics.stick_files(lab)
+    from . import aidc
+    if role_name in aidc.ROLES:   # the AI data center's generated files (winlab/aidc.py)
+        return aidc.stick_files(lab, node, role_name)
     return {}
+
+
+# Sticks a role takes that are not apt packs: the module's stick_files() and
+# STICK_LABEL (the lab's Azure for cloud01: floci-az, restic, rest-server;
+# the lab's AWS: moto for cloud01, the AWS CLI for ops01). A module with
+# STICK_FILES_BY_ROLE gives each role its own files.
+STICK_SOURCES = {"azure": "azure", "aws": "aws"}
 
 
 def _plug_pack(lab: Lab | None, node: Node, pack_id: str, role_name: str = "") -> str:
@@ -471,6 +532,19 @@ def _plug_pack(lab: Lab | None, node: Node, pack_id: str, role_name: str = "") -
     from . import debpacks
     if lab is None:
         return f"{pack_id}: no lab given, pack not plugged in"
+    if pack_id in STICK_SOURCES:
+        import importlib
+        mod = importlib.import_module(f"winlab.{STICK_SOURCES[pack_id]}")
+        try:
+            files = mod.stick_files(role_name) if getattr(mod, "STICK_FILES_BY_ROLE", False) else mod.stick_files()
+        except Exception as exc:  # noqa: BLE001 - not fetched yet: the role says what to do
+            raise RoleError(str(exc)) from exc
+        from . import media
+        try:
+            r = media.plug(lab.name, node.id, files, mod.STICK_LABEL)
+        except media.MediaError as exc:
+            raise RoleError(f"{pack_id}: {exc}") from exc
+        return f"{pack_id}: stick plugged in ({len(files)} files, {r['size_mb']} MB{', live' if r.get('live') else ', at next start'})"
     try:
         files = debpacks.pack_files(pack_id)
     except debpacks.PackError as exc:

@@ -1,0 +1,16 @@
+{
+ "Promote the first domain controller": "رقِّ أول وحدة تحكم بالمجال",
+ "dc01 is a fresh Windows Server with a static address but no roles. Turn it into\nthe forest root domain controller for corp.lab, running DNS. Everything else in\nthe lab depends on this, so it is exercise one.": "dc01 خادم Windows Server جديد بعنوان ثابت ولكن دون أدوار. حوّله إلى وحدة التحكم بالمجال الجذر للغابة corp.lab، مع تشغيل DNS. كل ما عدا ذلك في المختبر يعتمد على هذا، لذا فهو التمرين الأول.",
+ "On dc01, install the AD-Domain-Services role": "على dc01، ثبّت الدور AD-Domain-Services",
+ "Promote dc01 to a new forest named corp.lab (NetBIOS CORP)": "رقِّ dc01 إلى غابة جديدة باسم corp.lab (NetBIOS CORP)",
+ "Let it install DNS during promotion": "اسمح له بتثبيت DNS أثناء الترقية",
+ "After the reboot, confirm the domain and the DNS service are up": "بعد إعادة التشغيل، تأكد من أن المجال وخدمة DNS يعملان",
+ "AD DS role installed": "دور AD DS مثبت",
+ "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools": "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools",
+ "forest corp.lab exists": "الغابة corp.lab موجودة",
+ "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP": "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP",
+ "this host is a domain controller": "هذا المضيف وحدة تحكم بالمجال",
+ "DNS service running": "خدمة DNS تعمل",
+ "DNS is installed automatically if you pass -InstallDns to Install-ADDSForest": "يُثبَّت DNS تلقائيًا إذا مررت -InstallDns إلى Install-ADDSForest",
+ "forward lookup zone for corp.lab": "منطقة بحث أمامي لـ corp.lab"
+}

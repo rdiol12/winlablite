@@ -1,0 +1,61 @@
+{
+ "title": "Une un servidor miembro al dominio",
+ "summary": "Apunta el DNS de un servidor al controlador de dominio, únelo y demuestra el canal seguro.",
+ "why": "Unir un equipo al dominio crea una cuenta de equipo y un secreto compartido, la contraseña de la máquina, que el servidor usa a partir de entonces para demostrar quién es. Una vez unido, los usuarios del dominio pueden iniciar sesión en él, se aplica la directiva de grupo y Kerberos funciona para cada servicio que aloja. Casi todos los fallos de unión son el mismo error: el servidor pregunta a un servidor DNS que no sabe nada del dominio, así que no encuentra un DC.\n\nEl canal seguro es lo que hay que entender. Se renueva cada treinta días, se rompe cuando una máquina se restaura desde una instantánea antigua, y el síntoma es el famoso \"the trust relationship between this workstation and the primary domain failed\". Test-ComputerSecureChannel te dice en una línea si está sano.",
+ "concepts": [
+  "Primero DNS: un miembro debe resolver _ldap._tcp.dc._msdcs.<domain> antes de que nada más pueda funcionar",
+  "Cuenta de equipo: un objeto en AD (contenedor predeterminado CN=Computers) con su propia contraseña",
+  "Canal seguro: la conexión autenticada que un miembro mantiene con un DC; Test-ComputerSecureChannel la comprueba",
+  "Permisos de unión: por defecto cualquier usuario autenticado puede unir diez equipos; en producción esto se delega a un grupo"
+ ],
+ "steps": [
+  "En fs01, encuentra la interfaz: Get-NetAdapter. Luego configura el DNS hacia el DC: Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10.",
+  "Demuestra que la resolución funciona antes de unirte: Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab.",
+  "Únete: Add-Computer -DomainName corp.lab -Credential (Get-Credential CORP\\Administrator) -Restart.",
+  "Tras el reinicio, inicia sesión como CORP\\Administrator y ejecuta Test-ComputerSecureChannel -Verbose.",
+  "En dc01, encuentra la nueva cuenta de equipo: Get-ADComputer fs01 -Properties OperatingSystem, LastLogonDate.",
+  "Muévela fuera de CN=Computers a una OU donde la directiva pueda alcanzarla más adelante: Move-ADObject (Get-ADComputer fs01).DistinguishedName -TargetPath 'OU=Servers,...' cuando exista esa OU."
+ ],
+ "pitfalls": [
+  "Unirse usando la IP del DC como nombre de dominio funciona por casualidad y falla más tarde; usa siempre el nombre DNS.",
+  "Restaurar un miembro desde una instantánea más antigua que la contraseña de la máquina rompe la confianza; Reset-ComputerMachinePassword o vuelve a unirlo.",
+  "Un miembro clonado a partir de una imagen preparada debe haber pasado por sysprep, o dos máquinas comparten un SID."
+ ],
+ "verify": [
+  "miembro del dominio",
+  "canal seguro sano",
+  "el DNS apunta al DC"
+ ],
+ "quiz": [
+  {
+   "q": "Una unión falla con 'domain could not be contacted'. ¿Qué revisas primero?",
+   "answer": "Que el DNS del servidor apunte a un controlador de dominio",
+   "wrong": [
+    "La zona horaria del servidor",
+    "La edición de Windows",
+    "Que el firewall esté desactivado"
+   ],
+   "why": "Un miembro que no puede resolver los registros SRV del dominio no puede encontrar un DC."
+  },
+  {
+   "q": "¿Qué cmdlet te dice en una línea si el canal seguro de un miembro está sano?",
+   "answer": "Test-ComputerSecureChannel",
+   "wrong": [
+    "Get-ADDomain",
+    "Test-NetConnection",
+    "Get-ComputerInfo"
+   ],
+   "why": "Devuelve True o False para el canal hacia un DC."
+  },
+  {
+   "q": "Un miembro restaurado desde una instantánea antigua informa de una relación de confianza rota. ¿Por qué?",
+   "answer": "Su contraseña de máquina es más antigua que la que tiene ahora AD",
+   "wrong": [
+    "Las instantáneas eliminan la cuenta de equipo",
+    "El certificado del DC caducó",
+    "Su SID cambió"
+   ],
+   "why": "La contraseña de la máquina rota cada 30 días; un disco antiguo guarda una contraseña antigua."
+  }
+ ]
+}

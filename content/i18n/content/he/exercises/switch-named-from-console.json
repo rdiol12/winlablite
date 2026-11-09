@@ -1,0 +1,17 @@
+{
+ "Name the switch, its banner and pc01's port from the console cable": "תן שם למתג, לבאנר שלו ולפורט של pc01 מכבל המסוף",
+ "The corp switch has no address to manage it by; its console port is the way\nin. Cable pc01's USB-serial adapter to the console, open a terminal on COM2\nat 9600 8N1, and give the switch its name, a warning banner and a\ndescription on the port pc01 is plugged into. The checks open COM2 on pc01\nthemselves and read the switch's running configuration, so close your\nterminal before you press Check my work.": "למתג של corp אין כתובת לנהל אותו דרכה; פורט המסוף שלו הוא הדרך פנימה. חבר את מתאם ה-USB-serial של pc01 למסוף, פתח מסוף ב-COM2 ב-9600 8N1, ותן למתג את שמו, באנר אזהרה ותיאור על הפורט ש-pc01 מחובר אליו. הבדיקות פותחות את COM2 ב-pc01 בעצמן וקוראות את התצורה הפועלת של המתג, לכן סגור את המסוף שלך לפני שתלחץ על בדוק את העבודה שלי.",
+ "Plug the console cable between the corp switch and pc01, and restart pc01 so it finds COM2": "חבר את כבל המסוף בין המתג של corp ל-pc01, והפעל מחדש את pc01 כדי שימצא את COM2",
+ "Open a terminal on COM2 at 9600 8N1 and reach the switch's privileged prompt": "פתח מסוף ב-COM2 ב-9600 8N1 והגע לשורת הפקודה המיוחסת של המתג",
+ "Name the switch CORP-SW1": "קרא למתג CORP-SW1",
+ "Give it a message-of-the-day banner that warns off anyone without authorization": "תן לו באנר message-of-the-day שמזהיר כל מי שאין לו הרשאה",
+ "Describe port Fa0/1 as pc01, save the configuration and close the terminal": "תאר את הפורט Fa0/1 בתור pc01, שמור את התצורה וסגור את המסוף",
+ "pc01 reaches the switch's console on COM2": "pc01 מגיע למסוף של המתג ב-COM2",
+ "Windows only adds the adapter's port when it starts with the adapter plugged in; Device Manager, Ports (COM and LPT), shows it.": "Windows מוסיף את הפורט של המתאם רק כשהוא עולה כשהמתאם מחובר; Device Manager, Ports (COM and LPT), מציג אותו.",
+ "the switch is called CORP-SW1": "המתג נקרא CORP-SW1",
+ "The name is a global configuration command; the prompt changes the moment it takes.": "השם הוא פקודת תצורה גלובלית; שורת הפקודה משתנה ברגע שהוא נקלט.",
+ "a warning banner greets whoever connects": "באנר אזהרה מקבל את פני כל מי שמתחבר",
+ "A message-of-the-day banner sits between two delimiter characters of your choice, typed in global configuration.": "באנר message-of-the-day נמצא בין שני תווי תיחום לבחירתך, מוקלד בתצורה גלובלית.",
+ "Fa0/1 is described as pc01": "Fa0/1 מתואר בתור pc01",
+ "A description belongs to the interface: enter the port's own configuration mode first.": "תיאור שייך לממשק: היכנס קודם למצב התצורה של הפורט עצמו."
+}

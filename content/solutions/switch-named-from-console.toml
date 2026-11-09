@@ -1,0 +1,35 @@
+[solution]
+exercise = "switch-named-from-console"
+notes = "The console cable goes in with winlab workbench (con-plug, the Workbench's Console cable), then pc01 restarts so Windows finds COM2. The switch is configured over COM2 with .NET's SerialPort, the lesson's PowerShell way."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics con-plug device=sw:corp node=pc01
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Restart-Computer -Force
+'''
+reboot = true
+wait = 60
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+$p = New-Object System.IO.Ports.SerialPort 'COM2', 9600, 'None', 8, 'One'
+$p.Open()
+foreach ($line in '', 'enable', 'configure terminal', 'hostname CORP-SW1',
+                  'banner motd #Authorized access only#', 'interface fa0/1', 'description pc01', 'end',
+                  'write memory') {
+    $p.Write($line + "`r")
+    Start-Sleep -Milliseconds 800
+}
+$p.ReadExisting()
+$p.Close()
+'''

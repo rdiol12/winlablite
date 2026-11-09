@@ -16,18 +16,35 @@ the router makes them real:
   numbered, kept in the device's buffer (show logging) and sent as a real
   syslog datagram over UDP from the router (RFC 3164, or RFC 5424 with
   ``logging host <ip> format rfc5424``), stamped by the router's own clock. The switches here are bridges
-  inside the router and have no address of their own, so their messages
-  leave from the router's address on their VLAN, with the switch's name as
-  the host.
-- SNMP: net-snmp's snmpd on the router answers on UDP 161 with the
+  inside the router; their messages leave from the router's address on
+  their VLAN, with the switch's name as the host, even when the switch has
+  a management address of its own (winlab/iosl2.py: it answers ping and
+  SSH there, but winlab sends its syslog and traps from the router).
+- SNMP: net-snmp's snmpd on the router (the only agent: a switch's
+  management address has none) answers on UDP 161 with the
   communities, location and contact typed in (a community bound to a
   standard access list answers only the addresses it permits), and link
   up / down (IF-MIB) and spanning tree (BRIDGE-MIB) traps go out with
   snmptrap to every ``snmp-server host`` once ``snmp-server enable traps``
   is on.
+- SNMPv3 (``snmp-server group <name> v3 auth|priv|noauth`` and
+  ``snmp-server user <name> <group> v3 auth sha|md5 <pass> priv aes 128|des
+  <pass>``): the same snmpd answers USM users, each with the security level
+  its group asks for (net-snmp's createUser and rouser). As on IOS the
+  passphrases are never kept or shown: the user's keys are kept as RFC 3414
+  master keys (the passphrase stretched through SHA-1 or MD5, Ku) and
+  handed to snmpd as such (createUser -m), so a manager such as LibreNMS
+  logs in with the passphrases while the lab file holds only the hashes.
+  snmpd's persistent store lives in /run (cleared at each start), so a user
+  removed on the console is gone from the agent too. ``show snmp user`` and
+  ``show snmp group`` list them. Not here: views (``read <view>``), access
+  lists on a v3 group or user, 3DES and AES-192/256, and v3 notifications.
 - NTP: chrony on the router follows the ``ntp server`` lines (the router's
   and its switches', since they share its clock). Until it is in sync the
-  timestamps carry IOS's '*': the time is not to be trusted.
+  timestamps carry IOS's '*': the time is not to be trusted. ``ntp
+  authenticate``, ``ntp authentication-key``, ``ntp trusted-key`` and
+  ``ntp server <ip> key <id>`` on the router are chrony's symmetric keys
+  (winlab/ntpauth.py).
 
 The packages (net-snmp, net-snmp-tools, chrony) are on the lab's package
 volume (`winlab images prepare fabric` fetches them on this PC); the router
@@ -82,6 +99,8 @@ class NmsError(Exception):
 #   snmp-comm:<name> = "ro|rw [acl]"             snmp-location / snmp-contact
 #   snmp-host:<ip> = "<1|2c> <community>"        snmp-traps = "yes"
 #   ntp:<ip> = "yes"                              acl:<n> = "permit host 10.0.0.5;deny any"
+#   snmp-group:<name> = "noauth|auth|priv"
+#   snmp-user:<name> = "<group> [md5|sha <Ku hex> [des|aes <Ku hex>]]"   (master keys, never passphrases)
 def _own(lab, device: str) -> dict:
     return lab.devices.get(device, {})
 
@@ -130,6 +149,38 @@ def trap_hosts(lab, device: str) -> list[tuple[str, str, str]]:
             ver, _, comm = str(v).partition(" ")
             out.append((k[10:], ver, comm))
     return out
+
+
+def snmp_groups(lab, device: str) -> list[tuple[str, str]]:
+    """(group, noauth|auth|priv)."""
+    return [(k[11:], str(v)) for k, v in sorted(_own(lab, device).items()) if k.startswith("snmp-group:")]
+
+
+def snmp_users(lab, device: str) -> list[dict]:
+    out = []
+    for k, v in sorted(_own(lab, device).items()):
+        if k.startswith("snmp-user:"):
+            w = str(v).split()
+            out.append({"name": k[10:], "group": w[0] if w else "", "auth": w[1] if len(w) > 2 else "",
+                        "akey": w[2] if len(w) > 2 else "", "priv": w[3] if len(w) > 4 else "",
+                        "pkey": w[4] if len(w) > 4 else ""})
+    return out
+
+
+def master_key(passphrase: str, algo: str) -> str:
+    """RFC 3414 A.2.1/A.2.2: the passphrase repeated to 1 MB and hashed
+    (MD5 or SHA-1), the user's master key Ku, as hex."""
+    import hashlib
+    pw = passphrase.encode()
+    h = hashlib.md5() if algo == "md5" else hashlib.sha1()
+    chunk = pw * (65536 // len(pw) + 2)
+    done = 0
+    while done < 1048576:
+        start = done % len(pw)
+        piece = chunk[start:start + min(65536, 1048576 - done)]
+        h.update(piece)
+        done += len(piece)
+    return h.hexdigest()
 
 
 def traps_on(lab, device: str) -> bool:
@@ -199,6 +250,12 @@ def add_specs(con, add, U, C, I) -> None:
     add("snmp-server contact <line>", lambda a: set_text(con, "snmp-contact", a[0]), "Text for mib object sysContact", C)
     add("no snmp-server location", lambda a: set_text(con, "snmp-location", ""), "Negate a command or set its defaults", C)
     add("no snmp-server contact", lambda a: set_text(con, "snmp-contact", ""), "Negate a command or set its defaults", C)
+    add("snmp-server group <name> <line>", lambda a: set_group(con, a[0], a[1]), "Define a User Security Model group", C)
+    add("no snmp-server group <name> <line>", lambda a: no_group(con, a[0]), "Negate a command or set its defaults", C)
+    add("snmp-server user <name> <line>", lambda a: set_user(con, a[0], a[1]), "Define a user who can access the SNMP engine", C)
+    add("no snmp-server user <name> <line>", lambda a: no_user(con, a[0]), "Negate a command or set its defaults", C)
+    add("show snmp user", lambda a: show_snmp_user(con), "show snmp users", E)
+    add("show snmp group", lambda a: show_snmp_group(con), "show snmp groups", E)
     add("snmp-server host <ip> <line>", lambda a: set_trap_host(con, a[0], a[1]), "Specify hosts to receive SNMP notifications", C)
     add("no snmp-server host <ip>", lambda a: no_trap_host(con, a[0]), "Negate a command or set its defaults", C)
     add("no snmp-server host <ip> <line>", lambda a: no_trap_host(con, a[0]), "Negate a command or set its defaults", C)
@@ -207,7 +264,9 @@ def add_specs(con, add, U, C, I) -> None:
     add("no snmp-server enable traps", lambda a: set_traps(con, False), "Negate a command or set its defaults", C)
     add("no snmp-server enable traps <line>", lambda a: set_traps(con, False), "Negate a command or set its defaults", C)
     add("ntp server <ip>", lambda a: set_ntp(con, a[0], True), "Configure NTP server", C)
-    add("ntp server <ip> <line>", lambda a: set_ntp(con, a[0], True), "Configure NTP server", C)
+    add("ntp server <ip> <line>", lambda a: set_ntp(con, a[0], True, a[1]), "Configure NTP server", C)
+    from . import ntpauth  # ntp authenticate, authentication-key, trusted-key (the router's chrony)
+    ntpauth.add_specs(con, add, U, C)
     add("no ntp server <ip>", lambda a: set_ntp(con, a[0], False), "Negate a command or set its defaults", C)
     # access-list and show access-lists are the router's (winlab/iosl3.py).
 
@@ -321,6 +380,98 @@ def set_community(con, name: str, rest: str) -> str:
     return _saved(con, push=con.device == devcli.ROUTER)
 
 
+SNMP_NAME = re.compile(r"^[A-Za-z0-9_.@#-]{1,32}$")
+LEVEL_WORDS = ("noauth", "auth", "priv")
+
+
+def set_group(con, name: str, rest: str) -> str:
+    """snmp-server group <group> v3 noauth|auth|priv [read <view>] [access <acl>]"""
+    w = rest.lower().split()
+    if not SNMP_NAME.match(name):
+        raise devcli.CliError("% A group name is 1 to 32 letters, digits or _.@#-")
+    if len(w) < 2 or w[0] != "v3" or w[1] not in LEVEL_WORDS:
+        if w and w[0] in ("v1", "v2c"):
+            raise devcli.CliError("% Groups here are SNMPv3: v1 and v2c use snmp-server community")
+        raise devcli.CliError("% snmp-server group <name> v3 noauth | auth | priv")
+    _mine(con)[f"snmp-group:{name}"] = w[1]
+    note = _saved(con, push=con.device == devcli.ROUTER)
+    if len(w) > 2:
+        note = (note + "\n" if note else "") + ("% Kept without its views and access list: here a group reads "
+                                                 "the whole MIB from any address")
+    return note
+
+
+def no_group(con, name: str) -> str:
+    if _mine(con).pop(f"snmp-group:{name}", None) is None:
+        raise devcli.CliError(f"% Group {name} does not exist")
+    return _saved(con, push=con.device == devcli.ROUTER)
+
+
+def set_user(con, name: str, rest: str) -> str:
+    """snmp-server user <user> <group> v3 [auth md5|sha <pass> [priv des|aes 128 <pass>]]"""
+    w = rest.split()
+    usage = ("% snmp-server user <name> <group> v3 [auth md5 | sha <passphrase> "
+             "[priv des | aes 128 <passphrase>]]")
+    if not SNMP_NAME.match(name) or len(w) < 2:
+        raise devcli.CliError(usage)
+    group, ver = w[0], w[1].lower()
+    if ver in ("v1", "v2c"):
+        raise devcli.CliError("% Users here are SNMPv3: v1 and v2c use snmp-server community")
+    if ver != "v3":
+        raise devcli.CliError(usage)
+    w = w[2:]
+    auth = akey = priv = pkey = ""
+    if w and w[0].lower() == "auth":
+        if len(w) < 3 or w[1].lower() not in ("md5", "sha"):
+            raise devcli.CliError("% auth md5 | sha <passphrase>" if not (len(w) > 1 and w[1].lower().startswith("sha-2"))
+                                  else "% SHA-2 is not offered here: auth sha (SHA-1) or md5")
+        auth = w[1].lower()
+        if len(w[2]) < 8:
+            raise devcli.CliError("% An SNMPv3 passphrase is at least 8 characters (RFC 3414)")
+        akey = master_key(w[2], auth)
+        w = w[3:]
+        if w and w[0].lower() == "priv":
+            algo = w[1].lower() if len(w) > 1 else ""
+            if algo == "aes" and len(w) > 2 and w[2] in ("128", "192", "256"):
+                if w[2] != "128":
+                    raise devcli.CliError("% AES-192 and AES-256 are not offered here: priv aes 128")
+                w = [w[0], "aes"] + w[3:]
+            elif algo == "3des":
+                raise devcli.CliError("% 3DES is not offered here: priv aes 128 (or des)")
+            if len(w) < 3 or w[1].lower() not in ("des", "aes"):
+                raise devcli.CliError("% priv des | aes 128 <passphrase>")
+            if len(w[2]) < 8:
+                raise devcli.CliError("% An SNMPv3 passphrase is at least 8 characters (RFC 3414)")
+            priv, pkey = w[1].lower(), master_key(w[2], auth)
+            w = w[3:]
+    elif w and w[0].lower() == "priv":
+        raise devcli.CliError("% priv needs auth first: auth sha <passphrase> priv aes 128 <passphrase>")
+    note = ""
+    if w and w[0].lower() == "access":
+        note = "% Kept without its access list: here a user is answered from any address"
+        w = w[2:]
+    if w:
+        raise devcli.CliError(usage)
+    _mine(con)[f"snmp-user:{name}"] = " ".join(x for x in (group, auth, akey, priv, pkey) if x)
+    said = _saved(con, push=con.device == devcli.ROUTER)
+    notes = [x for x in (said, note) if x]
+    level = dict(snmp_groups(con.lab, con.device)).get(group)
+    if level is None:
+        notes.append(f"% Group {group} does not exist yet: snmp-server group {group} v3 priv")
+    elif level == "priv" and not priv or level == "auth" and not auth:
+        notes.append(f"% Group {group} asks for {level}: this user has no {'privacy' if auth else 'authentication'} "
+                     "key and every request from it is refused")
+    if con.device != devcli.ROUTER:
+        notes.append("% This switch has no SNMP agent of its own: the router's answers (snmp-server on the router)")
+    return "\n".join(notes)
+
+
+def no_user(con, name: str) -> str:
+    if _mine(con).pop(f"snmp-user:{name}", None) is None:
+        raise devcli.CliError(f"% User {name} does not exist")
+    return _saved(con, push=con.device == devcli.ROUTER)
+
+
 def no_community(con, name: str) -> str:
     if _mine(con).pop(f"snmp-comm:{name}", None) is None:
         raise devcli.CliError(f"% Community {name} does not exist")
@@ -347,7 +498,8 @@ def set_trap_host(con, ip: str, rest: str) -> str:
         elif w[i].lower() == "version" and w[i + 1].lower() in ("1", "2c"):
             ver, i = w[i + 1].lower(), i + 2
         elif w[i].lower() == "version":
-            raise devcli.CliError("% SNMP version 1 or 2c (version 3 is not in this device)")
+            raise devcli.CliError("% Notifications here are SNMP version 1 or 2c: SNMPv3 users answer polls, "
+                                  "they are not sent traps")
         else:
             break
     rest = w[i:]
@@ -374,10 +526,17 @@ def set_traps(con, on: bool) -> str:
     return _saved(con, push=con.device == devcli.ROUTER)
 
 
-def set_ntp(con, ip: str, on: bool) -> str:
+def set_ntp(con, ip: str, on: bool, rest: str = "") -> str:
     ip = _ip(ip)
+    w = rest.lower().split()
+    key = ""
+    if "key" in w:   # ntp server <ip> key <id> (winlab/ntpauth.py)
+        i = w.index("key")
+        if i + 1 >= len(w) or not w[i + 1].isdigit() or con.device != devcli.ROUTER:
+            raise devcli.CliError("% Invalid input detected at '^' marker.")
+        key = f"key {int(w[i + 1])}"
     if on:
-        _mine(con)[f"ntp:{ip}"] = "yes"
+        _mine(con)[f"ntp:{ip}"] = key or "yes"
     elif _mine(con).pop(f"ntp:{ip}", None) is None:
         raise devcli.CliError(f"% {ip} is not an NTP server here")
     note = _saved(con, push=True)
@@ -412,11 +571,15 @@ def run_lines(lab, device: str) -> list[str]:
     for key, word in (("snmp-location", "location"), ("snmp-contact", "contact")):
         if own.get(key):
             out.append(f"snmp-server {word} {own[key]}")
+    for name, level in snmp_groups(lab, device):
+        out.append(f"snmp-server group {name} v3 {level}")
     if traps_on(lab, device):
         out.append("snmp-server enable traps snmp linkdown linkup")
     for ip, ver, comm in trap_hosts(lab, device):
         out.append(f"snmp-server host {ip} " + (f"version {ver} " if ver != "1" else "") + comm)
-    out += [f"ntp server {ip}" for ip in ntp_servers(lab, device)]
+    from . import ntpauth
+    out += ntpauth.run_lines(lab, device)
+    out += [f"ntp server {ip}" + ntpauth.server_suffix(lab, device, ip) for ip in ntp_servers(lab, device)]
     return out + (["!"] if len(out) > 2 else [])
 
 
@@ -506,7 +669,7 @@ def show_ntp(con, assoc: bool) -> str:
 def show_snmp(con) -> str:
     lab, dev = con.lab, con.device
     own = _own(lab, dev)
-    if not communities(lab, dev) and not trap_hosts(lab, dev):
+    if not communities(lab, dev) and not trap_hosts(lab, dev) and not snmp_users(lab, dev):
         return "%SNMP agent not enabled"
     out = [f"Chassis: {devcli.hostname(lab, dev)}"]
     out += [f"Contact: {own['snmp-contact']}"] if own.get("snmp-contact") else []
@@ -515,7 +678,8 @@ def show_snmp(con) -> str:
         live = _router_text(con, "pidof snmpd >/dev/null && echo running || echo stopped").strip()
         out.append(f"SNMP agent: net-snmp on the router, UDP 161, {live or 'state unknown'}")
     else:
-        out.append("SNMP agent: none on this switch (it has no address); its traps leave from the router")
+        out.append("SNMP agent: none on this switch, even on its management address (the lab runs one agent, "
+                   "the router's); its traps leave from the router")
     out.append(f"SNMP logging: {'enabled' if traps_on(lab, dev) else 'disabled (snmp-server enable traps)'}")
     sent = _buf_load(lab.name).get(dev, {}).get("traps", {})
     for ip, ver, comm in trap_hosts(lab, dev):
@@ -530,6 +694,33 @@ def show_community(con) -> str:
                  f"storage-type: nonvolatile\t active\t access: {how.upper()}"
                  + (f"\t access-list: {num}" if num else ""), ""]
     return "\n".join(rows) or "% No communities: snmp-server community <name> ro"
+
+
+def engine_id(lab) -> str:
+    """The router agent's engine ID, as snmpd.conf sets it: enterprise 8072
+    (net-snmp), format 4 (text), the router's name."""
+    return "80001f8804" + f"winlab-{devcli.hostname(lab, devcli.ROUTER)}".encode()[:27].hex()
+
+
+def show_snmp_user(con) -> str:
+    rows = []
+    for u in snmp_users(con.lab, con.device):
+        rows += [f"User name: {u['name']}", f"Engine ID: {engine_id(con.lab).upper()}",
+                 "storage-type: nonvolatile\t active",
+                 f"Authentication Protocol: {u['auth'].upper() or 'None'}",
+                 f"Privacy Protocol: {'AES128' if u['priv'] == 'aes' else u['priv'].upper() or 'None'}",
+                 f"Group-name: {u['group']}", ""]
+    return "\n".join(rows) or "% No SNMPv3 users: snmp-server user <name> <group> v3 auth sha <passphrase> ..."
+
+
+def show_snmp_group(con) -> str:
+    rows = []
+    for name, level in snmp_groups(con.lab, con.device):
+        rows += [f"groupname: {name:<33}security model:v3 {level}",
+                 f"contextname: {'<no context specified>':<31}storage-type: nonvolatile",
+                 f"readview : {'v1default':<33}writeview: <no writeview specified>",
+                 "notifyview: <no notifyview specified>", "row status: active", ""]
+    return "\n".join(rows) or "% No SNMPv3 groups: snmp-server group <name> v3 priv"
 
 
 def show_snmp_host(con) -> str:
@@ -552,6 +743,19 @@ def snmpd_conf(lab) -> str:
         nets = [n for h, n in acl(lab, num) if h == "permit"] if num else ["default"]
         # A list that permits nothing answers no one: a source no packet has.
         out += [f"{word} {name} {n}" for n in (nets or ["127.255.255.254/32"])]
+    users = snmp_users(lab, devcli.ROUTER)
+    if users:
+        out.append(f"engineID winlab-{devcli.hostname(lab, devcli.ROUTER)}"[:36])
+    groups = dict(snmp_groups(lab, devcli.ROUTER))
+    for u in users:
+        if u["group"] not in groups:
+            continue   # a user of a group that does not exist reads nothing, as on IOS
+        line = f"createUser {u['name']}"
+        if u["auth"]:
+            line += f" {u['auth'].upper()} -m 0x{u['akey']}"
+            if u["priv"]:
+                line += f" {u['priv'].upper()} -m 0x{u['pkey']}"
+        out += [line, f"rouser {u['name']} {groups[u['group']]}"]
     if traps_on(lab, devcli.ROUTER):
         for ip, ver, comm in trap_hosts(lab, devcli.ROUTER):
             out.append(f"{'trap2sink' if ver == '2c' else 'trapsink'} {ip} {comm}")
@@ -559,8 +763,9 @@ def snmpd_conf(lab) -> str:
 
 
 def chrony_conf(lab) -> str:
+    from . import ntpauth  # keys, authselectmode, server ... key <id>
     out = ["# generated by winlab from the consoles (ntp server ...)"]
-    out += [f"server {ip} iburst" for ip in ntp_servers(lab)]
+    out += ntpauth.chrony_lines(lab, ntp_servers(lab))
     out += ["makestep 1 3", "driftfile /var/lib/chrony/winlab.drift", "port 0"]
     return "\n".join(out) + "\n"
 
@@ -568,7 +773,8 @@ def chrony_conf(lab) -> str:
 def push_script(lab) -> str:
     """Shell that brings the router's snmpd and chrony in line with the
     consoles (at boot, and when a command changes them)."""
-    snmp = bool(communities(lab, devcli.ROUTER) or (traps_on(lab, devcli.ROUTER) and trap_hosts(lab, devcli.ROUTER)))
+    snmp = bool(communities(lab, devcli.ROUTER) or snmp_users(lab, devcli.ROUTER)
+                or (traps_on(lab, devcli.ROUTER) and trap_hosts(lab, devcli.ROUTER)))
     ntp = bool(ntp_servers(lab))
     out = ["# network management: snmpd and chrony (winlab/nms.py)", "mkdir -p /etc/winlab /var/lib/chrony"]
     if snmp or any(trap_hosts(lab, d) for d in devices(lab)):
@@ -576,10 +782,17 @@ def push_script(lab) -> str:
     out.append("pkill -x snmpd 2>/dev/null || true")
     if snmp:
         out += [f"cat > /etc/winlab/snmpd.conf <<'WLSNMP'\n{snmpd_conf(lab)}WLSNMP",
-                "snmpd -C -c /etc/winlab/snmpd.conf -Lf /var/log/snmpd.log -p /run/snmpd.pid 2>/dev/null || true"]
+                # SNMPv3 users live in snmpd's persistent store: a fresh one each start, so a user
+                # removed on the console is gone from the agent too
+                "rm -rf /run/winlab-snmp; mkdir -p /run/winlab-snmp; chmod 700 /run/winlab-snmp",
+                "chmod 600 /etc/winlab/snmpd.conf",
+                "SNMP_PERSISTENT_DIR=/run/winlab-snmp snmpd -C -c /etc/winlab/snmpd.conf -Lf /var/log/snmpd.log "
+                "-p /run/snmpd.pid 2>/dev/null || true"]
     out.append("pkill -x chronyd 2>/dev/null || true")
     if ntp:
+        from . import ntpauth
         out += ["command -v chronyd >/dev/null 2>&1 || apk add --no-network chrony >/dev/null 2>&1 || true",
+                *ntpauth.push_lines(lab),
                 f"cat > /etc/winlab/chrony.conf <<'WLNTP'\n{chrony_conf(lab)}WLNTP",
                 "sleep 1; chronyd -f /etc/winlab/chrony.conf 2>/dev/null || true"]
     return "\n".join(out)
@@ -588,7 +801,8 @@ def push_script(lab) -> str:
 def render(plan) -> list[str]:
     """The router's start script: the agents, and a drill's clock still off."""
     lab = plan.lab
-    if not (any(communities(lab, d) or trap_hosts(lab, d) for d in devices(lab)) or ntp_servers(lab)):
+    if not (any(communities(lab, d) or trap_hosts(lab, d) for d in devices(lab)) or snmp_users(lab, devcli.ROUTER)
+            or ntp_servers(lab)):
         return []
     out = ["", "### network management (winlab/nms.py)"]
     d = drill_state(lab.name)
@@ -911,6 +1125,12 @@ def view(lab) -> dict:
 
 
 # ------------------------------------------------------------------ drills
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 class Drill:
     def __init__(self, id_, title, button, symptom, hints, fix):
         self.id, self.title, self.button, self.symptom, self.hints, self.fix = id_, title, button, symptom, hints, fix
@@ -989,9 +1209,9 @@ def drill_view(lab) -> dict | None:
     k = DRILLS[d["id"]]
     w = _words(lab, d)
     return {"id": k.id, "shown": int(d.get("hints", 0)), "of": len(k.hints),
-            "hints": [h.format(**w) for h in k.hints[:int(d.get("hints", 0))]],
-            "symptom": k.symptom.format(**w), "done": bool(d.get("done")),
-            "title": k.title if d.get("done") else "", "fix": k.fix if d.get("done") else ""}
+            "hints": [_pt(h).format(**w) for h in k.hints[:int(d.get("hints", 0))]],
+            "symptom": _pt(k.symptom).format(**w), "done": bool(d.get("done")),
+            "title": _pt(k.title) if d.get("done") else "", "fix": _pt(k.fix) if d.get("done") else ""}
 
 
 def act(dash, action: str, params: dict, runner=None) -> dict:
@@ -1053,7 +1273,7 @@ def drill(dash, op: str, params: dict, runner=None) -> dict:
     if op == "hint":
         d["hints"] = min(len(k.hints), int(d.get("hints", 0)) + 1)
         _drill_save(lab.name, d)
-        return {"ok": True, "message": k.hints[d["hints"] - 1].format(**_words(lab, d))}
+        return {"ok": True, "message": _pt(k.hints[d["hints"] - 1]).format(**_words(lab, d))}
     if op == "check":
         res = check(lab, d, runner)
         if res["passed"]:
@@ -1074,7 +1294,7 @@ def drill(dash, op: str, params: dict, runner=None) -> dict:
             if "fabric" in _running(lab.name):
                 fix = f"date -s @$(( $(date +%s) - {int(d.get('skew', 0))} )) >/dev/null 2>&1; " if d["id"] == "clock" else ""
                 _router_run(dash.lab, fix + push_script(dash.lab), runner)
-            return {"ok": True, "message": f"put back: it was {k.title[0].lower() + k.title[1:]}"}
+            return {"ok": True, "message": f"put back: it was {_pt(k.title)[0].lower() + _pt(k.title)[1:]}"}
         _drill_save(lab.name, None)
         return {"ok": True, "message": ""}
     raise NmsError(f"unknown drill step {op!r}")
@@ -1191,7 +1411,7 @@ def check(lab, d: dict, runner=None) -> dict:
             rows.append(("the router's clock is on lab time (within a minute)", off < 60))
     passed = all(ok for _, ok in rows)
     k = DRILLS[d["id"]]
-    msg = (f"fixed: it was {k.title[0].lower() + k.title[1:]}. The fix: {k.fix}." if passed else
+    msg = (f"fixed: it was {_pt(k.title)[0].lower() + _pt(k.title)[1:]}. The fix: {_pt(k.fix)}." if passed else
            "not yet: " + "; ".join(t for t, ok in rows if not ok))
     return {"ok": True, "passed": passed, "message": msg,
             "results": [{"check": t, "passed": ok} for t, ok in rows]}

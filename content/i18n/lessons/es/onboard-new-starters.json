@@ -1,0 +1,83 @@
+{
+ "title": "Da de alta a las nuevas incorporaciones",
+ "summary": "Convierte la hoja de nuevas incorporaciones de RR. HH. en cuentas, grupos, carpetas y carpetas personales, y después observa cómo el personal inicia sesión y trabaja.",
+ "why": "El alta de personal es la tarea de directorio más habitual que existe, y la que la gente nota\nprimero: una nueva incorporación que no puede iniciar sesión el primer día llama al soporte técnico antes\nde las nueve. RR. HH. envía una hoja (nombres, departamentos, puestos, los nombres de usuario acordados);\nTI convierte cada fila en una cuenta con los atributos correctos, la mete en los\ngrupos que su función necesita y le da un sitio donde trabajar: la carpeta del departamento\ny una carpeta personal propia.\n\nHecho a mano para una persona son diez clics. Hecho desde la hoja con\nImport-Csv y un bucle es un único script revisado, igual cada vez, y la\nhoja sigue siendo el registro de quién se configuró y cómo. Los grupos son lo que permite\nescalar: concede la carpeta del departamento a un grupo del departamento una vez, y cada nueva\nincorporación de ese departamento solo necesita una pertenencia.\n\nEn este laboratorio el personal viene a trabajar de verdad. Con la jornada laboral activada (la ventana\nOficina), cada persona llega a su PC hacia las ocho y media, inicia sesión con\nla primera contraseña que le diste, abre la carpeta de su departamento, guarda\ndocumentos, toma notas en su carpeta personal y, si el laboratorio los tiene, imprime y\nenvía correos. Lo que hayas hecho mal vuelve como tickets de soporte escritos con sus propias palabras.",
+ "concepts": [
+  "La hoja de nuevas incorporaciones: una fila por persona, con columnas que corresponden a parámetros de New-ADUser (GivenName, Surname, SamAccountName, Department, Title, EmailAddress, OfficePhone)",
+  "Import-Csv convierte la hoja en objetos; ForEach-Object ejecuta New-ADUser una vez por fila",
+  "Una primera contraseña fijada por TI con ChangePasswordAtLogon: la persona elige la suya en el primer inicio de sesión, y TI nunca la conoce",
+  "Un grupo global por departamento (G-Finance); la carpeta del departamento se concede al grupo, no a las personas",
+  "Carpetas personales: un recurso compartido oculto (Home$), una carpeta por usuario que solo ese usuario y los administradores pueden abrir, y los atributos HomeDirectory y HomeDrive que la asignan como H: al iniciar sesión",
+  "Los inicios de sesión quedan en el registro Security del controlador de dominio: 4624 es un inicio de sesión correcto, 4625 uno fallido con el motivo en su código de estado"
+ ],
+ "steps": [
+  "Empieza la jornada laboral: abre Oficina desde el menú Inicio y activa Jornada laboral (o ejecuta winlab workday start). La hoja de RR. HH. llega a la estantería de medios como la memoria 'RR. HH.: hoja de nuevas incorporaciones'.",
+  "Conecta la memoria a dc01 desde la estantería de medios y busca su letra de unidad: Get-Volume | Where-Object DriveType -eq Removable.",
+  "Lee la hoja: Import-Csv 'E:\\New starters.csv' | Format-Table DisplayName, Department, Title, SamAccountName.",
+  "Dale al personal un sitio en el directorio: New-ADOrganizationalUnit -Name Staff -Path 'DC=corp,DC=lab'.",
+  "Un grupo global por departamento, con el nombre G- y el departamento sin espacios: 'Front desk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { New-ADGroup -Name ('G-' + ($_ -replace ' ', '')) -GroupScope Global -GroupCategory Security -Path 'OU=Staff,DC=corp,DC=lab' }.",
+  "Crea las cuentas a partir de la hoja, escribiendo una primera contraseña para cada persona cuando se te pida: Import-Csv 'E:\\New starters.csv' | ForEach-Object { New-ADUser -Name $_.DisplayName -GivenName $_.FirstName -Surname $_.LastName -SamAccountName $_.SamAccountName -UserPrincipalName $_.EmailAddress -EmailAddress $_.EmailAddress -Department $_.Department -Title $_.Title -OfficePhone $_.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString \"First password for $($_.SamAccountName)\") -ChangePasswordAtLogon $true -Enabled $true }.",
+  "Mete a cada persona en el grupo de su departamento: Import-Csv 'E:\\New starters.csv' | ForEach-Object { Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName }.",
+  "En fs01, da a cada departamento una carpeta en el recurso compartido Company que solo su grupo pueda modificar: 'FrontDesk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { $d = New-Item -ItemType Directory -Force \"D:\\Shares\\Company\\$_\"; icacls $d.FullName /grant \"CORP\\G-$($_):(OI)(CI)M\" }.",
+  "En fs01, crea el recurso compartido de las carpetas personales: New-Item -ItemType Directory D:\\Shares\\Home, después New-SmbShare -Name 'Home$' -Path D:\\Shares\\Home -FullAccess 'CORP\\Domain Admins' -ChangeAccess 'CORP\\Domain Users'.",
+  "Para cada persona, una carpeta que solo ella pueda abrir, asignada como H: al iniciar sesión: en fs01 New-Item -ItemType Directory D:\\Shares\\Home\\<account>, icacls D:\\Shares\\Home\\<account> /inheritance:r /grant 'CORP\\Domain Admins:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'CORP\\<account>:(OI)(CI)M'; en dc01 Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:.",
+  "Entrega las primeras contraseñas: en Oficina > Lista del personal, escribe la primera contraseña que diste a cada persona (o ejecuta winlab staff password <account>; te la pide, nunca forma parte del comando). Solo se guarda en la carpeta de este laboratorio en este PC.",
+  "Obsérvalos trabajar: Oficina > Hoy muestra quién ha llegado, en qué PC y haciendo qué; el registro de actividad muestra cada inicio de sesión, guardado e impresión. En dc01: Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents 30 | Format-Table TimeCreated, Id, Message -Wrap.",
+  "Lee los tickets que lleguen (alguien que se te pasó, una carpeta que no pueden abrir) y corrige la causa, no el síntoma."
+ ],
+ "pitfalls": [
+  "Una cuenta creada sin contraseña queda deshabilitada, y una persona cuya cuenta está deshabilitada llama el primer día; comprueba Enabled en cada fila.",
+  "Escribir en la lista del personal una contraseña distinta de la que fijaste es una contraseña incorrecta en el DC: un 4625 en su registro Security y, tras unos cuantos intentos, una cuenta bloqueada si el dominio tiene una directiva de bloqueo.",
+  "Con ChangePasswordAtLogon la persona elige una contraseña nueva en el primer inicio de sesión; desde entonces la primera ya no funciona, que es precisamente la idea.",
+  "El grupo de un departamento recibe Modify sobre su carpeta, nunca Full Control: Full Control permite a los miembros cambiar ellos mismos los permisos.",
+  "Las carpetas personales no deben heredar los permisos de la carpeta principal, o todo el mundo podrá leer la carpeta personal de todos.",
+  "Los nombres de departamento con espacios (Front desk) dan nombres de grupo y de carpeta incómodos; acuerda una regla (aquí: quitar los espacios) y úsala en todas partes."
+ ],
+ "verify": [
+  "las cuentas del personal de la hoja",
+  "los grupos de departamento y sus miembros",
+  "los últimos inicios de sesión en el DC"
+ ],
+ "quiz": [
+  {
+   "q": "RR. HH. envía una hoja con doce nuevas incorporaciones. ¿Qué convierte sus filas en cuentas en un único paso revisado?",
+   "answer": "Import-Csv canalizado a ForEach-Object que ejecuta New-ADUser",
+   "wrong": [
+    "Doce ejecuciones del asistente New Object en dsa.msc",
+    "csvde con las opciones predeterminadas",
+    "Copiar un usuario existente doce veces"
+   ],
+   "why": "Import-Csv crea un objeto por fila y New-ADUser toma sus columnas como parámetros, así que la hoja sigue siendo el registro de lo que se creó."
+  },
+  {
+   "q": "La cuenta de una nueva incorporación se creó sin contraseña. ¿Qué pasa cuando intenta iniciar sesión?",
+   "answer": "Falla: una cuenta creada sin contraseña queda deshabilitada",
+   "wrong": [
+    "Inicia sesión con una contraseña vacía",
+    "Windows le pide que elija una",
+    "Funciona hasta el primer cambio de contraseña"
+   ],
+   "why": "New-ADUser deja la cuenta deshabilitada hasta que tiene una contraseña que cumple la directiva; el DC registra un 4625 por el intento."
+  },
+  {
+   "q": "¿Dónde se registra un inicio de sesión fallido contra el dominio, y con qué evento?",
+   "answer": "En el registro Security del controlador de dominio, evento 4625",
+   "wrong": [
+    "En el registro System del PC, evento 7036",
+    "En el registro Directory Service del DC, evento 1644",
+    "En ningún sitio salvo que la auditoría se configure por usuario"
+   ],
+   "why": "4624 es un inicio de sesión correcto y 4625 uno fallido; su código de estado dice por qué (usuario desconocido, contraseña incorrecta, deshabilitada, bloqueada)."
+  },
+  {
+   "q": "¿Por qué conceder la carpeta Finance a G-Finance en lugar de a cada persona de finanzas?",
+   "answer": "Así una nueva incorporación solo necesita una pertenencia a grupo, y la ACL de la carpeta nunca cambia",
+   "wrong": [
+    "Los usuarios no pueden aparecer en una ACL",
+    "Los grupos hacen que los archivos carguen más rápido",
+    "Solo a los grupos se les puede dar Modify"
+   ],
+   "why": "Los permisos siguen al grupo; las altas y bajas se convierten en cambios de pertenencia, y una auditoría lee un solo grupo."
+  }
+ ]
+}

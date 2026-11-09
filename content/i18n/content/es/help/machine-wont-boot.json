@@ -1,0 +1,16 @@
+{
+ "A machine will not boot": "Una máquina no arranca",
+ "Common problems": "Problemas comunes",
+ "boot": "arranque",
+ "won't start": "no arranca",
+ "black screen": "pantalla negra",
+ "no bootable device": "no bootable device",
+ "crash": "bloqueo",
+ "qemu": "qemu",
+ "log": "registro",
+ "stuck": "atascado",
+ "firmware": "firmware",
+ "boot order": "orden de arranque",
+ "Where to look when a machine stops at a black screen or does not start at all.": "Dónde mirar cuando una máquina se queda en una pantalla negra o no arranca en absoluto.",
+ "**It does not start at all.** The message in the taskbar's job list or in Machines says why. Each machine writes a log at var\\labs\\<lab>\\<machine>\\qemu.log in the winlab folder; the last lines name the problem.\n\n**It stops at \"no bootable device\" or a firmware screen.** Look at **Boots from** in the machine's panel. A machine set to boot from its DVD drive with no disc in it, or one installed by hand that has not finished installing, has nothing to boot from.\n\n**Windows shows a recovery screen.** Treat it as a real PC: Startup Repair, or go back to a checkpoint from the Action menu.\n\n**It froze.** Use the power button in Machines to turn it off and on, as you would hold the power button on a real PC.\n\nIf none of this helps, make a support file (see Contact support) and send it to us. It holds the machine's logs.": "**No arranca en absoluto.** El mensaje de la lista de trabajos de la barra de tareas o de Máquinas dice por qué. Cada máquina escribe un registro en var\\labs\\<lab>\\<machine>\\qemu.log dentro de la carpeta de winlab; las últimas líneas indican el problema.\n\n**Se detiene en \"no bootable device\" o en una pantalla de firmware.** Mira **Arranca desde** en el panel de la máquina. Una máquina configurada para arrancar desde su unidad de DVD sin disco, o una instalada a mano que no ha terminado de instalarse, no tiene nada desde lo que arrancar.\n\n**Windows muestra una pantalla de recuperación.** Trátala como un PC real: Startup Repair, o vuelve a un punto de control desde el menú Acción.\n\n**Se ha congelado.** Usa el botón de encendido de Máquinas para apagarla y encenderla, como mantendrías pulsado el botón de encendido de un PC real.\n\nSi nada de esto ayuda, crea un archivo de soporte (consulta Contactar con soporte) y envíanoslo. Contiene los registros de la máquina."
+}

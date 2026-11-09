@@ -1,0 +1,17 @@
+{
+ "Name the switch, its banner and pc01's port from the console cable": "Pon nombre al switch, su banner y el puerto de pc01 desde el cable de consola",
+ "The corp switch has no address to manage it by; its console port is the way\nin. Cable pc01's USB-serial adapter to the console, open a terminal on COM2\nat 9600 8N1, and give the switch its name, a warning banner and a\ndescription on the port pc01 is plugged into. The checks open COM2 on pc01\nthemselves and read the switch's running configuration, so close your\nterminal before you press Check my work.": "El switch de corp no tiene una dirección por la que administrarlo; su puerto de consola es la vía de entrada. Conecta el adaptador USB-serie de pc01 a la consola, abre un terminal en COM2 a 9600 8N1 y da al switch su nombre, un banner de advertencia y una descripción en el puerto al que está conectado pc01. Las comprobaciones abren COM2 en pc01 por sí mismas y leen la configuración en ejecución del switch, así que cierra tu terminal antes de pulsar Comprobar mi trabajo.",
+ "Plug the console cable between the corp switch and pc01, and restart pc01 so it finds COM2": "Conecta el cable de consola entre el switch de corp y pc01, y reinicia pc01 para que encuentre COM2",
+ "Open a terminal on COM2 at 9600 8N1 and reach the switch's privileged prompt": "Abre un terminal en COM2 a 9600 8N1 y llega al prompt privilegiado del switch",
+ "Name the switch CORP-SW1": "Llama al switch CORP-SW1",
+ "Give it a message-of-the-day banner that warns off anyone without authorization": "Dale un banner de mensaje del día que advierta a cualquiera sin autorización",
+ "Describe port Fa0/1 as pc01, save the configuration and close the terminal": "Describe el puerto Fa0/1 como pc01, guarda la configuración y cierra el terminal",
+ "pc01 reaches the switch's console on COM2": "pc01 llega a la consola del switch en COM2",
+ "Windows only adds the adapter's port when it starts with the adapter plugged in; Device Manager, Ports (COM and LPT), shows it.": "Windows solo añade el puerto del adaptador cuando arranca con el adaptador conectado; Device Manager, Ports (COM and LPT), lo muestra.",
+ "the switch is called CORP-SW1": "el switch se llama CORP-SW1",
+ "The name is a global configuration command; the prompt changes the moment it takes.": "El nombre es un comando de configuración global; el prompt cambia en el momento en que se aplica.",
+ "a warning banner greets whoever connects": "un banner de advertencia recibe a quien se conecte",
+ "A message-of-the-day banner sits between two delimiter characters of your choice, typed in global configuration.": "Un banner de mensaje del día va entre dos caracteres delimitadores de tu elección, escrito en configuración global.",
+ "Fa0/1 is described as pc01": "Fa0/1 está descrito como pc01",
+ "A description belongs to the interface: enter the port's own configuration mode first.": "Una descripción pertenece a la interfaz: entra primero en el modo de configuración del propio puerto."
+}

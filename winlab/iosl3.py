@@ -18,14 +18,30 @@ winlab/livenet.py runs again whenever it changes:
   for the addresses the list permits; ``ip nat inside source static <local>
   <global>`` maps one address both ways. NAT stays inside the lab: the
   router's only interfaces are its SVIs on the lab's switches, so "outside"
-  is always another lab network, never this PC or the internet.
+  is always another lab network, never this PC or the internet;
+* ``ip nat pool <name> <start> <end> netmask <mask> | prefix-length <n>``
+  with ``ip nat inside source list <n> pool <name> [overload]`` translates
+  to the pool's addresses. With overload it is PAT across the pool (nftables
+  ``snat to <start>-<end>``). Without it, each inside host takes one pool
+  address of its own for as long as IOS keeps a simple translation (24
+  hours, or until ``clear ip nat translation *``): every pool address is an
+  nftables dynamic set of size one, a host already in a set goes out as that
+  address, a new host is added to the first set that is free, and when every
+  set is full the packet is dropped and counted as a miss, which is IOS's
+  pool exhaustion (``show ip nat statistics``: allocated, misses). A pool
+  address in the outside interface's own subnet is answered for there (an
+  address of its own on that interface, as a static entry's is); one in
+  another block must be routed to the router by the far side, as an ISP
+  routes a customer's public block.
 
 Settings: ``route:<net>/<len> <target>`` = distance;
 ``acl:<name>`` = standard entries, ``xacl:<name>`` = extended entries
 (each ``<seq> <entry>``, ';'-separated); ``acltype:<name>`` for a named
 list; ``acl-in:<if>`` / ``acl-out:<if>`` = list; ``nat:<if>`` = inside |
-outside; ``natsrc:<list>`` = ``<if> overload``; ``natstatic:<local>`` =
-global.
+outside; ``natsrc:<list>`` = ``<if> overload`` or ``pool <name>
+[overload]``; ``natstatic:<local>`` = global; ``natpool:<name>`` = ``<start>
+<end> <prefix length>`` (and ``natpool-pl:<name>`` when it was typed as
+prefix-length).
 """
 
 from __future__ import annotations
@@ -37,6 +53,8 @@ import re
 ROUTE_PROTO = 120
 TABLE_ACL = "wlacl"
 TABLE_NAT = "wlnat"
+POOL_MAX = 254         # addresses in a pool without overload: one set and two rules each
+NAT_TIMEOUT = "24h"    # IOS's ip nat translation timeout for a simple translation (86400 s)
 
 # The port names IOS knows (a few common ones), and ICMP's message names.
 PORTS = {"bgp": 179, "bootpc": 68, "bootps": 67, "domain": 53, "echo": 7, "ftp": 21, "ftp-data": 20,
@@ -386,6 +404,45 @@ def routes(own: dict) -> list[tuple[ipaddress.IPv4Network, str, int]]:
     return sorted(out, key=lambda r: (int(r[0].network_address), r[0].prefixlen, r[1]))
 
 
+def best(stat: list) -> list:
+    """(destination, distance, text) per static route whose next hop is
+    reachable -> the ones the routing table keeps: per destination only the
+    lowest administrative distance (a floating route stays out until the
+    better one goes), equal ones side by side."""
+    low: dict = {}
+    for d, dist, _ in stat:
+        low[d] = min(low.get(d, 256), dist)
+    return [(d, dist, how) for d, dist, how in stat if dist == low[d]]
+
+
+def pools(own: dict) -> dict[str, tuple[str, str, int]]:
+    """name -> (start, end, prefix length) of the ip nat pool lines."""
+    out = {}
+    for k, v in own.items():
+        if k.startswith("natpool:"):
+            w = v.split()
+            if len(w) == 3 and w[2].isdigit():
+                out[k[8:]] = (w[0], w[1], int(w[2]))
+    return dict(sorted(out.items()))
+
+
+def pool_addrs(start: str, end: str) -> list[str]:
+    a, b = int(ipaddress.IPv4Address(start)), int(ipaddress.IPv4Address(end))
+    return [str(ipaddress.IPv4Address(i)) for i in range(a, b + 1)]
+
+
+def _setname(pool: str, i: int) -> str:
+    return f"p_{re.sub(r'[^A-Za-z0-9_]', '_', pool)}_{i}"
+
+
+def _rule_target(how: str) -> tuple[str, str, bool]:
+    """'<if> overload' | 'pool <name> [overload]' -> (interface, pool, overload)."""
+    w = how.split()
+    if w and w[0] == "pool" and len(w) >= 2:
+        return "", w[1], "overload" in w[2:]
+    return (w[0] if w else ""), "", True
+
+
 def render(plan, reset: bool = False) -> list[str]:
     """Shell for the router: its static routes, the access lists on its
     interfaces, NAT. Empty when none is set and nothing must be undone."""
@@ -396,14 +453,20 @@ def render(plan, reset: bool = False) -> list[str]:
     nat = {k[4:]: v for k, v in own.items() if k.startswith("nat:")}
     rules = {k[7:]: v for k, v in own.items() if k.startswith("natsrc:")}
     statics = {k[10:]: v for k, v in own.items() if k.startswith("natstatic:")}
-    if not (rts or applied or rules or statics) and not reset:
+    from . import acl6  # IPv6 lists on the interfaces: their own ip6 table
+    v6 = acl6.render(plan, reset)
+    if not (rts or applied or rules or statics or v6) and not reset:
         return []
     out = ["### the router's layer 3 as typed at its console (winlab/iosl3.py)",
            f"ip route flush proto {ROUTE_PROTO} 2>/dev/null || true",
            f"nft delete table ip {TABLE_ACL} 2>/dev/null || true",
            f"nft delete table ip {TABLE_NAT} 2>/dev/null || true",
            f"for a in $(cat /run/winlab-natips 2>/dev/null); do ip addr del $a 2>/dev/null; done; : > /run/winlab-natips"]
+    tracked = {k[12:] for k in own if k.startswith("route-track:")}
     for net, target, dist in rts:
+        if f"{net} {target}" in tracked:
+            out.append(f"# ip route {net} {target} track: winlab-slad installs it while its object is Up")
+            continue
         if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
             how = f"via {target}"
         else:
@@ -440,21 +503,57 @@ def render(plan, reset: bool = False) -> list[str]:
     # NAT between the lab's networks
     inside = sorted(filter(None, (svi_for(lab, plan, i) for i, v in nat.items() if v == "inside")))
     post, pre, sel, extra_ips = [], [], {}, []
+    outside = sorted(filter(None, (svi_for(lab, plan, i) for i, v in nat.items() if v == "outside")))
+    have_pools = pools(own)
+    sets: list[str] = []
     for lst, how in sorted(rules.items()):
-        ifname = how.split()[0]
-        dev = svi_for(lab, plan, ifname)
-        if not dev or not inside or nat.get(ifname) != "outside" or not kind_of(own, lst):
-            continue
+        ifname, pool, over = _rule_target(how)
+        if pool:
+            if pool not in have_pools or not outside or not inside or not kind_of(own, lst):
+                continue
+            devs = outside
+        else:
+            dev = svi_for(lab, plan, ifname)
+            if not dev or not inside or nat.get(ifname) != "outside" or not kind_of(own, lst):
+                continue
+            devs = [dev]
         ch = "nat_" + _chain(lst)[4:]
         body = []
         for s, t in entries(own, lst):
             e = parse(t)
             cond = _nft_addr("saddr", e["src"]) + _nft_addr("daddr", e["dst"])
-            body.append(f"{cond}counter {'masquerade' if e['action'] == 'permit' else 'return'}"
-                        f" comment \"{lst} {s}\"")
+            if e["action"] != "permit":
+                body.append(f"{cond}counter return comment \"{lst} {s}\"")
+            elif not pool:
+                body.append(f"{cond}counter masquerade comment \"{lst} {s}\"")
+            else:
+                body.append(f"{cond}counter jump pool_{_chain(pool)[4:]} comment \"{lst} {s}\"")
         sel[ch] = body
-        post.append(f"iifname {{ {', '.join(chr(34) + d + chr(34) for d in inside)} }} oifname \"{dev}\" jump {ch}")
-    outside = sorted(filter(None, (svi_for(lab, plan, i) for i, v in nat.items() if v == "outside")))
+        if pool and f"pool_{_chain(pool)[4:]}" not in sel:
+            start, end, plen = have_pools[pool]
+            addrs = pool_addrs(start, end)
+            pch = f"pool_{_chain(pool)[4:]}"
+            if over:
+                sel[pch] = [f"counter snat to {start}-{end} comment \"pool {pool} overload\""]
+            else:
+                pbody = []
+                for i, a in enumerate(addrs[:POOL_MAX]):
+                    sn = _setname(pool, i)
+                    sets.append(f"  set {sn} {{ type ipv4_addr; size 1; flags dynamic,timeout; timeout {NAT_TIMEOUT}; }}")
+                    pbody.append(f"ip saddr @{sn} update @{sn} {{ ip saddr }} counter snat to {a} comment \"pool {pool} {a}\"")
+                for i, a in enumerate(addrs[:POOL_MAX]):
+                    sn = _setname(pool, i)
+                    pbody.append(f"add @{sn} {{ ip saddr }} counter snat to {a} comment \"pool {pool} {a} new\"")
+                pbody.append(f"counter drop comment \"pool {pool} exhausted\"")
+                sel[pch] = pbody
+            for dev in outside:
+                net = _dev_net(lab, plan, dev)
+                for a in addrs[:POOL_MAX]:
+                    if net is not None and ipaddress.IPv4Address(a) in net.net and a != net.router_ip:
+                        extra_ips.append((a, dev))
+        quoted = ", ".join(chr(34) + d + chr(34) for d in devs)
+        quoted = quoted if len(devs) == 1 else "{ " + quoted + " }"
+        post.append(f"iifname {{ {', '.join(chr(34) + d + chr(34) for d in inside)} }} oifname {quoted} jump {ch}")
     for local, glob in sorted(statics.items()):
         if not outside or not inside:
             continue
@@ -463,7 +562,7 @@ def render(plan, reset: bool = False) -> list[str]:
             post.insert(0, f"oifname \"{dev}\" ip saddr {local} counter snat to {glob}")
             extra_ips.append((glob, dev))
     if post or pre:
-        out += ["nft -f - <<'EOF' || true", f"table ip {TABLE_NAT} {{"]
+        out += ["nft -f - <<'EOF' || true", f"table ip {TABLE_NAT} {{"] + sets
         for ch, body in sorted(sel.items()):
             out += [f"  chain {ch} {{"] + [f"    {r}" for r in body] + ["  }"]
         out += ["  chain prerouting {", "    type nat hook prerouting priority -100; policy accept;"]
@@ -473,8 +572,20 @@ def render(plan, reset: bool = False) -> list[str]:
         # A static global address is answered for on the outside network.
         for glob, dev in extra_ips:
             out.append(f"ip addr add {glob}/32 dev {dev} 2>/dev/null && echo {glob}/32 dev {dev} >> /run/winlab-natips || true")
+    out += v6
     out.append("")
     return out
+
+
+def _dev_net(lab, plan, dev: str):
+    """The lab network whose SVI is this Linux device, or None."""
+    for net in lab.networks.values():
+        try:
+            if plan.segment_of(net.id).svi == dev:
+                return net
+        except KeyError:
+            continue
+    return None
 
 
 def render_hash(plan) -> str:
@@ -482,7 +593,7 @@ def render_hash(plan) -> str:
 
 
 def forget_iface(own: dict, ifname: str) -> None:
-    for k in (f"acl-in:{ifname}", f"acl-out:{ifname}", f"nat:{ifname}"):
+    for k in (f"acl-in:{ifname}", f"acl-out:{ifname}", f"nat:{ifname}", f"acl6-in:{ifname}", f"acl6-out:{ifname}"):
         own.pop(k, None)
 
 
@@ -537,12 +648,18 @@ def parse_conntrack(text: str) -> list[tuple[str, str, str, str, str]]:
 def run_lines(own: dict) -> list[str]:
     """The router's lines in show running-config: NAT, routes, lists."""
     out = []
+    for name, (start, end, plen) in pools(own).items():
+        mask = (f"prefix-length {plen}" if own.get(f"natpool-pl:{name}")
+                else f"netmask {ipaddress.IPv4Network(f'0.0.0.0/{plen}').netmask}")
+        out.append(f"ip nat pool {name} {start} {end} {mask}")
     for lst, how in sorted((k[7:], v) for k, v in own.items() if k.startswith("natsrc:")):
-        out.append(f"ip nat inside source list {lst} interface {how}")
+        out.append(f"ip nat inside source list {lst} " + (how if how.startswith("pool ") else f"interface {how}"))
     for local, glob in sorted((k[10:], v) for k, v in own.items() if k.startswith("natstatic:")):
         out.append(f"ip nat inside source static {local} {glob}")
     for net, target, dist in routes(own):
-        out.append(f"ip route {net.network_address} {net.netmask} {target}" + (f" {dist}" if dist != 1 else ""))
+        obj = own.get(f"route-track:{net} {target}")
+        out.append(f"ip route {net.network_address} {net.netmask} {target}" + (f" {dist}" if dist != 1 else "")
+                   + (f" track {obj}" if obj else ""))
     out += ["!"] if out else []
     for name in names(own):
         kind = kind_of(own, name)
@@ -584,6 +701,18 @@ def add_specs(con, add, U, E, C, IF) -> None:
         "Specify access list describing local addresses", C)
     add("no ip nat inside source list <name> interface <line>", lambda a: _nat_rule(con, a[0], a[1], False),
         "Negate a command or set its defaults", C)
+    add("ip nat pool <name> <ip> <ip> <line>", lambda a: _nat_pool(con, a[0], a[1], a[2], a[3]),
+        "Define pool of addresses", C)
+    add("no ip nat pool <name>", lambda a: _no_pool(con, a[0]), "Negate a command or set its defaults", C)
+    add("no ip nat pool <name> <line>", lambda a: _no_pool(con, a[0]), "Negate a command or set its defaults", C)
+    add("ip nat inside source list <name> pool <name>", lambda a: _nat_pool_rule(con, a[0], a[1], "", True),
+        "Name pool of global addresses", C)
+    add("ip nat inside source list <name> pool <name> <line>",
+        lambda a: _nat_pool_rule(con, a[0], a[1], a[2], True), "Name pool of global addresses", C)
+    add("no ip nat inside source list <name> pool <name>", lambda a: _nat_pool_rule(con, a[0], a[1], "", False),
+        "Negate a command or set its defaults", C)
+    add("no ip nat inside source list <name> pool <name> <line>",
+        lambda a: _nat_pool_rule(con, a[0], a[1], a[2], False), "Negate a command or set its defaults", C)
     add("ip nat inside source static <ip> <ip>", lambda a: _nat_static(con, a[0], a[1], True),
         "Specify static local->global mapping", C)
     add("no ip nat inside source static <ip> <ip>", lambda a: _nat_static(con, a[0], a[1], False),
@@ -625,9 +754,16 @@ def _route(con, a, on: bool) -> str:
     w = a[2].split()
     own = _own_c(con)
     if not on and not w:
-        for k in [k for k in own if k.startswith(f"route:{net} ")]:
+        for k in [k for k in own if k.startswith((f"route:{net} ", f"route-track:{net} "))]:
             del own[k]
         return _done(con)
+    obj = None
+    if "track" in [x.lower() for x in w]:   # ip route ... track <object> (winlab/iossla.py)
+        i = [x.lower() for x in w].index("track")
+        if i + 1 >= len(w) or not w[i + 1].isdigit() or not 1 <= int(w[i + 1]) <= 1000:
+            raise devcli.CliError("% Invalid input detected at '^' marker.")
+        obj = int(w[i + 1])
+        w = w[:i] + w[i + 2:]
     if not w:
         raise devcli.CliError("% Incomplete command.")
     target = w[0]
@@ -642,11 +778,19 @@ def _route(con, a, on: bool) -> str:
             raise devcli.CliError("% Invalid input detected at '^' marker.")
         dist = int(w[1])
     key = f"route:{net} {target}"
+    from . import iossla
     if on:
         own[key] = str(dist)
+        iossla.route_track(own, net, target, obj)
     elif own.pop(key, None) is None:
         return "%No matching route to delete"
-    return _done(con)
+    else:
+        iossla.route_track(own, net, target, None)
+    note = _done(con)
+    if on and obj and f"track:{obj}" not in own:
+        note = "\n".join(x for x in (f"% Track object {obj} does not exist yet: the route stays out of the table "
+                                      f"until it is Up", note) if x)
+    return note
 
 
 def _numbered(con, name: str, text: str) -> str:
@@ -716,6 +860,9 @@ def _no_list(con, name: str) -> str:
 
 def _group(con, name: str, way: str, on: bool) -> str:
     from . import devcli
+    w = way.split()
+    if not name and len(w) == 2:   # no ip access-group <list> in|out, read by the shorter form
+        name, way = w
     way = way.strip().lower()
     if way not in ("in", "out"):
         raise devcli.CliError("% Invalid input detected at '^' marker.")
@@ -750,6 +897,81 @@ def _nat_rule(con, lst: str, rest: str, on: bool) -> str:
     if on:
         own[f"natsrc:{lst}"] = f"{ifname} overload"
     else:
+        own.pop(f"natsrc:{lst}", None)
+    return _done(con)
+
+
+def _nat_pool(con, name: str, start: str, end: str, rest: str) -> str:
+    from . import devcli
+    try:
+        a, b = ipaddress.IPv4Address(start), ipaddress.IPv4Address(end)
+    except ValueError:
+        raise devcli.CliError("% Invalid input detected at '^' marker.") from None
+    w = rest.split()
+    if len(w) != 2:
+        raise devcli.CliError("% Incomplete command." if len(w) < 2 else "% Invalid input detected at '^' marker.")
+    word = w[0].lower()
+    try:
+        if word[:1] == "n" and "netmask".startswith(word):
+            plen = ipaddress.IPv4Network(f"0.0.0.0/{w[1]}").prefixlen
+            typed_pl = False
+        elif word[:1] == "p" and "prefix-length".startswith(word):
+            plen = int(w[1])
+            if not 1 <= plen <= 32:
+                raise ValueError
+            typed_pl = True
+        else:
+            raise ValueError
+    except ValueError:
+        raise devcli.CliError("% Invalid input detected at '^' marker.") from None
+    if int(b) < int(a):
+        raise devcli.CliError("%End address less than starting address")
+    if ipaddress.IPv4Network(f"{a}/{plen}", strict=False) != ipaddress.IPv4Network(f"{b}/{plen}", strict=False):
+        raise devcli.CliError("%Start and end addresses on different subnets")
+    own = _own_c(con)
+    in_use = [k[7:] for k, v in own.items() if k.startswith("natsrc:") and _rule_target(v)[1] == name]
+    old = own.get(f"natpool:{name}")
+    new = f"{a} {b} {plen}"
+    if old and old != new and in_use:
+        raise devcli.CliError(f"%Pool {name} in use, cannot redefine")
+    own[f"natpool:{name}"] = new
+    if typed_pl:
+        own[f"natpool-pl:{name}"] = "yes"
+    else:
+        own.pop(f"natpool-pl:{name}", None)
+    note = _done(con)
+    n = int(b) - int(a) + 1
+    if n > POOL_MAX:
+        note = (note + "\n" if note else "") + (f"% A pool without overload uses its first {POOL_MAX} addresses here "
+                                                 f"(one nftables set each); with overload, all {n}")
+    return note
+
+
+def _no_pool(con, name: str) -> str:
+    from . import devcli
+    own = _own_c(con)
+    if f"natpool:{name}" not in own:
+        raise devcli.CliError(f"%Pool {name} not found")
+    if any(k.startswith("natsrc:") and _rule_target(v)[1] == name for k, v in own.items()):
+        raise devcli.CliError(f"%Pool {name} in use, cannot destroy")
+    own.pop(f"natpool:{name}", None)
+    own.pop(f"natpool-pl:{name}", None)
+    return _done(con)
+
+
+def _nat_pool_rule(con, lst: str, pool: str, rest: str, on: bool) -> str:
+    from . import devcli
+    extra = [x.lower() for x in rest.split()]
+    if len(extra) > 1 or any(not "overload".startswith(x) for x in extra):
+        raise devcli.CliError("% Invalid input detected at '^' marker.")
+    own = _own_c(con)
+    if on:
+        note = "" if f"natpool:{pool}" in own else \
+            f"% Pool {pool} is not defined yet: the rule takes effect once ip nat pool {pool} ... is typed"
+        own[f"natsrc:{lst}"] = f"pool {pool}" + (" overload" if extra else "")
+        done = _done(con)
+        return "\n".join(x for x in (note, done) if x)
+    if own.get(f"natsrc:{lst}", "").split()[:2] == ["pool", pool]:
         own.pop(f"natsrc:{lst}", None)
     return _done(con)
 
@@ -806,20 +1028,86 @@ def show_nat(con) -> str:
     return "\n".join(out)
 
 
+NAT_TABLE_CMD = f"nft list table ip {TABLE_NAT} 2>/dev/null"
+
+
+def parse_pool_state(text: str) -> dict[str, dict]:
+    """nft list table ip wlnat -> {pool: {"allocated": {inside: global},
+    "misses": n}} for the pools without overload."""
+    out: dict[str, dict] = {}
+    owner: dict[str, tuple[str, str]] = {}   # set name -> (pool, address)
+    for line in text.splitlines():
+        m = re.search(r'add @(p_\S+) \{ ip saddr \} .*snat to (\S+) comment "pool (\S+) ', line)
+        if m:
+            owner[m.group(1)] = (m.group(3), m.group(2))
+    elems: dict[str, list[str]] = {}
+    cur = ""
+    for line in text.splitlines():
+        m = re.match(r"\s*set (p_\S+) \{", line)
+        if m:
+            cur = m.group(1)
+            continue
+        if cur and "elements" in line:
+            elems[cur] = re.findall(r"(\d+\.\d+\.\d+\.\d+)", line.split("=", 1)[1])
+        if cur and line.strip() == "}":
+            cur = ""
+        m = re.search(r'counter packets (\d+) bytes \d+ drop comment "pool (\S+) exhausted"', line)
+        if m:
+            out.setdefault(m.group(2), {"allocated": {}, "misses": 0})["misses"] = int(m.group(1))
+    for sn, (pool, addr) in owner.items():
+        d = out.setdefault(pool, {"allocated": {}, "misses": 0})
+        for host in elems.get(sn, []):
+            d["allocated"][host] = addr
+    return out
+
+
 def show_nat_stats(con) -> str:
     own = con.lab.devices.get("router", {})
     side = lambda s: ", ".join(k[4:] for k, v in sorted(own.items()) if k.startswith("nat:") and v == s)  # noqa: E731
-    n = len(show_nat(con).splitlines()) - 1
-    return "\n".join([f"Total active translations: {n}",
-                      f"Outside interfaces:\n  {side('outside')}", f"Inside interfaces:\n  {side('inside')}",
-                      "Dynamic mappings:"] + [f"-- Inside Source\n[Id: {i}] access-list {k[7:]} interface "
-                                              f"{v.split()[0]} refcount 0" for i, (k, v) in
-                                              enumerate(sorted((k, v) for k, v in own.items()
-                                                               if k.startswith("natsrc:")), 1)])
+    rows = show_nat(con).splitlines()[1:]
+    state: dict = {}
+    have = pools(own)
+    if have and con.powered():
+        try:
+            state = parse_pool_state(con._on_router(NAT_TABLE_CMD, timeout=10))
+        except Exception:  # noqa: BLE001 - the pools still show, with nothing allocated
+            state = {}
+    out = [f"Total active translations: {len(rows)}",
+           f"Outside interfaces:\n  {side('outside')}", f"Inside interfaces:\n  {side('inside')}",
+           "Dynamic mappings:"]
+    for i, (k, v) in enumerate(sorted((k, v) for k, v in own.items() if k.startswith("natsrc:")), 1):
+        ifname, pool, over = _rule_target(v)
+        if not pool:
+            out.append(f"-- Inside Source\n[Id: {i}] access-list {k[7:]} interface {ifname} refcount {len(rows)}")
+            continue
+        out.append(f"-- Inside Source\n[Id: {i}] access-list {k[7:]} pool {pool}" + (" overload" if over else "")
+                   + f" refcount {len(rows)}")
+        if pool not in have:
+            out.append(f" pool {pool}: not defined (ip nat pool {pool} ...)")
+            continue
+        start, end, plen = have[pool]
+        addrs = pool_addrs(start, end)
+        st = state.get(pool, {"allocated": {}, "misses": 0})
+        if over:
+            used = {r.split()[1].split(":")[0] for r in rows if len(r.split()) > 1}
+            alloc = len(used & set(addrs))
+        else:
+            alloc = len(set(st["allocated"].values()))
+        total = len(addrs)
+        out += [f" pool {pool}: netmask {ipaddress.IPv4Network(f'0.0.0.0/{plen}').netmask}",
+                f"\tstart {start} end {end}",
+                f"\ttype generic, total addresses {total}, allocated {alloc} ({alloc * 100 // max(total, 1)}%), "
+                f"misses {st['misses']}"]
+    return "\n".join(out)
+
+
+# The pools' dynamic sets go with the translations, so their addresses are free again.
+CLEAR_NAT_CMD = (f"for s in $(nft list table ip {TABLE_NAT} 2>/dev/null | sed -n 's/^[[:space:]]*set \\(p_[^ ]*\\) .*/\\1/p'); "
+                 f"do nft flush set ip {TABLE_NAT} \"$s\"; done; conntrack -F 2>/dev/null; true")
 
 
 def _clear_nat(con) -> str:
-    con._on_router("conntrack -F 2>/dev/null; true", timeout=10)
+    con._on_router(CLEAR_NAT_CMD, timeout=10)
     return ""
 
 

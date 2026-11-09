@@ -14,10 +14,40 @@ kernel bridge there (stp<N>, its alias the switch's name), each
 switch-to-switch cable a veth pair between two of them (stp<N>g<port>), and
 the switch at the top of each tree is joined to the router's bridge by one
 more pair (stp<N>fa / stp<N>lab), the way its machines' frames come in. The
-kernel runs spanning tree on those bridges: classic 802.1D (stp_state 1), as
-mstpd is not on the router, so `spanning-tree mode rapid-pvst` only shortens
-the forward delay (4 s instead of 15 s), and one tree serves every VLAN:
-VLAN 1's settings (priority, on or off) are the switch's.
+kernel runs classic 802.1D on those bridges (stp_state 1) for a switch in
+`spanning-tree mode pvst`, and one tree serves every VLAN: VLAN 1's settings
+(priority, on or off) are the switch's.
+
+`spanning-tree mode rapid-pvst` is real rapid spanning tree (802.1w) when
+mstpd is on the router (winlab/mstpd.py): the kernel does 802.1D only, and
+mstpd (GPL-2.0-or-later, github.com/mstpd/mstpd) is the Linux daemon that
+runs RSTP on a bridge the kernel hands it. It is not packaged for Alpine
+(neither main nor community of the router's release, nor edge's testing),
+so winlab's own workflow builds it from the pinned upstream release as
+static programs and publishes them with their source; preparation fetches
+that asset onto this PC and the repository volume carries it to the router.
+The start script below then starts mstpd, names the rapid switches' bridges
+in /run/winlab-rstp (winlab's /sbin/bridge-stp says yes to the kernel for
+those, so their stp_state is 2, user STP), and sets each one up with
+mstpctl: protocol rstp, the bridge priority, and per port the cost, the
+priority, PortFast as an admin edge port and BPDU guard (which mstpd
+enforces itself: the first BPDU on a guarded port shuts it). Roles and
+states in `show spanning-tree` are then what mstpctl reports. A switch left
+in pvst keeps the kernel's 802.1D, and RSTP falls back to 802.1D on a cable
+to it, as the standard says. Without mstpd (no build published yet, or not
+fetched) rapid-pvst only shortens the kernel's forward delay (4 s instead of
+15 s), and the consoles say so. One tree serves every VLAN either way: Rapid
+PVST+'s per-VLAN instances are not made here.
+
+`spanning-tree mode mst` is MSTP (802.1s) in the same mstpd, with the region
+typed under `spanning-tree mst configuration` (winlab/mst.py): mstpctl sets
+the bridge to mstp, its region name and revision (setmstconfid), creates
+each instance and maps its VLANs (setvid2fid, setfid2mstid), and sets each
+instance's bridge priority. mstpd sends the region's configuration digest in
+its BPDUs, so two switches whose name, revision or VLAN map differ really
+are two regions, joined at boundary ports. The router's bridges keep one
+state per port, so every VLAN forwards along the CIST (instance 0); the
+other instances are elected and shown, not separate forwarding paths.
 
 With spanning tree off on a loop the kernel floods for real: frames go round
 the veths and come back into the router's bridge, which floods them to every
@@ -49,12 +79,14 @@ from dataclasses import dataclass, field
 from . import devcli, paths, state
 
 GI1 = "GigabitEthernet0/1"
-MODES = ("pvst", "rapid-pvst")
+MODES = ("pvst", "rapid-pvst", "mst")
+FAST = ("rapid-pvst", "mst")   # the modes mstpd runs
 PRIORITY = 32768
 GIG_COST = 4              # 1 Gbit/s, Cisco's short path cost
 FAST_COST = 19            # 100 Mbit/s
 PORT_PRIORITY = 128
-FORWARD_DELAY = {"pvst": 15, "rapid-pvst": 4}   # seconds, on the kernel's 802.1D
+FORWARD_DELAY = {"pvst": 15, "rapid-pvst": 4, "mst": 4}   # seconds, on the kernel's 802.1D
+RSTP_FORWARD_DELAY = 15   # rapid-pvst in mstpd: the standard's and Cisco's default
 HELLO, MAX_AGE = 2, 20
 STORM_RATE = "1mbit"      # every switch-to-switch veth
 INTO_LAB_RATE = "512kbit"  # what a loop sends back into the router's bridge
@@ -64,6 +96,13 @@ CAP_TEXT = ("winlab caps it (1 Mbit/s a cable, about 2,000 small frames a second
             "frames a second on a gigabit port")
 KERNEL_NOTE = ("the router's kernel runs classic 802.1D for the switches (one tree for every VLAN, "
                "VLAN 1's settings); mstpd is not on the router")
+RSTP_NOTE = ("rapid spanning tree (802.1w) runs in mstpd on the router for this switch "
+             "(one tree for every VLAN, VLAN 1's settings)")
+MST_NOTE = ("MSTP (802.1s) runs in mstpd on the router for this switch, with its region's name, revision "
+            "and VLAN map; every VLAN forwards along the CIST (instance 0)")
+_RSTP_ROLE = {"Root": "Root", "Designated": "Desg", "Alternate": "Altn", "Backup": "Back",
+              "Disabled": "Disa", "Master": "Mstr"}
+_RSTP_STATE = {"forwarding": "FWD", "learning": "LRN", "discarding": "BLK"}
 _STATES = {"0": "DIS", "1": "LIS", "2": "LRN", "3": "FWD", "4": "BLK"}
 
 
@@ -171,11 +210,31 @@ def mode(lab, sw: str) -> str:
     return _own(lab, sw).get("stp-mode") or "pvst"
 
 
+def rstp_ready() -> bool:
+    """mstpd's build is fetched onto this PC, so the router runs rapid-pvst
+    as RSTP (winlab/mstpd.py)."""
+    from . import mstpd
+    return mstpd.ready()
+
+
+def note(lab, sw: str) -> str:
+    """What runs this switch's spanning tree on the router, in a line."""
+    m = mode(lab, sw)
+    if m == "mst" and rstp_ready():
+        return MST_NOTE
+    return RSTP_NOTE if m == "rapid-pvst" and rstp_ready() else KERNEL_NOTE
+
+
 def vlan_on(lab, sw: str, tag: int = 1) -> bool:
     return not _own(lab, sw).get(f"stp-off:{tag}")
 
 
 def priority(lab, sw: str, tag: int = 1) -> int:
+    if mode(lab, sw) == "mst":   # the CIST's priority: spanning-tree mst 0 priority (winlab/mst.py)
+        try:
+            return int(_own(lab, sw).get("mst-prio:0") or PRIORITY)
+        except ValueError:
+            return PRIORITY
     try:
         return int(_own(lab, sw).get(f"stp-prio:{tag}") or PRIORITY)
     except ValueError:
@@ -507,16 +566,30 @@ def render(plan, reset: bool = False) -> list[str]:
     if not groups and not reset:
         return []
     out = ["### switches cabled to switches: a kernel bridge each, spanning tree on them (winlab/stp.py)",
-           f"# {KERNEL_NOTE}.",
+           "# pvst switches: the kernel's 802.1D; rapid-pvst switches: RSTP in mstpd when it is on the router "
+           "(winlab/mstpd.py), else 802.1D with a 4 s forward delay. One tree for every VLAN (VLAN 1's settings).",
            f"# Every veth is capped ({STORM_RATE}; {INTO_LAB_RATE} back into {plan_bridge()}): a loop "
            f"with spanning tree off floods for real, but slowly enough to keep the PC usable.",
            "for i in $(ls /sys/class/net 2>/dev/null | grep '^stp'); do ip link del $i 2>/dev/null; done; true"]
     res = compute(lab)
     idx = {s: i for i, s in enumerate(devcli.switches(lab), 1)}
     native = native_vid(plan)
+    fast = [s for _, members in groups for s in members if res.bridges[s].on and res.bridges[s].mode in FAST]
+    out += _rstp_start([f"stp{idx[s]}" for s in fast])
+    bonds: dict[str, dict[str, str]] = {}
+    # Ports BPDU guard err-disabled on a rapid-pvst switch: mstpd enforces the
+    # guard itself, so it gets the BPDU (the far end up, unless shut there).
+    by_mstpd: dict[End, str] = {}
+    for e in res.err:
+        if e.sw in fast and _own(lab, e.sw).get(f"stp-err:{e.port}"):
+            by_mstpd[e] = "BPDU guard, which mstpd enforces on the first BPDU"
+            far = res.ports[e].far
+            if not shut(lab, far) and far not in res.err:
+                by_mstpd[far] = f"the far end of {e.sw} {devcli.short_if(e.port)}, err-disabled by BPDU guard in mstpd"
     for tp, members in groups:
         vids = sorted({plan.segment_of(n.id).vid for s in members for n in devcli.vlans_of(lab, s)})
         out.append(f"# tree under {tp}: {', '.join(members)}; VLANs {', '.join(map(str, vids))}")
+        links: list[str] = []   # the ports' links, set once mstpd has the bridges (BPDU guard sees the first BPDU)
         for s in members:
             br, b = f"stp{idx[s]}", res.bridges[s]
             out += [f"ip link add {br} type bridge vlan_filtering 1 vlan_default_pvid 0 "
@@ -534,6 +607,7 @@ def render(plan, reset: bool = False) -> list[str]:
             br = f"stp{idx[s]}"
             from . import etherchannel  # channels that formed: a bond of their cables, one bridge port
             pre, bonded, post = etherchannel.render_switch(lab, s, idx[s], res, br, native, vids)
+            bonds[s] = bonded
             out += pre
             for e, c in ports_of(lab, s, tree_cabs):
                 p, dev = res.ports[e], _if(idx, e)
@@ -545,9 +619,15 @@ def render(plan, reset: bool = False) -> list[str]:
                 out += [f"bridge vlan add dev {dev} vid {v}" for v in vids]
                 out += [f"bridge link set dev {dev} cost {p.cost} priority {p.pid[0] // 4}"
                         + (" guard on" if p.guard else "") + " 2>/dev/null || true",
-                        f"tc qdisc replace dev {dev} root tbf rate {STORM_RATE} burst 8kb latency 100ms || true",
-                        f"ip link set {dev} {'down' if p.state in ('down', 'err') else 'up'}"
-                        + (f"   # {p.state}" if p.state in ("down", "err") else "")]
+                        f"tc qdisc replace dev {dev} root tbf rate {STORM_RATE} burst 8kb latency 100ms || true"]
+                if e in by_mstpd:
+                    # BPDU guard in mstpd: both ends up, and mstpd shuts the guarded one itself on the
+                    # first BPDU from the far end; without mstpd the kernel's link down stands in.
+                    links.append(f'if [ -n "$wl_mstpd" ]; then ip link set {dev} up; else ip link set {dev} down; fi'
+                                 f"   # {p.state}: {by_mstpd[e]}")
+                else:
+                    links.append(f"ip link set {dev} {'down' if p.state in ('down', 'err') else 'up'}"
+                                 + (f"   # {p.state}" if p.state in ("down", "err") else ""))
             out += post
         i = idx[tp]
         out += [f"# {tp}'s machines' frames come in from the router's bridge here",
@@ -556,10 +636,67 @@ def render(plan, reset: bool = False) -> list[str]:
         for dev in (f"stp{i}fa", f"stp{i}lab"):
             out += [f"bridge vlan add dev {dev} vid {v}" for v in vids]
         out += [f"tc qdisc replace dev stp{i}fa root tbf rate {INTO_LAB_RATE} burst 8kb latency 100ms || true",
-                f"tc qdisc replace dev stp{i}lab root tbf rate {STORM_RATE} burst 8kb latency 100ms || true",
-                f"ip link set stp{i}fa up", f"ip link set stp{i}lab up"]
+                f"tc qdisc replace dev stp{i}lab root tbf rate {STORM_RATE} burst 8kb latency 100ms || true"]
+        for s in members:
+            if s in fast:
+                out += _rstp_bridge(lab, s, idx, res, tree_cabs, bonds.get(s, {}), fa=(s == tp))
+        out += links + [f"ip link set stp{i}fa up", f"ip link set stp{i}lab up"]
+    from . import etherchannel  # PAgP: winlab's own speaker on the desirable and auto ports
+    out += etherchannel.pagp_lines(plan, reset)
     out.append("")
     return out
+
+
+def _rstp_start(bridges: list[str]) -> list[str]:
+    """mstpd onto the router and running, and the bridges it is to take,
+    before the bridges are made (the kernel asks /sbin/bridge-stp as each
+    one's spanning tree goes on). With no rapid-pvst switch: the list emptied,
+    so every bridge keeps the kernel's 802.1D."""
+    from . import mstpd
+    if not bridges:
+        return [f"rm -f {mstpd.RSTP_LIST}"]
+    return (["# rapid-pvst: rapid spanning tree (802.1w) in mstpd, from the repository volume when it was "
+             "fetched (winlab/mstpd.py)"]
+            + mstpd.router_lines()
+            + [f'if [ -n "$wl_mstpd" ]; then pidof mstpd >/dev/null 2>&1 || {{ {mstpd.MSTPD}; sleep 0.5; }}; '
+               f"printf '%s\\n' {' '.join(bridges)} > {mstpd.RSTP_LIST}; "
+               f"else rm -f {mstpd.RSTP_LIST}; echo 'winlab: mstpd is not on the router: rapid-pvst runs as "
+               f"802.1D with a {FORWARD_DELAY['rapid-pvst']} s forward delay' > /dev/kmsg 2>/dev/null; fi"])
+
+
+def _rstp_bridge(lab, sw: str, idx: dict, res: Result, cabs: list[Cable], bonded: dict[str, str],
+                 fa: bool) -> list[str]:
+    """One rapid-pvst switch's bridge handed to mstpd and set as the console
+    says: RSTP, the bridge priority, and per port its cost, priority, PortFast
+    (an admin edge port) and BPDU guard. Only when the kernel did hand it
+    over (stp_state 2); otherwise the kernel's 802.1D keeps it."""
+    from . import mstpd
+    i, m, b = idx[sw], mstpd.MSTPCTL, res.bridges[sw]
+    br = f"stp{i}"
+    out = [f'if [ -n "$wl_mstpd" ] && [ "$(cat /sys/class/net/{br}/bridge/stp_state 2>/dev/null)" = 2 ]; then'
+           f"   # {sw}: {b.mode}",
+           f"  {m} addbridge {br} || true",
+           f"  {m} setforcevers {br} {'mstp' if b.mode == 'mst' else 'rstp'} || true",
+           f"  {m} settreeprio {br} 0 {b.bid[0] // 4096} || true"]
+    if b.mode == "mst":
+        from . import mst  # the region: name, revision, instances and their VLANs, their priorities
+        out += [f"  {line}" for line in mst.mstpctl_lines(lab, sw, m, br)]
+    seen = set()
+    for e, _c in ports_of(lab, sw, cabs):
+        p = res.ports[e]
+        dev = bonded.get(e.port) or _if(idx, e)
+        if dev in seen:
+            continue
+        seen.add(dev)
+        out += [f"  {m} setportp2p {br} {dev} yes || true",
+                f"  {m} setportpathcost {br} {dev} {p.cost} || true",
+                f"  {m} settreeportprio {br} {dev} 0 {p.pid[0] // 16} || true",
+                f"  {m} setportadminedge {br} {dev} {'yes' if p.edge else 'no'} || true",
+                f"  {m} setbpduguard {br} {dev} {'yes' if p.guard else 'no'} || true"]
+    if fa:
+        # The way into the router's bridge, where the machines are: no switch speaks there.
+        out += [f"  {m} setportp2p {br} stp{i}fa yes || true", f"  {m} setportadminedge {br} stp{i}fa yes || true"]
+    return out + ["fi"]
 
 
 def plan_bridge() -> str:
@@ -578,17 +715,29 @@ def render_hash(plan) -> str:
 LIVE_CMD = ("echo '#stp'; for d in /sys/class/net/stp*; do n=${d##*/}; "
             "if [ -d $d/bridge ]; then echo \"B $n $(cat $d/bridge/stp_state) $(cat $d/bridge/bridge_id) "
             "$(cat $d/bridge/root_id)\"; for p in $d/brif/*; do [ -e $p/state ] && "
-            "echo \"P $n ${p##*/} $(cat $p/state)\"; done; else echo \"T $n $(cat $d/statistics/tx_packets)\"; "
+            "echo \"P $n ${p##*/} $(cat $p/state)\"; done; "
+            # A bridge mstpd runs (stp_state 2): its protocol, and each port as mstpctl reports it.
+            "if [ \"$(cat $d/bridge/stp_state)\" = 2 ] && [ -x /usr/local/sbin/mstpctl ]; then "
+            "echo \"M $n $(/usr/local/sbin/mstpctl showbridge $n force-protocol-version 2>/dev/null)\"; "
+            "for p in $d/brif/*; do q=${p##*/}; echo \"R $n $q $(/usr/local/sbin/mstpctl showportparams $n $q "
+            "enabled role state bpdu-guard-error oper-edge-port 2>/dev/null | tr '\\n' ' ')\"; done; fi; "
+            "else echo \"T $n $(cat $d/statistics/tx_packets)\"; "
             "fi; done; echo \"C $(head -n 1 /proc/stat)\"")
 
 
 def parse_live(text: str) -> dict:
     """LIVE_CMD's lines: bridges (stp_state, own and root id), port states
     by veth, packets sent by veth, and the router's CPU counters."""
-    out = {"bridges": {}, "ports": {}, "tx": {}, "cpu": []}
+    out = {"bridges": {}, "ports": {}, "tx": {}, "cpu": [], "rstp": {}, "roles": {}}
     for line in (text or "").splitlines():
         parts = line.split()
-        if len(parts) >= 5 and parts[0] == "B":
+        if len(parts) == 3 and parts[0] == "M":
+            out["rstp"][parts[1]] = parts[2]          # force-protocol-version: rstp (or stp, mstp)
+        elif len(parts) == 8 and parts[0] == "R":
+            # mstpctl showportparams: enabled role state bpdu-guard-error oper-edge-port
+            out["roles"][parts[2]] = {"bridge": parts[1], "enabled": parts[3] == "yes", "role": parts[4],
+                                      "state": parts[5], "guard_err": parts[6] == "yes", "edge": parts[7] == "yes"}
+        elif len(parts) >= 5 and parts[0] == "B":
             out["bridges"][parts[1]] = {"on": parts[2] != "0", "id": parts[3], "root": parts[4]}
         elif len(parts) == 4 and parts[0] == "P":
             out["ports"][parts[2]] = _STATES.get(parts[3], parts[3])
@@ -729,6 +878,12 @@ def live(dash) -> dict:
 # Graded faults in the manner of winlab/faults.py: a fault is put into the
 # user's own network without a word, the canvas and the consoles show its
 # symptom, a hint ladder leads to it, and Check my fix proves it gone.
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 @dataclass(frozen=True)
 class Drill:
     id: str
@@ -799,9 +954,9 @@ def drill_view(lab) -> dict | None:
     k = DRILLS[d["id"]]
     w = _words(lab, d)
     return {"id": k.id, "shown": int(d.get("hints", 0)), "of": len(k.hints),
-            "hints": [h.format(**w) for h in k.hints[:int(d.get("hints", 0))]],
-            "symptom": k.symptom.format(**w), "done": bool(d.get("done")),
-            "title": k.title if d.get("done") else "", "fix": k.fix if d.get("done") else ""}
+            "hints": [_pt(h).format(**w) for h in k.hints[:int(d.get("hints", 0))]],
+            "symptom": _pt(k.symptom).format(**w), "done": bool(d.get("done")),
+            "title": _pt(k.title) if d.get("done") else "", "fix": _pt(k.fix) if d.get("done") else ""}
 
 
 def drill(dash, op: str, params: dict, runner=None) -> dict:
@@ -818,7 +973,7 @@ def drill(dash, op: str, params: dict, runner=None) -> dict:
     if op == "hint":
         d["hints"] = min(len(k.hints), int(d.get("hints", 0)) + 1)
         _drill_save(lab.name, d)
-        return {"ok": True, "message": k.hints[d["hints"] - 1].format(**_words(lab, d))}
+        return {"ok": True, "message": _pt(k.hints[d["hints"] - 1]).format(**_words(lab, d))}
     if op == "check":
         res = check(lab, d, runner)
         if res["passed"]:
@@ -837,7 +992,7 @@ def drill(dash, op: str, params: dict, runner=None) -> dict:
             lab.devices.get(f"sw:{d['a']}", {}).pop(f"stp-err:{d.get('pa', '')}", None)
             _save(dash)
             _drill_save(lab.name, None)
-            return {"ok": True, "message": f"put back: it was {k.title.lower()}{_sync(dash)}"}
+            return {"ok": True, "message": f"put back: it was {_pt(k.title).lower()}{_sync(dash)}"}
         _drill_save(lab.name, None)
         return {"ok": True, "message": ""}
     raise StpError(f"unknown drill step {op!r}")
@@ -902,7 +1057,7 @@ def check(lab, d: dict, runner=None) -> dict:
         rows.append(("the router's switch bridges are quiet (kernel counters)", not storming(runner)))
     passed = all(ok for _, ok in rows)
     k = DRILLS[d["id"]]
-    msg = (f"fixed: it was {k.title.lower()}. The fix: {k.fix}." if passed else
+    msg = (f"fixed: it was {_pt(k.title).lower()}. The fix: {_pt(k.fix)}." if passed else
            "not yet: " + "; ".join(t for t, ok in rows if not ok))
     return {"ok": True, "passed": passed, "message": msg,
             "results": [{"check": t, "passed": ok} for t, ok in rows]}
@@ -946,6 +1101,8 @@ def add_specs(con, add, U, C, I) -> None:
     add("no spanning-tree cost", lambda a: set_port(con, "cost", ""), "Negate a command or set its defaults", I)
     add("spanning-tree port-priority <num>", lambda a: set_port(con, "pri", a[0]), "Change an interface's spanning tree port priority", I)
     add("no spanning-tree port-priority", lambda a: set_port(con, "pri", ""), "Negate a command or set its defaults", I)
+    from . import mst  # spanning-tree mode mst: the region, the instances, show spanning-tree mst
+    mst.add_specs(con, add, U, C)
 
 
 def _sw(con) -> str:
@@ -1003,10 +1160,7 @@ def set_mode(con, text: str) -> str:
     if want in MODES:
         hit = [want]
     if len(hit) != 1:
-        raise devcli.CliError("% Invalid input: spanning-tree mode pvst | rapid-pvst")
-    if hit[0] == "mst":
-        raise devcli.CliError("% MST is not in this switch: it runs one tree with the router's kernel "
-                              "(spanning-tree mode pvst or rapid-pvst)")
+        raise devcli.CliError("% Invalid input: spanning-tree mode pvst | rapid-pvst | mst")
     own = _mine(con)
     if hit[0] == "pvst":
         own.pop("stp-mode", None)
@@ -1014,8 +1168,15 @@ def set_mode(con, text: str) -> str:
         own["stp-mode"] = hit[0]
     out = _done(con)
     if hit[0] == "rapid-pvst":
-        out = (out + "\n" if out else "") + (f"% {KERNEL_NOTE}: rapid-pvst here is 802.1D with a "
-                                             f"{FORWARD_DELAY['rapid-pvst']} s forward delay")
+        if rstp_ready():
+            tail = f"% {RSTP_NOTE}: roles, edge ports and BPDU guard are mstpd's, read with show spanning-tree"
+        else:
+            tail = (f"% {KERNEL_NOTE} yet (winlab images prepare fabric fetches it once its build is published): "
+                    f"rapid-pvst here is 802.1D with a {FORWARD_DELAY['rapid-pvst']} s forward delay")
+        out = (out + "\n" if out else "") + tail
+    elif hit[0] == "mst":
+        from . import mst
+        out = (out + "\n" if out else "") + mst.mode_note(con)
     return out
 
 
@@ -1061,7 +1222,7 @@ def set_vlan(con, text: str, on: bool) -> str:
                               "root secondary]")
     out = _done(con)
     if 1 not in tags:
-        out = (out + "\n" if out else "") + (f"% Kept for VLAN {','.join(map(str, tags))}; {KERNEL_NOTE}, "
+        out = (out + "\n" if out else "") + (f"% Kept for VLAN {','.join(map(str, tags))}; {note(lab, sw)}, "
                                              f"so VLAN 1's settings decide")
     return out
 
@@ -1113,9 +1274,13 @@ def set_edge(con, how: str) -> str:
                 f"when the interface is in a non-trunking mode.")
     own[f"stp-edge:{key}"] = "trunk" if gig else "yes"
     out = _done(con, live=gig)
-    if gig:
+    if gig and mode(con.lab, _sw(con)) in FAST and rstp_ready():
+        tail = (f"{_EDGE_WARN}\n\n%Portfast has been configured on {con.s.ctx}: an edge port in mstpd, "
+                f"forwarding at once (a BPDU there makes it an ordinary port again)")
+    elif gig:
         tail = (f"%Warning: portfast trunk on {con.s.ctx}: the switch lists it as an edge port, but "
-                f"{KERNEL_NOTE} and has no edge ports, so the router still waits out the forward delay")
+                f"{KERNEL_NOTE} and the kernel's 802.1D has no edge ports, so the router still waits out "
+                f"the forward delay (spanning-tree mode rapid-pvst makes it real once mstpd is fetched)")
     else:
         tail = f"{_EDGE_WARN}\n\n%Portfast has been configured on {con.s.ctx}."
     return (out + "\n" if out else "") + tail
@@ -1184,16 +1349,47 @@ def gi_shutdown(con, name: str, down: bool) -> str:
 
 
 # ---- show
-def _live_states(con) -> dict[str, str]:
-    """The kernel's port states, by "<sw> <port>", when the router runs."""
+def _live_read(con) -> dict:
+    """LIVE_CMD's answer from the running router (parse_live), or {}."""
     if not con.powered():
         return {}
     try:
         data = parse_live(con._on_router(LIVE_CMD, timeout=15))
     except devcli.CliError:
         return {}
+    return data if data["bridges"] or data["ports"] else {}
+
+
+def _live_states(con, data: dict | None = None) -> dict[str, str]:
+    """The kernel's port states, by "<sw> <port>", when the router runs."""
+    data = _live_read(con) if data is None else data
+    if not data:
+        return {}
     names = ifnames(con.lab)
     return {k: data["ports"][v] for k, v in names.items() if v in data["ports"]}
+
+
+def _rstp_live(con, data: dict) -> dict[str, dict]:
+    """What mstpctl reports for this switch's ports, by port name, when mstpd
+    runs its bridge; {} otherwise (the kernel's 802.1D, or the router off)."""
+    if not data or not data.get("roles"):
+        return {}
+    sw = _sw(con)
+    out = {}
+    for key, dev in ifnames(con.lab).items():
+        s, _, port = key.partition(" ")
+        if s == sw and dev in data["roles"]:
+            out[port] = data["roles"][dev]
+    return out
+
+
+def _rstp_cell(r: dict) -> tuple[str, str]:
+    """(Role, Sts) of a port as mstpctl reports it, in IOS's words."""
+    if r["guard_err"]:
+        return "Desg", "BKN*"
+    if not r["enabled"]:
+        return "Disa", "DIS"
+    return _RSTP_ROLE.get(r["role"], r["role"][:4]), _RSTP_STATE.get(r["state"], r["state"][:3].upper())
 
 
 _ROLE = {"root": "Root", "desg": "Desg", "altn": "Altn", "back": "Back", "": "Desg"}
@@ -1212,17 +1408,25 @@ def _fa_rows(con) -> list[str]:
     return rows
 
 
-def _gi_rows(con, res: Result, live: dict[str, str]) -> list[str]:
+def _gi_rows(con, res: Result, live: dict[str, str], rstp: dict[str, dict] | None = None) -> list[str]:
     sw, rows = _sw(con), []
     for p in res.of(sw):
         if p.state == "down" or p.twin:
             continue
-        st = "BKN*" if p.state == "err" else live.get(f"{sw} {p.end.port}", p.state)
-        role = "Desg" if p.state == "err" else _ROLE[p.role]
+        r = (rstp or {}).get(p.end.port) if not p.po else None
+        if r is not None:
+            # mstpd runs this switch: its role and state for the port, as mstpctl reports them.
+            role, st = _rstp_cell(r)
+            edge, guard_err = r["edge"], r["guard_err"]
+        else:
+            st = "BKN*" if p.state == "err" else live.get(f"{sw} {p.end.port}", p.state)
+            role = "Desg" if p.state == "err" else _ROLE[p.role]
+            edge, guard_err = p.edge, p.state == "err" and bool(_own(con.lab, sw).get(f"stp-err:{p.end.port}"))
+        err = st == "BKN*"
         rows.append(f"{p.po or devcli.short_if(p.end.port):<20}{role:<5}{st:<3} {p.cost:<9}"
-                    f"{f'{p.pid[0]}.{p.pid[1]}':<9}P2p{' Edge' if p.edge else ''}"
-                    + ((" *BPDU_GUARD (err-disabled)" if _own(con.lab, sw).get(f"stp-err:{p.end.port}")
-                        else " *CHANNEL_MISCONFIG (err-disabled)") if p.state == "err" else ""))
+                    f"{f'{p.pid[0]}.{p.pid[1]}':<9}P2p{' Edge' if edge else ''}"
+                    + ((" *BPDU_GUARD (err-disabled)" if guard_err or _own(con.lab, sw).get(f"stp-err:{p.end.port}")
+                        else " *CHANNEL_MISCONFIG (err-disabled)") if err else ""))
     return rows
 
 
@@ -1245,29 +1449,49 @@ def show(con, vlan: str = "") -> str:
         return "\n".join(f"Spanning tree instance(s) for vlan {t} does not exist." for t in tags)
     res = compute(lab)
     b = res.bridges[sw]
-    live = _live_states(con)
-    fd = FORWARD_DELAY[b.mode]
+    data = _live_read(con)
+    live = _live_states(con, data)
+    rstp = _rstp_live(con, data)
+    proto = data.get("rstp", {}).get(_bridge_of(lab, sw), "") if data else ""
+    in_mstpd = bool(proto) or (not data and b.mode in FAST and rstp_ready())
+    fd = RSTP_FORWARD_DELAY if in_mstpd else FORWARD_DELAY[b.mode]
+    say = (MST_NOTE if b.mode == "mst" else RSTP_NOTE) if in_mstpd else KERNEL_NOTE
     out = []
+    if b.mode == "mst":   # one instance, the CIST, for every VLAN: MST0
+        tags = [1]
     for t in tags:
         if t != 1:
             what = "Spanning tree disabled for this VLAN" if not vlan_on(lab, sw, t) else "Shares VLAN 1's tree"
-            out += [f"VLAN{t:04d}", f"  {what} ({KERNEL_NOTE})", ""]
+            out += [f"VLAN{t:04d}", f"  {what} ({say})", ""]
             continue
         rb = res.bridges.get(b.root) or b
-        out += [f"VLAN{t:04d}", f"  Spanning tree enabled protocol {'rstp' if b.mode == 'rapid-pvst' else 'ieee'}",
-                f"  Root ID    Priority    {rb.bid[0] + t}", f"             Address     {devcli.dotted_mac(rb.bid[1])}"]
+        shown = proto or ({"rapid-pvst": "rstp", "mst": "mstp"}.get(b.mode, "ieee"))
+        ext = 0 if b.mode == "mst" else t
+        out += ["MST0" if b.mode == "mst" else f"VLAN{t:04d}",
+                f"  Spanning tree enabled protocol {'ieee' if shown == 'stp' else shown}",
+                f"  Root ID    Priority    {rb.bid[0] + ext}", f"             Address     {devcli.dotted_mac(rb.bid[1])}"]
         if not b.root or b.root == sw:
             out.append("             This bridge is the root")
         else:
             out += [f"             Cost        {b.cost}",
                     f"             Port        {24 + gi_no(b.root_port)} ({b.root_port})"]
         out += [f"             Hello Time   {HELLO} sec  Max Age {MAX_AGE} sec  Forward Delay {fd} sec", "",
-                f"  Bridge ID  Priority    {b.bid[0] + t}  (priority {b.bid[0]} sys-id-ext {t})",
+                f"  Bridge ID  Priority    {b.bid[0] + ext}  (priority {b.bid[0]} sys-id-ext {ext})",
                 f"             Address     {devcli.dotted_mac(b.bid[1])}",
                 f"             Hello Time   {HELLO} sec  Max Age {MAX_AGE} sec  Forward Delay {fd} sec",
-                "             Aging Time  300 sec", ""] + _HEAD + _fa_rows(con) + _gi_rows(con, res, live) + [""]
-    out.append(f"! {KERNEL_NOTE}" + ("; port states read from it" if live else ""))
+                "             Aging Time  300 sec", ""] + _HEAD + _fa_rows(con) + _gi_rows(con, res, live, rstp) + [""]
+    if rstp:
+        out.append(f"! {say}; roles and states as mstpctl reports them")
+    elif in_mstpd:
+        out.append(f"! {say}; roles worked out by winlab until the router runs")
+    else:
+        out.append(f"! {KERNEL_NOTE}" + ("; port states read from it" if live else ""))
     return "\n".join(out)
+
+
+def _bridge_of(lab, sw: str) -> str:
+    idx = {s: i for i, s in enumerate(devcli.switches(lab), 1)}
+    return f"stp{idx.get(sw, 0)}"
 
 
 def show_iface(con, text: str) -> str:
@@ -1276,10 +1500,14 @@ def show_iface(con, text: str) -> str:
     p = next((p for p in compute(con.lab).of(sw) if p.end.port == name), None)
     if p is None or not vlan_on(con.lab, sw):
         return f"no spanning tree info available for {devcli.short_if(name)}"
-    st = "BKN*" if p.state == "err" else p.state
+    st, role = ("BKN*" if p.state == "err" else p.state), _ROLE[p.role]
+    r = _rstp_live(con, _live_read(con)).get(name) if not p.po else None
+    if r is not None:
+        role, st = _rstp_cell(r)
     return "\n".join([_HEAD[0].replace("Interface", "Vlan     "), _HEAD[1],
-                      f"{'VLAN0001':<20}{_ROLE[p.role]:<5}{st:<3} {p.cost:<9}{f'{p.pid[0]}.{p.pid[1]}':<9}P2p"
-                      + (" *BPDU_GUARD (err-disabled)" if p.state == "err" else "")])
+                      f"{'VLAN0001':<20}{role:<5}{st:<3} {p.cost:<9}{f'{p.pid[0]}.{p.pid[1]}':<9}P2p"
+                      + (" Edge" if (r["edge"] if r is not None else p.edge) else "")
+                      + (" *BPDU_GUARD (err-disabled)" if st == "BKN*" else "")])
 
 
 def show_summary(con) -> str:
@@ -1298,7 +1526,7 @@ def show_summary(con) -> str:
         blk = sum(1 for p in rows if p.state in ("BLK", "err"))
         fwd = sum(1 for p in rows if p.state == "FWD") + len(_fa_rows(con))
         out.append(f"{'VLAN0001':<23}{blk:<9}{0:<10}{0:<9}{fwd:<11}{blk + fwd}")
-    out.append(f"! {KERNEL_NOTE}")
+    out.append(f"! {note(lab, sw)}")
     return "\n".join(out)
 
 
@@ -1326,6 +1554,8 @@ def run_lines(lab, sw: str) -> list[str]:
             out.append(f"no spanning-tree vlan {k[8:]}")
         elif k.startswith("stp-prio:"):
             out.append(f"spanning-tree vlan {k[9:]} priority {own[k]}")
+    from . import mst  # spanning-tree mst configuration and the instances' priorities
+    out += mst.run_lines(lab, sw)
     out.append("!")
     return out
 
@@ -1359,3 +1589,148 @@ def spare_ports(lab, sw: str) -> dict[str, str]:
                 if e.sw == sw:
                     out[e.port] = c.far(e).sw
     return out
+
+
+# ------------------------------------------------------------------ the troubleshooting ticket
+# A first-line ticket on campus-vlans (content/lessons/ts-bpdu-guard-floor-switch.toml):
+# the night's change moved core and floor to Rapid PVST+ and gave core's port
+# to the floor switch PortFast and BPDU guard, as if a desk were there. The
+# floor switch is a switch: its BPDUs err-disable the port, and the floor's
+# PCs lose the network. Broken from outside the PC like netbasics' tickets
+# (its _sw_break: what changed is kept, Give up puts it back, the PC's
+# address is left for the verify); with mstpd on the router, mstpd is what
+# shuts the port.
+QUICK = True   # the break takes seconds (guestfaults.host_break_is_quick)
+GUARD_TICKET = "rstp-bpduguard-errdisabled"
+HOSTS = {"stp-guard": "winlab.stp:guard_break"}
+
+
+def _guard_change(lab, plan, node: str, was: list):
+    from . import portsec
+    from .netbasics import NetBasicsError, _put, _where
+    sw, _, _link, _net = _where(lab, plan, node)
+    up = devcli.upstream(lab, sw)
+    if up not in devcli.switches(lab):
+        raise NetBasicsError(f"{node}'s switch is cabled to the router, not to another switch: this ticket "
+                             f"needs a PC on a switch below another (campus-vlans: pc-b on floor)")
+    port_u = dict((b, p) for p, b in devcli.downlinks(lab, up)).get(sw, "")
+    if not port_u:
+        raise NetBasicsError(f"no port of {up} leads to {sw}")
+    for s in (up, sw):
+        _put(lab, was, f"sw:{s}", "stp-mode", "rapid-pvst")
+        _put(lab, was, f"sw:{s}", "stp-off:1", None)
+    _put(lab, was, f"sw:{up}", f"stp-edge:{port_u}", "trunk")
+    _put(lab, was, f"sw:{up}", f"stp-guard:{port_u}", "yes")
+    lines = []
+    for e in sorted(compute(lab).err, key=lambda e: (e.sw, e.port)):
+        if not _own(lab, e.sw).get(f"stp-err:{e.port}"):
+            _put(lab, was, f"sw:{e.sw}", f"stp-err:{e.port}", "yes")
+            short = devcli.short_if(e.port)
+            lines.append((e.sw, f"%SPANTREE-2-BLOCK_BPDUGUARD: Received BPDU on port {short} with BPDU Guard "
+                                f"enabled. Disabling port.\n%PM-4-ERR_DISABLE: bpduguard error detected on "
+                                f"{short}, putting {short} in err-disable state"))
+    for s, text in lines:
+        portsec.log(lab.name, f"sw:{s}", [text], lab=lab)
+    return (f"{devcli.hostname(lab, 'sw:' + up)} {devcli.short_if(port_u)} has PortFast and BPDU guard; "
+            f"{devcli.hostname(lab, 'sw:' + sw)} speaks spanning tree there"), None
+
+
+def guard_break(lab_name: str, node: str, clear: bool = False, say=print) -> tuple[bool, str]:
+    from .netbasics import _sw_break
+    return _sw_break(GUARD_TICKET, lab_name, node, clear, _guard_change)
+
+
+def register_faults(reg) -> None:
+    from .guestfaults import LINUX, GuestFault
+    from .netbasics import FROM_OUTSIDE, VERIFY_LINK
+    reg(GuestFault(
+        id=GUARD_TICKET, host="stp-guard", os=LINUX, shell="sh", images=("ubuntu",),
+        title="BPDU guard err-disabled the port the floor switch is plugged into",
+        teaches="Rapid PVST+ edge ports (PortFast) and BPDU guard, err-disabled ports, show spanning-tree and "
+                "show logging on the switch above, and putting a port that leads to a switch back as an "
+                "ordinary spanning-tree port",
+        symptom="after last night's change on the core switch (Rapid PVST+, and PortFast with BPDU guard "
+                "on its desk ports) the PCs on the floor switch have no network at all; the PCs on core are fine",
+        apply=FROM_OUTSIDE, clear="echo 'Give up puts the switches back as they were'",
+        hints=("The PCs on core work and every PC behind floor is cut off: look at the one cable between "
+               "the two switches, from the switch above (core).",
+               "show spanning-tree on core: its port to floor reads BKN* *BPDU_GUARD (err-disabled), and show "
+               "logging has SPANTREE-2-BLOCK_BPDUGUARD. show running-config shows spanning-tree portfast trunk "
+               "and spanning-tree bpduguard enable under that port: settings for a desk, on a port that leads "
+               "to a switch.",
+               "interface gi0/2 on core: no spanning-tree bpduguard and no spanning-tree portfast (a port to a "
+               "switch is neither), then shutdown and no shutdown: an err-disabled port stays down until it is "
+               "brought back by hand."),
+        verify=VERIFY_LINK))
+
+
+# ------------------------------------------------------------------ the exercise's checks
+# content/exercises/rapid-spanning-tree.toml, graded from the lab file (what
+# the consoles set) on campus-vlans: core and floor; what mstpd does with it
+# is the lesson's [[verify]] on the router.
+def _pair(lab) -> tuple[str, str]:
+    sws = devcli.switches(lab)
+    if "core" not in sws or "floor" not in sws:
+        raise ValueError("this check is for campus-vlans: switches core and floor")
+    return "core", "floor"
+
+
+def check_rapid(lab) -> tuple[bool, str]:
+    core, floor = _pair(lab)
+    modes = {s: mode(lab, s) for s in (core, floor)}
+    if any(m != "rapid-pvst" for m in modes.values()):
+        return False, "spanning-tree mode: " + ", ".join(f"{s} {m}" for s, m in modes.items()) + "; both must be rapid-pvst"
+    if not all(vlan_on(lab, s) for s in (core, floor)):
+        return False, "spanning tree is off for VLAN 1 on a switch: spanning-tree vlan 1"
+    return True, "core and floor run rapid-pvst"
+
+
+def check_ring(lab) -> tuple[bool, str]:
+    core, floor = _pair(lab)
+    res = compute(lab)
+    extra = [c for c in res.cables if c.kind == "extra" and {c.a.sw, c.b.sw} == {core, floor}]
+    if not extra:
+        return False, "no second cable between floor and core: drag a free gigabit port of floor onto core"
+    if res.bridges[floor].root != core or res.bridges[core].root != core:
+        return False, "core is not the root bridge: spanning-tree vlan 1 root primary on core"
+    altn = [p for p in res.of(floor) if p.role == "altn"]
+    if not altn:
+        return False, "floor has no alternate port: both cables to core must be up"
+    return True, f"core is root; floor's {devcli.short_if(altn[0].end.port)} is the alternate port"
+
+
+def check_guards(lab) -> tuple[bool, str]:
+    core, floor = _pair(lab)
+    res = compute(lab)
+    bad = [p for s in (core, floor) for p in res.of(s) if p.state == "err" or p.guard or p.edge]
+    if bad:
+        return False, ("PortFast, BPDU guard or err-disabled left on a port between the switches: "
+                       + ", ".join(f"{p.end.sw} {devcli.short_if(p.end.port)}" for p in bad))
+    if any(shut(lab, e) for c in res.cables for e in c.ends()):
+        return False, "a port between the switches is still shut: no shutdown"
+    return True, "the cables between the switches are ordinary spanning-tree ports, all up"
+
+
+def check_desk(lab) -> tuple[bool, str]:
+    from . import netplan
+    plan = netplan.compile_topology(lab, check_ports=False)
+    link = next((l for l in plan.ports_for("pc-b") if l.nic_index == 0), None)
+    if link is None:
+        return False, "pc-b has no cable"
+    sw = devcli.port_no(lab, plan, link.label)
+    if not sw:
+        return False, "pc-b is not on a switch port"
+    if not (edge(lab, sw[0], link.label, False) and guarded(lab, sw[0], link.label, False)):
+        return False, (f"pc-b's port (Fa0/{sw[1]} on {sw[0]}) needs spanning-tree portfast and "
+                       f"spanning-tree bpduguard enable")
+    return True, f"pc-b's port Fa0/{sw[1]} is an edge port with BPDU guard"
+
+
+def _register_checks() -> None:
+    from . import exercises
+    for name, fn in (("rstp-rapid", check_rapid), ("rstp-ring", check_ring),
+                     ("rstp-guards", check_guards), ("rstp-desk", check_desk)):
+        exercises.register_winlab_check(name, fn)
+
+
+_register_checks()

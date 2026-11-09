@@ -1,0 +1,66 @@
+{
+ "title": "Una VRF para la red de invitados: un router, dos tablas de enrutamiento",
+ "summary": "Pon la red de invitados en una VRF propia desde la consola del router del laboratorio, para que el mismo router que enruta la oficina deje de enrutar a los invitados hacia ella: una tabla de enrutamiento separada, no una lista de acceso.",
+ "why": "Un router enruta entre todas sus interfaces de forma predeterminada: la Wi-Fi de invitados y la\noficina de contabilidad están a un salto. Una lista de acceso puede bloquearlo, pero es una lista de\nexcepciones en un router que sigue queriendo reenviar. Una VRF (instancia de Virtual Routing and\nForwarding) cambia la pregunta: la interfaz de invitados recibe una tabla de enrutamiento propia,\nque solo conoce las redes de la misma VRF. No hay ruta de invitados a oficina que bloquear, porque\nen la tabla de los invitados la oficina no existe. Usada así, sin MPLS, se llama VRF-lite, y es\ncómo un router (o un firewall) sirve a redes que nunca deben encontrarse.\n\nEl router del laboratorio la construye como lo hace Linux: vrf definition GUEST es un dispositivo\nVRF con una tabla de enrutamiento del kernel propia, y vrf forwarding GUEST en una interfaz la\nsubordina a ella. ip route show vrf GUEST en el router es la misma tabla que imprime show ip route\nvrf GUEST. Un límite honesto: winlab da a cada red de un laboratorio su propia subred, así que aquí\nuna VRF separa el enrutamiento, no planes de direcciones superpuestos; en la vida real dos VRF\npueden usar ambas 10.0.0.0/24.",
+ "concepts": [
+  "vrf definition <name> (con address-family ipv4) o el antiguo ip vrf <name>: una tabla de enrutamiento propia; rd <asn>:<n> le da nombre para las VPN MPLS y es opcional en VRF-lite",
+  "vrf forwarding <name> en una interfaz la mueve a la VRF y le quita la dirección IP, como hace IOS: vuelve a escribir la dirección después",
+  "show ip route vrf <name> es la tabla de la VRF; show ip route es la global, y una interfaz vive exactamente en una de ellas",
+  "ping vrf <name> <address> envía desde dentro de la VRF; un ping normal usa la tabla global",
+  "ip route vrf <name> <network> <mask> <next hop> es una ruta estática dentro de una VRF"
+ ],
+ "steps": [
+  "Inicia pc-guest y pc-office. En pc-guest (el portátil de un visitante, 10.80.20.10, puerta de enlace 10.80.20.1): ping -c 2 10.80.0.10. pc-office responde: el router del laboratorio enruta de invitados a oficina, como cualquier router enruta entre sus interfaces.",
+  "Abre la consola del router: enable, show ip interface brief. GigabitEthernet0/0/0 es la red de invitados (10.80.20.1). show ip route la lista junto a la oficina (C 10.80.20.0/24 y C 10.80.0.0/24): una sola tabla.",
+  "Crea la VRF: configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4, exit-address-family, exit. Los prompts son Router(config-vrf)# y Router(config-vrf-af)#. show vrf (desde el prompt de enable, o do show vrf aquí) lista GUEST todavía sin interfaces.",
+  "Mueve la interfaz de invitados a ella: interface g0/0/0, vrf forwarding GUEST. La consola indica que se quitó la dirección IP de la interfaz: una dirección pertenece a una tabla, así que IOS la quita cuando cambia la tabla. Escríbela de nuevo: ip address 10.80.20.1 255.255.255.0, luego end.",
+  "Lee las dos tablas. show ip route: la red de invitados ya no está. show ip route vrf GUEST: Routing Table: GUEST, con C 10.80.20.0/24 y L 10.80.20.1/32 y nada más. show ip vrf lista GUEST con Gi0/0/0.",
+  "Pruébalo desde el lado de invitados: en pc-guest, ping -c 2 10.80.20.1 sigue respondiendo (su puerta de enlace está en la misma VRF), y ping -c 2 10.80.0.10 ahora falla: en la tabla de los invitados no hay ruta a la oficina. Desde la consola, ping 10.80.20.10 también falla (la tabla global no tiene ruta hacia él) y ping vrf GUEST 10.80.20.10 responde.",
+  "Míralo en el propio router, al estilo Linux: la VRF del router es un dispositivo VRF del kernel. Los comandos de verificación de abajo ejecutan ip -d link show GUEST e ip route show vrf GUEST en él: la interfaz de invitados (un dispositivo lab0.<vlan>) tiene master GUEST.",
+  "En la vida real la red de invitados sigue necesitando Internet: una ruta estática en la VRF hacia un firewall (ip route vrf GUEST 0.0.0.0 0.0.0.0 <firewall>) o una ruta predeterminada filtrada desde la tabla global. Este laboratorio no tiene firewall de invitados, así que deja aislados a los invitados. write memory conserva la VRF.",
+  "Pulsa Comprobar mi trabajo: lee el dispositivo VRF y las tablas del router, y hace ping desde pc-guest."
+ ],
+ "pitfalls": [
+  "vrf forwarding en una interfaz que tiene dirección le quita la dirección: una interfaz que parece muerta tras el comando solo necesita ip address de nuevo.",
+  "vrf definition sin address-family ipv4 no contiene IPv4 en IOS; escribe la familia de direcciones aunque la VRF no tenga nada más que decir.",
+  "ip vrf GUEST y vrf definition GUEST son dos estilos; una interfaz usa ip vrf forwarding para el primero y vrf forwarding para el segundo, y la consola te dice cuál.",
+  "Una VRF no es un firewall: todo lo que se enruta hacia la VRF (una ruta estática, una ruta filtrada) es alcanzable. Solo significa que no existe ninguna ruta hasta que la creas.",
+  "OSPF en la tabla global no ve las interfaces de una VRF: router ospf <pid> vrf GUEST sería un proceso separado para ellas."
+ ],
+ "verify": [
+  "el dispositivo VRF en el router y su tabla",
+  "la puerta de enlace de los invitados responde, la oficina no"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué le pasa a la dirección IP de una interfaz cuando escribes vrf forwarding en ella?",
+   "answer": "IOS la quita, y la vuelves a escribir dentro de la VRF",
+   "wrong": [
+    "Se conserva y se mueve a la VRF",
+    "Se copia en las dos tablas",
+    "El comando se rechaza hasta que se quite la dirección"
+   ],
+   "why": "Una dirección forma parte de una tabla de enrutamiento; cambiar la tabla la elimina."
+  },
+  {
+   "q": "¿Por qué un invitado en una VRF no puede llegar a la oficina, sin ninguna lista de acceso?",
+   "answer": "La tabla de enrutamiento de la VRF no tiene ruta a la red de la oficina",
+   "wrong": [
+    "La VRF descarta todo el tráfico de forma predeterminada",
+    "El router bloquea el tráfico entre VLAN",
+    "La puerta de enlace del invitado es otro router"
+   ],
+   "why": "Cada VRF enruta solo con las redes de su propia tabla."
+  },
+  {
+   "q": "Pones una interfaz en la VRF GUEST y parece muerta. ¿Cuál es la razón habitual?",
+   "answer": "vrf forwarding quitó su dirección IP: vuelve a escribir ip address",
+   "wrong": [
+    "La VRF necesita un rd antes de reenviar",
+    "Las interfaces de una VRF deben hacer shut y no shut dos veces",
+    "Hay que reiniciar OSPF para la VRF"
+   ],
+   "why": "IOS quita la dirección cuando una interfaz cambia de tabla de rutas; pertenece a la VRF cuando la escribes de nuevo."
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+ "Onboard the new starters": "קלוט את העובדים החדשים",
+ "HR's new-starter sheet is on the media shelf (turn the workday on in the\nOffice window if it is not). Everyone on it starts today. Give each of them an\naccount with the attributes on the sheet, their department's group, access to\ntheir department's folder and a home folder, hand out their first passwords\n(the Office window's staff list), and watch them sign in and work. Tickets\nfrom the staff tell you what is still missing.": "גיליון העובדים החדשים של משאבי אנוש נמצא על מדף המדיה (הפעל את יום העבודה בחלון\nמשרד אם הוא לא פועל). כל מי שמופיע בו מתחיל היום. תן לכל אחד\nחשבון עם התכונות שבגיליון, את הקבוצה של המחלקה שלו, גישה ל-\nתיקיית המחלקה שלו ותיקיית בית, חלק את הסיסמאות הראשונות שלהם\n(רשימת העובדים בחלון משרד), וצפה בהם נכנסים ועובדים. כרטיסים\nמהעובדים אומרים לך מה עדיין חסר.",
+ "On dc01, create a global security group per department: G-FrontDesk, G-Finance, G-Sales, G-HR, G-Operations": "ב-dc01, צור קבוצת אבטחה גלובלית לכל מחלקה: G-FrontDesk, G-Finance, G-Sales, G-HR, G-Operations",
+ "Create an enabled account for every person on the sheet, with its Department, Title and EmailAddress filled in": "צור חשבון פעיל לכל אדם בגיליון, עם Department, Title ו-EmailAddress ממולאים",
+ "Make every new starter a member of their department's group": "הפוך כל עובד חדש לחבר בקבוצה של המחלקה שלו",
+ "On fs01, give each department a folder in the Company share (FrontDesk, Finance, ...) its group can change": "ב-fs01, תן לכל מחלקה תיקייה בשיתוף Company (FrontDesk, Finance, ...) שהקבוצה שלה יכולה לשנות",
+ "Give every new starter a home folder (HomeDirectory and HomeDrive set)": "תן לכל עובד חדש תיקיית בית (HomeDirectory ו-HomeDrive מוגדרים)",
+ "Type their first passwords into the Office window's staff list and let the workday run until they sign in": "הקלד את הסיסמאות הראשונות שלהם ברשימת העובדים בחלון משרד ותן ליום העבודה לרוץ עד שהם נכנסים",
+ "a global security group per department": "קבוצת אבטחה גלובלית לכל מחלקה",
+ "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security, once per department (the department's name without spaces)": "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security, פעם אחת לכל מחלקה (שם המחלקה בלי רווחים)",
+ "the new starters have enabled accounts with department, title and mail": "לעובדים החדשים יש חשבונות פעילים עם מחלקה, תפקיד ודואר",
+ "Import-Csv the sheet and run New-ADUser per row with -Department, -Title, -EmailAddress, -AccountPassword (Read-Host -AsSecureString) and -Enabled $true": "Import-Csv של הגיליון והרץ New-ADUser לכל שורה עם -Department, -Title, -EmailAddress, -AccountPassword (Read-Host -AsSecureString) ו--Enabled $true",
+ "everyone is in their department's group": "כולם בקבוצה של המחלקה שלהם",
+ "Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName, per row of the sheet": "Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName, לכל שורה בגיליון",
+ "each department's folder in the Company share is granted to its group": "התיקייה של כל מחלקה בשיתוף Company מוענקת לקבוצה שלה",
+ "New-Item -ItemType Directory D:\\Shares\\Company\\Finance; icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M', for each department": "New-Item -ItemType Directory D:\\Shares\\Company\\Finance; icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M', לכל מחלקה",
+ "every new starter has a home folder": "לכל עובד חדש יש תיקיית בית",
+ "Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:, after making the folder on fs01": "Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:, אחרי יצירת התיקייה ב-fs01",
+ "the staff are signing in (4624 on the DC)": "העובדים נכנסים (4624 ב-DC)",
+ "Turn the workday on, type the first passwords into Office > Staff list, and give the clock a working hour (winlab clock jump 09:00 on a weekday)": "הפעל את יום העבודה, הקלד את הסיסמאות הראשונות במשרד > רשימת העובדים, ותן לשעון שעת עבודה (winlab clock jump 09:00 ביום חול)"
+}

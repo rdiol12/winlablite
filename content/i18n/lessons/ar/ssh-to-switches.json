@@ -1,0 +1,68 @@
+{
+ "title": "SSH إلى المبدّل: المفاتيح والمستخدمون المحليون وخطوط vty",
+ "summary": "امنح مبدّل corp عنوان إدارة ومفتاح RSA ومسؤولًا محليًا، ولا تسمح إلا بـ SSH على خطوط vty، وسجّل الدخول من pc01 بـ ssh بدلًا من كبل وحدة التحكم.",
+ "why": "كبل وحدة التحكم هو طريقة إعداد المبدّل أول مرة؛ ولا أحد يمشي إلى غرفة الاتصالات لكل تغيير بعد ذلك. تُدار المبدّلات عبر الشبكة، وtelnet، الطريقة القديمة، يرسل كلمة المرور وكل أمر بنص واضح ليقرأه أي شخص على LAN. يشفّر SSH الجلسة ويثبت أن المبدّل هو المبدّل (مفتاح المضيف الخاص به).\n\nفي IOS، يحتاج SSH إلى خمسة أشياء: hostname غير اسم المصنع وip domain-name (معًا يسمّيان زوج المفاتيح)، وزوج مفاتيح RSA (crypto key generate rsa؛ وحجمه مهم: يحتاج SSH الإصدار 2 إلى 768 بت على الأقل، والعملاء اليوم يريدون 2048)، ومستخدمًا محليًا بسرّ (username)، وخطوط vty (الطرفيات الافتراضية للمبدّل، line vty 0 4) مضبوطة لاستخدامها: login local، transport input ssh. ويعطّل ip ssh version 2 البروتوكول القديم. ويحتاج المبدّل عنوانًا يُوصل إليه به: interface vlan 1 وip default-gateway.\n\nفي هذا المختبر خادم SSH الخاص بالمبدّل هو Dropbear على الموجّه، داخل عنوان إدارة المبدّل نفسه، والجلسة التي يفتحها هي وحدة التحكم نفسها التي تكتب فيها بالكبل. مع login local يطلب عميل ssh كلمة المرور، كما مع مبدّل حقيقي، وتُفحص مقابل قائمة المستخدمين الخاصة بالمبدّل (سرّ المستخدم، كما كتبته في وحدة التحكم).",
+ "concepts": [
+  "يرسل Telnet كلمة المرور بنص واضح؛ ويشفّر SSH الجلسة كلها ويوثّق الخادم بمفتاح المضيف الخاص به",
+  "زوج المفاتيح يُسمّى hostname.domain: يرفض crypto key generate rsa حتى يُضبط الاثنان",
+  "حجم المفتاح: 768 بت الحد الأدنى لـ SSH الإصدار 2، و2048 هو ما يجب استخدامه؛ ويقول show ip ssh 1.99 (الإصداران) حتى ip ssh version 2",
+  "line vty 0 4 هي تسجيلات الدخول الخمسة عبر الشبكة؛ يفحص login local قائمة المستخدمين، ويرفض transport input ssh telnet",
+  "username admin privilege 15 يدخل مباشرة إلى الوضع المميز (#)؛ والمستخدم في المستوى 1 يحتاج enable secret، ومن دونه يجيب خط vty بـ % No password set",
+  "يطلب الاتصال الأول تأكيد بصمة مفتاح المضيف؛ ويطبع show ip ssh البصمة التي تقارنها بها. والمفتاح المتغيّر لاحقًا تحذير للتوقف، لا للمتابعة بالنقر",
+  "تعيش المفاتيح مع التكوين: إن وُلّدت ولم تُكتب، تختفي بعد إعادة التحميل"
+ ],
+ "steps": [
+  "امنح المبدّل عنوانًا. على وحدة تحكم مبدّل corp (انقر عليه نقرًا مزدوجًا في طاولة الشبكة، أو كبل وحدة التحكم): enable، configure terminal، interface vlan 1، ip address 10.10.10.2 255.255.255.0، no shutdown، exit، ip default-gateway 10.10.10.1. من pc01 يجيب ping 10.10.10.2.",
+  "جرّب إنشاء مفتاح فورًا: crypto key generate rsa modulus 2048. يرفض المبدّل: % Please define a hostname other than Switch. hostname CORP-SW1، ثم مجددًا: % Please define a domain-name first. ip domain-name corp.lab.",
+  "الآن المفتاح: crypto key generate rsa (من دون الحجم يسأل: How many bits in the modulus [512]: أجب 2048). The name for the keys will be: CORP-SW1.corp.lab، و%SSH-5-ENABLED: SSH 1.99 has been enabled. do show ip ssh، وdo show crypto key mypubkey rsa لرؤية النصف العام.",
+  "عطّل الإصدار 1: ip ssh version 2. ثم مستخدمًا وسرًّا مميزًا: username admin privilege 15 secret تليها كلمة مرور من اختيارك؛ وenable secret بكلمة أخرى (يُظهر show running-config الاثنتين تجزئات من النوع 9، لا الكلمات أبدًا).",
+  "خطوط vty: line vty 0 4، login local، transport input ssh، end. ثم copy running-config startup-config: يُحفظ زوج المفاتيح معه، والزوج غير المحفوظ يختفي بعد إعادة التحميل.",
+  "سجّل الدخول من pc01: افتح PowerShell وشغّل ssh admin@10.10.10.2 (عميل OpenSSH جزء من Windows 11). في المرة الأولى يُظهر بصمة مفتاح مضيف المبدّل: قارنها بالتي يطبعها show ip ssh، وأجب yes. ثم يطلب ssh admin@10.10.10.2's password:، فتصل إلى CORP-SW1#.",
+  "إنه المبدّل نفسه: show running-config | include hostname، وshow ssh (جلستك، الإصدار 2.0). أجرِ تغييرًا عبر SSH (interface fa0/1، description pc01) وانظر إليه في وحدة التحكم أيضًا. ينهي exit الجلسة.",
+  "شاهد قواعد vty تعمل: في وحدة التحكم، line vty 0 4، transport input telnet. يُغلق ssh من pc01 الآن فورًا: الخط لا يقبل SSH. أعِد transport input ssh. ثم جرّب username admin privilege 1 (السرّ نفسه): يصل تسجيل دخولك عبر SSH إلى CORP-SW1>، وكان enable من دون enable secret سيجيب % No password set.",
+  "افعل الشيء نفسه على الموجّه إن شئت: لديه عناوين على كل VLAN أصلًا (10.10.10.1 هنا): hostname، ip domain-name، crypto key generate rsa modulus 2048، username، line vty 0 4 login local transport input ssh؛ ثم ssh admin@10.10.10.1 من pc01."
+ ],
+ "pitfalls": [
+  "crypto key generate rsa بالحجم الافتراضي 512 بت: يحتاج SSH الإصدار 2 إلى 768، وعملاء ssh الحاليون يرفضون المفاتيح الأقل من 1024. استخدم 2048.",
+  "نسيان copy running-config startup-config: بعد إعادة التحميل تختفي المفاتيح ويعود SSH معطّلًا.",
+  "login على خطوط vty دون كلمة مرور للخط: % Password required, but none set. يريد login local username؛ ومن دونه لا يدخل أحد.",
+  "transport input all يترك telnet مفعّلًا: على مبدّل حقيقي يستطيع أي شخص على LAN قراءة كلمة مرور telnet. استخدم ssh وحده.",
+  "Catalyst حقيقي بـ IOS قديم لا يعرض إلا خوارزميات قديمة لتبادل المفاتيح والتشفير، ويحتاج عميل ssh حالي إلى -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa كي يتحدث معه. خادم SSH في المختبر أحدث ولا يحتاج إليها.",
+  "لا يشغّل هذا المختبر خادم telnet: يُحفظ transport input telnet ويُعرض، لكن لا يستمع إلا SSH."
+ ],
+ "verify": [
+  "خوادم SSH على الموجّه: أي جهاز، وعلى أي عنوان، وخطوط vty الخاصة به"
+ ],
+ "quiz": [
+  {
+   "q": "يجيب crypto key generate rsa بـ % Please define a domain-name first. لماذا يحتاج المبدّل إلى واحد؟",
+   "answer": "زوج المفاتيح يُسمّى hostname.domain-name، لذا يجب ضبط الاثنين أولًا",
+   "wrong": [
+    "يبحث SSH عن المبدّل في DNS",
+    "توقّع وحدة التحكم بالمجال المفتاح",
+    "اسم المجال هو كلمة مرور SSH"
+   ],
+   "why": "يسمّي IOS زوج المفاتيح العام الغرض باسم الجهاز الكامل."
+  },
+  {
+   "q": "ماذا يفعل login local وtransport input ssh تحت line vty 0 4؟",
+   "answer": "تطلب تسجيلات الدخول عبر الشبكة مستخدمًا من قائمة مستخدمي المبدّل، ولا يُسمح بالدخول إلا عبر SSH",
+   "wrong": [
+    "تطلب وحدة التحكم مستخدمًا",
+    "تحل مفاتيح SSH محل كلمات المرور",
+    "يُشفَّر Telnet"
+   ],
+   "why": "يفحص login local قائمة المستخدمين المحلية؛ ويقول transport input أي البروتوكولات تقبلها خطوط vty."
+  },
+  {
+   "q": "ولّدت مفتاح RSA وسجّلت الدخول عبر SSH، ثم أعدت تحميل المبدّل دون حفظ. ماذا يحدث؟",
+   "answer": "يعود SSH معطّلًا: لم يُكتب زوج المفاتيح مع التكوين قط",
+   "wrong": [
+    "لا شيء: المفاتيح تُحفظ دائمًا",
+    "ينشئ المبدّل مفتاحًا جديدًا عند الإقلاع",
+    "يعود SSH إلى telnet"
+   ],
+   "why": "تُحفظ المفاتيح في NVRAM مع التكوين؛ ويحفظها write memory (copy running-config startup-config)."
+  }
+ ]
+}

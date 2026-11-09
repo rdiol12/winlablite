@@ -41,7 +41,9 @@ def help_dir() -> Path:
 
 def load(f: Path) -> Topic:
     with f.open("rb") as fh:
-        raw = tomllib.load(fh).get("topic", {})
+        doc = tomllib.load(fh)
+    from . import content
+    raw = content.localized(f, doc).get("topic", {})
     return Topic(id=str(raw.get("id") or f.stem), title=str(raw.get("title", "")),
                  category=str(raw.get("category", "")), body=str(raw.get("body", "")).strip(),
                  order=int(raw.get("order", 100)), summary=str(raw.get("summary", "")),

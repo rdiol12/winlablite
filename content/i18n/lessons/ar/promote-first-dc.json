@@ -1,0 +1,91 @@
+{
+ "title": "رقِّ وحدة التحكم بالمجال الأولى",
+ "summary": "حوّل خادمًا عاديًا إلى وحدة التحكم بالمجال لجذر الغابة مع DNS.",
+ "why": "Active Directory هي قاعدة البيانات التي تثق بها كل خدمة Windows أخرى: من هو\nالمستخدم، وأي حاسوب يُسمح له بالدخول، وأي نهج يسري. تنشئ وحدة التحكم بالمجال الأولى\nالغابة والمجال والمخطط، ويجب أن تشغّل DNS، لأن العملاء يجدون وحدات التحكم بالمجال\nعبر سجلات خدمة DNS، لا عبر البث ولا عبر قائمة كتبها أحدهم. والمجال الذي إعداد DNS\nفيه خاطئ يفشل بطرق تبدو أي شيء إلا DNS.\n\nالترقية أمر واحد، لكن الخيارات التي تثبّتها تدوم طوال عمر الغابة: اسم DNS، واسم\nNetBIOS، والمستوى الوظيفي، ومكان قاعدة البيانات وSYSVOL. افهم كلًّا منها قبل أن\nتضغط Enter؛ لا أحد يعيد تسمية غابة.",
+ "concepts": [
+  "الغابة والمجال والشجرة: الغابة هي حدود الأمان؛ والمجال وحدة نسخ متماثل وإدارة داخلها",
+  "المستوى الوظيفي: ميزات Windows Server التي يجوز للمجال استخدامها؛ يحدّده أقدم DC تنوي الإبقاء عليه",
+  "سجلات SRV: _ldap._tcp.dc._msdcs.<domain> هي الطريقة التي يكتشف بها العميل DC؛ وتسجّلها الترقية في DNS",
+  "كلمة مرور DSRM: كلمة مرور Administrator المحلي التي تُستخدم عندما يكون الدليل غير متصل للإصلاح",
+  "أدوار FSMO: خمسة أدوار ذات مالك وحيد تحملها أول DC (المخطط، والتسمية، وRID، ومحاكي PDC، والبنية التحتية)",
+  "يشغّل Test-ADDSForestInstallation كل فحوص المتطلبات المسبقة لـ Install-ADDSForest دون تغيير أي شيء"
+ ],
+ "steps": [
+  "شغّل dc01 وحده (الأجهزة الأخرى تحتاجه أولًا) وسجّل الدخول بحساب Administrator المحلي. في PowerShell: Get-NetIPConfiguration. يجب أن ترى IPv4Address 10.10.10.10 وIPv4DefaultGateway 10.10.10.1؛ ويُظهر Get-NetIPInterface -AddressFamily IPv4 القيمة Dhcp Disabled على محوّل Ethernet. عنوان DHCP هنا يعني أن تتوقف وتصلحه أولًا.",
+  "وجّه DNS إلى الخادم نفسه: Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses 127.0.0.1 (استخدم الاسم الذي يُظهره Get-NetAdapter). يعرض Get-DnsClientServerAddress -AddressFamily IPv4 الآن 127.0.0.1. لا شيء يجيب عليه بعد؛ سيجيب خادم DNS الذي ستثبّته بعد قليل.",
+  "افحص الاسم قبل أن يُثبَّت: يجب أن يقول $env:COMPUTERNAME الاسم DC01. إن لم يكن كذلك، نفّذ Rename-Computer -NewName dc01 -Restart الآن: إعادة تسمية وحدة تحكم بالمجال لاحقًا إجراء قائم بذاته.",
+  "ثبّت الدور وأدواته: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools. يجب أن ترى Success True وRestart Needed No؛ ويُظهر Get-WindowsFeature AD-Domain-Services العلامة [X]. الخادم ليس DC بعد: الدور هو الملفات الثنائية فقط.",
+  "تدرّب أولًا: Test-ADDSForestInstallation -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString). اكتب كلمة مرور DSRM من اختيارك. توقّع Status Success مع تحذيرين: الإعداد التشفيري الافتراضي لـ Windows NT 4.0، وأنه لا يمكن إنشاء تفويض DNS (ليس لـ corp.lab منطقة أم يُفوَّض منها، وهذا طبيعي في غابة مختبر).",
+  "رقِّ الخادم: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. يُعدّ DNS، وينشئ قاعدة البيانات وSYSVOL، ويعيد التشغيل وحده. أول تشغيل كـ DC بطيء (Applying computer settings): انتظره.",
+  "سجّل الدخول بـ CORP\\Administrator (أصبحت كلمة مرور Administrator المحلي كلمة مرور المجال). Get-ADDomain | Format-List DNSRoot, NetBIOSName, DomainMode, PDCEmulator، ثم Get-ADForest | Format-List Name, ForestMode, SchemaMaster. يجب أن ترى corp.lab وCORP وdc01.corp.lab في كل دور. دوّن المستويات الوظيفية: تحدد أقدم Windows Server يمكن أن يصبح DC هنا يومًا.",
+  "انظر إلى DNS: يعرض Get-DnsServerZone المنطقتين corp.lab و_msdcs.corp.lab مع IsDsIntegrated True (تعيش المناطق في AD وتُنسخ معه). يجيب Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab بـ dc01.corp.lab على المنفذ 389: هكذا سيجد كل عميل الـ DC. ويعرض Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv الباقي.",
+  "افحص ما يجعل الـ DC وحدة تحكم فعلًا: يعرض Get-SmbShare المشاركتين NETLOGON وSYSVOL (لا يعلن الـ DC عن نفسه إلا بعد مشاركة SYSVOL)، وGet-Service NTDS, DNS, Netlogon, Kdc كلها Running، ويسمّي netdom query fsmo الخادم DC01 للأدوار الخمسة كلها.",
+  "شغّل dcdiag /q: عدم وجود مخرجات يعني أن كل الاختبارات نجحت. إن طبع شيئًا، فاقرأ اسم الاختبار أولًا (Advertising، FrsEvent، DFSREvent، SystemLog) وأصلحه قبل المتابعة؛ ويمكن إعادة تحذير في سجل System خلال الدقائق الأولى بعد الترقية بـ dcdiag /test:systemlog. ثم اضغط تحقق من عملي."
+ ],
+ "pitfalls": [
+  "ترقية DC يشير DNS فيها إلى محلّل خارجي تترك سجلات SRV غير مسجّلة؛ وجّه DNS إلى الـ DC نفسها أولًا.",
+  "الـ DC ذات عنوان DHCP قنبلة موقوتة: يتغيّر العنوان فيفقد كل العملاء المجال.",
+  "كلمة مرور DSRM ليست كلمة مرور Administrator للمجال. دوّنها في مكان ستجده عند الكارثة.",
+  "الاسم ذو التسمية الواحدة (corp بدل corp.lab) أو النطاق العام الذي لا تملكه (corp.com) غابة ستعيش معها إلى الأبد: استخدم اسمًا تحت نطاق تتحكم فيه، أو اسمًا محجوزًا مثل .lab في المختبر.",
+  "إعادة تسمية الخادم بعد الترقية لم تعد Rename-Computer: سمّه قبل Install-ADDSForest.",
+  "غياب SYSVOL وNETLOGON بعد إعادة التشغيل يعني أن الـ DC لم يُكمل أول نسخ لـ SYSVOL ولا يعلن عن نفسه: اقرأ سجل أحداث DFS Replication قبل أي شيء آخر."
+ ],
+ "verify": [
+  "مجال جذر الغابة",
+  "هذا المضيف DC",
+  "منطقة DNS للمجال",
+  "من يحمل أدوار FSMO"
+ ],
+ "quiz": [
+  {
+   "q": "أي نوع من سجلات DNS يطلبه العملاء للعثور على وحدة تحكم بالمجال؟",
+   "answer": "سجلات SRV مثل _ldap._tcp.dc._msdcs.<domain>",
+   "wrong": [
+    "سجل MX للمجال",
+    "سجل PTR للـ DC",
+    "سجل SOA"
+   ],
+   "why": "تسجّل الترقية سجلات SRV؛ ويحدّد العملاء مواقع وحدات التحكم بالمجال من خلالها."
+  },
+  {
+   "q": "فيمَ تُستخدم كلمة مرور DSRM؟",
+   "answer": "لتسجيل الدخول محليًا عندما يكون الدليل غير متصل للإصلاح",
+   "wrong": [
+    "إنها كلمة مرور Administrator للمجال",
+    "لضمّ الحواسيب إلى المجال",
+    "لتشفير SYSVOL"
+   ],
+   "why": "لوضع Directory Services Restore Mode كلمة مرور Administrator محلية خاصة به."
+  },
+  {
+   "q": "لماذا لا ينبغي أبدًا أن تحصل DC على عنوانها من DHCP؟",
+   "answer": "إذا تغيّر العنوان يفقد العملاء المجال لأن سجلات DNS وSRV تشير إلى العنوان القديم",
+   "wrong": [
+    "لا يستطيع DHCP توزيع عناوين الخوادم",
+    "يرفض AD التثبيت على أجهزة DHCP في كل الإصدارات",
+    "يجعل النسخ المتماثل أبطأ"
+   ],
+   "why": "يُعثر على الـ DC بعنوانها؛ لذا يجب أن يكون ثابتًا."
+  },
+  {
+   "q": "يحذّر Test-ADDSForestInstallation من أنه لا يمكن إنشاء تفويض لخادم DNS هذا. ماذا تفعل؟",
+   "answer": "لا شيء: ليس لمنطقة الغابة الجديدة منطقة أم يُفوَّض منها",
+   "wrong": [
+    "تتوقف وتثبّت DNS يدويًا أولًا",
+    "توجّه DNS الخادم إلى محلّل على الإنترنت",
+    "تستخدم -DomainNetbiosName بدلًا منه"
+   ],
+   "why": "لا يهم التحذير إلا عند وجود منطقة أم يجب أن تفوّض إلى المنطقة الجديدة."
+  },
+  {
+   "q": "بعد الترقية، ما المشاركتان اللتان يجب أن تكونا على وحدة التحكم بالمجال قبل أن يستخدمها العملاء؟",
+   "answer": "SYSVOL وNETLOGON",
+   "wrong": [
+    "ADMIN$ وC$",
+    "IPC$ وprint$",
+    "NTDS وDNS"
+   ],
+   "why": "لا يعلن الـ DC عن نفسه إلا بعد مشاركة SYSVOL؛ وتحمل NETLOGON نصوص تسجيل الدخول."
+  }
+ ]
+}

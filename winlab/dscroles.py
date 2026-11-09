@@ -600,6 +600,13 @@ def build_adcs(cfg: NodeConfig) -> None:
     tools = cfg.feature("RSAT-ADCS", subfeatures=True)
     dom = _domain(cfg)
     cn = str(cfg.vars.get("ca_common_name") or f"{cfg.netbios} Issuing CA")
+    if cfg.vars.get("parent_ca"):
+        # An issuing CA under an offline root (the certificate-authority lab):
+        # installed with its request written out; the offline root signs it
+        # by hand (winlab/calab.py).
+        from . import calab
+        calab.build_subordinate(cfg, cn, [ca, tools, dom])
+        return
     root = cfg.add(Resource("AdcsCertificationAuthority", "EnterpriseRootCA", {
         "IsSingleInstance": "Yes",
         "CAType": "EnterpriseRootCA",
@@ -619,6 +626,12 @@ def build_adcs(cfg: NodeConfig) -> None:
     # The CA in use: templates, autoenrolment, CRL schedule (winlab/pki.py).
     from . import pki
     pki.build_ca(cfg, root.id, enrol.id)
+
+
+def build_adcs_root(cfg: NodeConfig) -> None:
+    """The offline standalone root (winlab/calab.py): a workgroup server."""
+    from . import calab
+    calab.build_root(cfg)
 
 
 def build_iis(cfg: NodeConfig) -> None:
@@ -1868,6 +1881,7 @@ BUILDERS: dict[str, Callable[[NodeConfig], None]] = {
     "file": build_file,
     "dfs": build_dfs,
     "adcs": build_adcs,
+    "adcs-root": build_adcs_root,
     "iis": build_iis,
     "sql": build_sql,
     "metrics": build_metrics,

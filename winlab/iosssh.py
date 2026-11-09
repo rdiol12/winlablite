@@ -25,12 +25,36 @@ How it is real.
   Dropbear's forced command) whose bytes travel over a serial line of the
   router's own (ttyS2, a loopback socket only the desktop connects to) to
   the device's console here (devcli.Console): the same command line, the
-  same configuration. The console asks for the password, checking it against
-  ``username`` (login local) or the vty line's password (login); Dropbear
-  lets the session open without one (-B) because the user list it would
-  check is IOS's, not the router's /etc/shadow. So the password prompt
-  comes from the device inside the session ("Password:") rather than from
-  the SSH client, the one visible difference from a real switch.
+  same configuration.
+* With ``login local`` the SSH client asks for the password, as against a
+  real switch, and the session lands straight at ``SW1>`` (``SW1#`` for a
+  ``privilege 15`` user): Dropbear checks it against a user list of that
+  device alone. When ``username ... secret`` is typed, winlab keeps a
+  SHA-512 crypt of it (``ssh-hash:<user>``, beside IOS's own type 9 hash,
+  bound to it) and each device's Dropbear runs in its own mount namespace
+  (``winlab-sshd``: unshare -m, then /etc/shadow bind-mounted from that
+  device's list), so the router's users and each switch's are separate,
+  and a user typed with an already-hashed secret (``secret 9 $9$...``),
+  whose clear text winlab never saw, cannot log in over SSH (said in the
+  console). This is what makes Netmiko's cisco_ios, NAPALM's ios and
+  Ansible's cisco.ios network_cli work against the consoles (winlab/netauto.py).
+* With ``login`` and a line password Dropbear lets the session open without
+  one (-B) and the console asks inside the session ("Password:").
+* Under ``aaa new-model`` (winlab/aaa.py) the vty lines' method list
+  decides. A list that starts with ``local`` (or no list at all, which on a
+  vty line means local) keeps the SSH server's own check above, and the
+  exec authorization list then sets the level. A list that starts with a
+  server group (``group radius local``, ``group tacacs+``) cannot be checked
+  by Dropbear, which has no PAM to ask a server with: the device's local
+  users and the names a server has accepted (``aaa-names``) get empty
+  passwords in its shadow file, -B lets them in, and the console asks
+  "Password:" inside the session and asks the server. An OpenSSH client
+  gets in that way (it tries the "none" method first); Netmiko, NAPALM and
+  Ansible do not: paramiko sends the password in the SSH handshake, which
+  Dropbear refuses for an empty-password account, so the login fails with
+  "Authentication failed" before the console is reached. Automating a device
+  whose vty lines authenticate through RADIUS or TACACS+ therefore needs a
+  vty list that starts with local.
 * ``transport input`` decides at login: a line that does not take ssh closes
   the connection at once.
 
@@ -63,6 +87,7 @@ USER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,31}$")
 LINE = "/dev/ttyS2"
 VTYD = "/usr/local/bin/winlab-vtyd"
 VTY = "/usr/local/bin/winlab-vty"
+SSHD = "/usr/local/bin/winlab-sshd"
 LOG = "/var/log/winlab-vty.log"
 KEYDIR = "/etc/winlab-ssh"
 RUN = "/run/winlab-ssh"
@@ -160,6 +185,88 @@ def spki(key: dict) -> bytes:
     algo = _der(0x30, _der(0x06, bytes.fromhex("2A864886F70D010101")) + b"\x05\x00")
     rsa = _der(0x30, _der_int(key["n"]) + _der_int(key["e"]))
     return _der(0x30, algo + _der(0x03, b"\x00" + rsa))
+
+
+# ------------------------------------------------------------------ SSH logins (login local)
+_CRYPT64 = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+_CRYPT_ORDER = [(0, 21, 42), (22, 43, 1), (44, 2, 23), (3, 24, 45), (25, 46, 4), (47, 5, 26), (6, 27, 48),
+                (28, 49, 7), (50, 8, 29), (9, 30, 51), (31, 52, 10), (53, 11, 32), (12, 33, 54), (34, 55, 13),
+                (56, 14, 35), (15, 36, 57), (37, 58, 16), (59, 17, 38), (18, 39, 60), (40, 61, 19), (62, 20, 41)]
+HASH = "ssh-hash:"   # a device's setting: ssh-hash:<user> = "<binding> $6$<salt>$<hash>"
+
+
+def sha512_crypt(clear: str, salt: str = "") -> str:
+    """'$6$<salt>$<hash>': SHA-512 crypt (Drepper's specification, 5000
+    rounds), what Alpine's musl checks an /etc/shadow password with."""
+    salt = (salt or "".join(secrets.choice(_CRYPT64) for _ in range(16)))[:16]
+    p, s, sha = clear.encode(), salt.encode(), hashlib.sha512
+    b = sha(p + s + p).digest()
+    a = sha(p + s)
+    n = len(p)
+    while n > 64:
+        a.update(b)
+        n -= 64
+    a.update(b[:n])
+    n = len(p)
+    while n:
+        a.update(b if n & 1 else p)
+        n >>= 1
+    a = a.digest()
+    pp = (sha(p * len(p)).digest() * (len(p) // 64 + 1))[:len(p)]
+    ss = (sha(s * (16 + a[0])).digest() * (len(s) // 64 + 1))[:len(s)]
+    c = a
+    for i in range(5000):
+        h = sha(pp if i & 1 else c)
+        if i % 3:
+            h.update(ss)
+        if i % 7:
+            h.update(pp)
+        h.update(c if i & 1 else pp)
+        c = h.digest()
+    out = []
+    for x, y, z in _CRYPT_ORDER + [(None, None, 63)]:
+        v = (c[x] << 16 | c[y] << 8 | c[z]) if x is not None else c[z]
+        for _ in range(4 if x is not None else 2):
+            out.append(_CRYPT64[v & 63])
+            v >>= 6
+    return f"$6${salt}$" + "".join(out)
+
+
+def _binding(kept: str) -> str:
+    return hashlib.sha256(kept.encode()).hexdigest()[:12]
+
+
+def remember(con, name: str, typed: list[str]) -> str:
+    """After ``username <name> ... secret|password <typed>``: keep the crypt
+    Dropbear checks an SSH login with, when the clear text is known (typed
+    in clear, or a type 7 password); a note when it is not."""
+    from . import iosnv
+    own = _own(con)
+    kept = own.get(f"user:{name}", "").partition(" ")[2]
+    clear = None
+    if typed and typed[0] == "7" and len(typed) > 1:
+        try:
+            clear = iosnv.untype7(" ".join(typed[1:]))
+        except ValueError:
+            clear = None
+    elif typed and typed[0] == "0" and len(typed) > 1:
+        clear = " ".join(typed[1:])
+    elif typed and typed[0] not in ("5", "8", "9"):
+        clear = " ".join(typed)
+    if clear is None:
+        own.pop(HASH + name, None)
+        return "% SSH logins for this user need its secret typed in clear (winlab never saw this one)"
+    own[HASH + name] = f"{_binding(kept)} {sha512_crypt(clear)}"
+    return ""
+
+
+def login_hash(lab, device: str, user: str) -> str:
+    """The crypt an SSH login as `user` is checked against on the device, or
+    '' (none: the user cannot log in over SSH)."""
+    own = lab.devices.get(device, {})
+    kept = own.get(f"user:{user}", "").partition(" ")[2]
+    bind, _, h = own.get(HASH + user, "").partition(" ")
+    return h if kept and h.startswith("$6$") and bind == _binding(kept) else ""
 
 
 # ------------------------------------------------------------------ the key store
@@ -443,14 +550,16 @@ def run_lines(con, out: list[str]) -> list[str]:
     (winlab/etherchannel.py, winlab/span.py) put where IOS prints them."""
     lab, own = con.lab, con.lab.devices.get(con.device, {})
     router = con.device == devcli.ROUTER
-    out = list(out)
+    from . import aaa  # aaa new-model, method lists, tacacs server, login authentication
+    out = aaa.run_lines(con, out)
     glob: list[str] = []
     if not router:
         glob += _users_lines(own, bool(own.get("service-pwenc")))
     if own.get("domain"):
         glob += ([] if not glob else ["!"]) + [f"ip domain-name {own['domain']}"]
-    if glob and "no aaa new-model" in out:
-        i = out.index("no aaa new-model") + 1
+    anchor = next((a for a in ("no aaa new-model", "aaa new-model") if a in out), "")
+    if glob and anchor:
+        i = out.index(anchor) + 1
         out[i:i] = ["!"] + glob
     tail = []
     if not router:
@@ -462,11 +571,19 @@ def run_lines(con, out: list[str]) -> list[str]:
         tail.append(f"ip ssh time-out {own['ssh-timeout']}")
     if own.get("ssh-retries"):
         tail.append(f"ip ssh authentication-retries {own['ssh-retries']}")
+    if router:
+        from . import restconf  # ip http ..., restconf (IOS-XE prints restconf last)
+        http, rc = restconf.run_lines(lab, con.device)
+        tail = http + (["!"] if http and tail else []) + tail
+        if rc and "end" in out:
+            k = len(out) - 1 - out[::-1].index("end")
+            out[k:k] = rc + ["!"]
     if tail:
         j = next((k for k, line in enumerate(out) if line.startswith(("banner motd", "line con 0"))), len(out))
         out[j:j] = tail + ["!"]
     if not router:
-        from . import etherchannel
+        from . import etherchannel, snooping
+        out = snooping.place(lab, devcli.switch_id(con.device), out)   # ip dhcp snooping trust on Gi0/1
         g, under, pos = etherchannel.run_lines(lab, devcli.switch_id(con.device))
         if g:
             k = next((k for k, line in enumerate(out) if line.startswith("spanning-tree mode")), None)
@@ -516,8 +633,9 @@ trap 'kill $rd $wr 2>/dev/null; rm -f $D/$sid.out; exit 0' HUP TERM INT
 stty raw -echo 2>/dev/null
 cat <&4 &
 rd=$!
-echo "$(date '+%F %T') open $dev ${USER:-?} ${SSH_CLIENT%% *}" >> /var/log/winlab-vty.log
-send N "$(printf '%s %s %s' "$dev" "${USER:-?}" "${SSH_CLIENT%% *}" | base64 | tr -d '\n')"
+peer=${SSH_CLIENT%% *}; peer=${peer:-$TCPREMOTEIP}   # an SSH login, or a connection tcpsvd took (HTTPS)
+echo "$(date '+%F %T') open $dev ${USER:-?} $peer" >> /var/log/winlab-vty.log
+send N "$(printf '%s %s %s' "$dev" "${USER:-?}" "$peer" | base64 | tr -d '\n')"
 ( while :; do
     d=$(dd bs=512 count=1 2>/dev/null | base64 | tr -d '\n')
     [ -n "$d" ] || break
@@ -528,6 +646,52 @@ send N "$(printf '%s %s %s' "$dev" "${USER:-?}" "${SSH_CLIENT%% *}" | base64 | t
 wr=$!
 wait
 """
+
+
+SSHD_SCRIPT = r"""#!/bin/sh
+# winlab: one device's Dropbear (winlab/iosssh.py), in a mount namespace of its own where
+# /etc/shadow is that device's user list. winlab-sshd <its shadow file> <dropbear's arguments>
+s="$1"; shift
+exec unshare -m --propagation private /bin/sh -c 'mount --bind "$0" /etc/shadow || exit 1; exec dropbear "$@"' "$s" "$@"
+"""
+
+
+def ssh_checks(lab, device: str) -> bool:
+    """True when the SSH server itself checks the password a client sends
+    (and the session opens at the prompt): login local with AAA off, or under
+    aaa new-model a vty method list that starts with local (local never errs,
+    so nothing after it is ever asked). Otherwise the password is asked inside
+    the session: a line password, or an AAA list that starts with a server
+    group (RADIUS, TACACS+), which Dropbear has no way to ask."""
+    from . import aaa
+    methods = aaa.login_methods(lab, device, "vty")
+    if methods is None:
+        return lab.devices.get(device, {}).get("line-vty:login") == "local"
+    return bool(methods) and methods[0] in ("local", "local-case")
+
+
+def shadow_line(lab, device: str, users: list[str], path: str) -> str:
+    """Shell writing the device's /etc/shadow (from the router's own, every
+    IOS user locked but this device's). When the SSH server checks passwords
+    (ssh_checks), its local users' crypts (winlab/iosssh.remember); when the
+    session asks instead (a line password, or AAA through a server group),
+    empty ones for its local users and the names a server accepted
+    (aaa-names), Dropbear's -B letting them in for the console to ask."""
+    own = lab.devices.get(device, {})
+    checks = ssh_checks(lab, device)
+    names = set(own.get("aaa-names", "").split()) if own.get("aaa") and not checks else set()
+    mine = []
+    for u in users:
+        if f"user:{u}" not in own and u not in names:
+            continue
+        h = login_hash(lab, device, u) if checks else ""
+        if checks and not h:
+            continue
+        mine.append(f'h["{u}"]="{h}"')
+    begin = "; ".join(mine)
+    return (f"awk -F: -v OFS=: -v ios=' {' '.join(users)} ' 'BEGIN{{{begin}}} "
+            f"index(ios, \" \" $1 \" \") {{ $2 = ($1 in h) ? h[$1] : \"!\" }} {{ print }}' /etc/shadow > {path}; "
+            f"chmod 600 {path}")
 
 
 def _file(name: str) -> str:
@@ -553,6 +717,15 @@ def servers(plan) -> list[tuple[str, str, list[str]]]:
                         if seg.network.routed and not seg.network.wan and seg.network.router_ip})
         if addrs:
             out.append((devcli.ROUTER, "", addrs))
+    from . import routers  # the other routers: their SSH server inside their own network stack
+    for rid in routers.extra(lab):
+        dev = routers.key(rid)
+        if not serving(lab, dev) or not routers.powered(lab, rid):
+            continue
+        p = routers.plan_view(plan, rid)
+        addrs = sorted({seg.network.router_ip for seg in p.segments.values() if seg.network.routed})
+        if addrs:
+            out.append((dev, routers.netns(rid), addrs))
     for sw in devcli.switches(lab):
         dev = f"sw:{sw}"
         if not serving(lab, dev):
@@ -567,27 +740,33 @@ def servers(plan) -> list[tuple[str, str, list[str]]]:
 def render(plan, reset: bool = False) -> list[str]:
     """Shell for the router: the session line's two programs, the accounts
     Dropbear lets in, and one Dropbear per device with a key."""
+    from . import restconf  # HTTPS (RESTCONF) on the router: its connections ride the same line
     lab = plan.lab
     run = servers(plan)
-    if not run and not reset:
+    https = restconf.render(plan, VTY)
+    if not run and not https and not reset:
         return []
     out = ["# SSH to the consoles (winlab/iosssh.py): Dropbear on the lab addresses only, no forwarding;",
            "# each login is the device's own console, over ttyS2 to winlab",
            f"mkdir -p {KEYDIR} {RUN} /run/winlab-vty; chmod 700 {KEYDIR}",
            f"for f in {RUN}/*.pid; do [ -e $f ] && kill $(cat $f) 2>/dev/null; rm -f $f; done; rm -f {RUN}/*.line; true"]
-    if not run:
+    if not run and not https:
         return out
     out += [f"cat > {VTYD} <<'WINLAB_EOF'", VTYD_SCRIPT.rstrip("\n"), "WINLAB_EOF",
             f"cat > {VTY} <<'WINLAB_EOF'", VTY_SCRIPT.rstrip("\n"), "WINLAB_EOF",
-            f"chmod 755 {VTYD} {VTY}",
+            f"cat > {SSHD} <<'WINLAB_EOF'", SSHD_SCRIPT.rstrip("\n"), "WINLAB_EOF",
+            f"chmod 755 {VTYD} {VTY} {SSHD}",
+            # the sessions run as the IOS users: they may write the line, their fifo and the log
+            f"chgrp dialout {LINE} 2>/dev/null; chmod 660 {LINE} 2>/dev/null; chmod 1777 /run/winlab-vty; "
+            f"touch /run/winlab-vty/.lock {LOG}; chmod 666 /run/winlab-vty/.lock; chmod 622 {LOG}",
             f"[ -f /run/winlab-vty/vtyd.pid ] && kill -0 $(cat /run/winlab-vty/vtyd.pid) 2>/dev/null || "
             f"setsid {VTYD} </dev/null >/dev/null 2>&1 &"]
-    users = sorted({k[5:] for dev, _, _ in run for k in lab.devices.get(dev, {}) if k.startswith("user:")}
-                   )
+    users = sorted(u for u in ({k[5:] for dev, _, _ in run for k in lab.devices.get(dev, {}) if k.startswith("user:")}
+                               | {n for dev, _, _ in run for n in lab.devices.get(dev, {}).get("aaa-names", "").split()})
+                   if USER_RE.match(u) and u != "root")
     for u in users:
-        if USER_RE.match(u) and u != "root":
-            out.append(f"id -u {u} >/dev/null 2>&1 || adduser -D -H -h /var/empty -s /bin/sh -g 'IOS user' {u} "
-                       f"2>/dev/null; passwd -d {u} >/dev/null 2>&1; true")
+        out.append(f"id -u {u} >/dev/null 2>&1 || adduser -D -H -h /var/empty -s /bin/sh -g 'IOS user' {u} "
+                   f"2>/dev/null; addgroup {u} dialout 2>/dev/null; passwd -l {u} >/dev/null 2>&1; true")
     for dev, ns, addrs in run:
         key = key_of(lab, dev)
         own = lab.devices.get(dev, {})
@@ -599,13 +778,15 @@ def render(plan, reset: bool = False) -> list[str]:
         line = (f"login={'local' if own.get('line-vty:login') == 'local' else 'line'} "
                 f"transport={re.sub(r'[^a-z0-9,-]', '', (own.get('line-vty:transport') or 'all').lower().replace(' ', ','))} "
                 f"version={version(lab, dev)} bits={key['bits']}")
+        shadow = f"{KEYDIR}/{_file(dev)}.shadow"
         out += [f"# {devcli.hostname(lab, dev)}: key {key['label']} ({key['bits']} bits, {fingerprint(key)})",
                 f"echo '{line}' > {RUN}/{_file(dev)}.line   # the vty lines as SSH logins meet them",
                 f"printf '%s' '{b64}' | base64 -d > {f}; chmod 600 {f}",
-                f"{prefix}dropbear -r {f} {listen} -B -w -j -k "
+                shadow_line(lab, dev, users, shadow),
+                f"{prefix}{SSHD} {shadow} -r {f} {listen} -B -w -j -k "
                 + (f"-I {idle} " if idle else "")
                 + f"-c '{VTY} {dev}' -P {RUN}/{_file(dev)}.pid </dev/null >/dev/null 2>&1 || true"]
-    return out
+    return out + https
 
 
 # ------------------------------------------------------------------ a session
@@ -640,8 +821,30 @@ class VtyConsole(devcli.Console):
         how = own.get("line-vty:login") or "yes"
         tries = int(own.get("ssh-retries") or 3) or 1
         head = self.banner_text()
+        from . import aaa  # aaa new-model: the vty lines' method list (winlab/aaa.py)
+        if ssh_checks(self.lab, self.device):
+            # The SSH client asked for the password and Dropbear checked it
+            # against this device's users (shadow_line): straight to the prompt.
+            if not login_hash(self.lab, self.device, self.user):
+                return None
+            if aaa.login_methods(self.lab, self.device, "vty") is None:
+                priv = own.get(f"user:{self.user}", "").partition(" ")[0]
+                level = 15 if priv == "15" else 1
+            else:   # AAA, method local: the exec authorization still decides the level
+                ok, level, _why = aaa.authorize(self, self.user, "local", 0, "vty0", self.peer)
+                if not ok:
+                    self.s.mode = "idle"
+                    return head + "% Authorization failed.\n"
+                self.method = "local"
+            self.s.authed, self.logged = True, True
+            self.s.mode = "enable" if level >= 15 else "user"
+            aaa.exec_start(self)   # aaa accounting exec: the session's start record
+            return head
+        said = aaa.begin(self, "vty")
+        if said is not None:
+            return head + said
         if how == "local":
-            iosnv.ask(self, "vty-local", "Password: ", secret=True, tries=tries, on=_vty_answer, user=self.user)
+            return None   # login local without the SSH server's check: cannot happen (ssh_checks)
         elif own.get("line-vty:password"):
             iosnv.ask(self, "vty-line", "Password: ", secret=True, tries=tries, on=_vty_answer)
         else:
@@ -650,6 +853,8 @@ class VtyConsole(devcli.Console):
         return head
 
     def _exit(self, a):
+        from . import aaa
+        aaa.exec_stop(self)   # aaa accounting exec: the session's stop record
         self.s.mode, self.s.ctx, self.s.authed = "idle", "", False
         return ""
 
@@ -765,7 +970,13 @@ class Bridge:
         words = head.split(" ")
         dev, user, peer = (words + ["", "", ""])[:3]
         dash = self.dash_fn()
-        if dev != devcli.ROUTER and devcli.switch_id(dev) not in devcli.switches(dash.lab):
+        if dev.startswith("https:"):
+            self._https(sid, dash, dev[6:], peer)
+            return
+        from . import routers
+        known = (dev == devcli.ROUTER or devcli.switch_id(dev) in devcli.switches(dash.lab)
+                 or (routers.rid_of(dev) and routers.key(routers.rid_of(dev)) in dash.lab.devices))
+        if not known:
             self.send(f"X {sid}")
             return
         con = self.factory(dash, dev, user, peer)
@@ -782,10 +993,24 @@ class Bridge:
         self.output(sid, ("\r\n" + text.replace("\n", "\r\n") + con.prompt()).encode("latin-1", "replace"))
         self._after(sid, con)
 
+    def _https(self, sid: str, dash, dev: str, peer: str) -> None:
+        """A connection to the router's port 443: RESTCONF (winlab/restconf.py)."""
+        from . import restconf
+        if dev != devcli.ROUTER or not restconf.serving(dash.lab):
+            self.send(f"X {sid}")
+            return
+        sess = self.https_factory(dash, dev, peer)
+        self.sessions[sid] = (sess, sess)
+
+    def https_factory(self, dash, dev: str, peer: str):
+        from . import restconf
+        return restconf.Session(dash, dev, peer)
+
     def _after(self, sid: str, con) -> None:
         if getattr(con, "logged", False):
             con.logged = False
-            self.send(f"L {sid} " + base64.b64encode(f"{con.device} {con.user} {con.peer}".encode()).decode())
+            via = f" {con.method}" if getattr(con, "method", "") else ""   # radius, tacacs+, local (winlab/aaa.py)
+            self.send(f"L {sid} " + base64.b64encode(f"{con.device} {con.user} {con.peer}{via}".encode()).decode())
         if con.s.mode == "idle" and not con.s.ask:
             self.send(f"X {sid}")
             self._drop(sid)

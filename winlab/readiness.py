@@ -55,11 +55,12 @@ def _whp_pending() -> bool:
 
 
 def checks(report: hostprobe.HostReport | None = None, online: bool | None = None,
-           windows: bool | None = None) -> list[dict]:
+           windows: bool | None = None, linux: bool | None = None) -> list[dict]:
     """The PC checklist: one entry per thing a student may have to act on,
     status ok | warn | fail, in plain words, with the fix winlab can run."""
     r = report or hostprobe.probe()
     on_windows = (os.name == "nt") if windows is None else windows
+    on_linux = (sys.platform.startswith("linux") and not on_windows) if linux is None else linux
     out: list[dict] = []
 
     if on_windows:
@@ -74,15 +75,15 @@ def checks(report: hostprobe.HostReport | None = None, online: bool | None = Non
 
         if r.virt_firmware is False:
             out.append(_check(
-                "virtualization", "Virtualization is turned on in the PC's firmware", "fail",
-                "It is off, so no machine can run at full speed. Restart into the firmware "
-                "settings (UEFI/BIOS), turn on the setting called Intel Virtualization Technology "
+                "virtualization", "Virtualization is on in the BIOS/UEFI", "fail",
+                "It is off, so the machines cannot run. Press the button to restart into the PC's "
+                "BIOS/UEFI settings. There, turn on the option called Intel Virtualization Technology "
                 "(VT-x), SVM Mode or AMD-V, save and exit, then open winlab again.",
-                "firmware", "Restart into firmware settings"))
+                "firmware", "Restart into BIOS/UEFI settings"))
         else:
-            out.append(_check("virtualization", "Virtualization is turned on in the PC's firmware", "ok",
+            out.append(_check("virtualization", "Virtualization is on in the BIOS/UEFI", "ok",
                               "The processor's virtualization support is on."
-                              if r.virt_firmware else "Windows did not say; the speed check below decides."))
+                              if r.virt_firmware else "Windows did not say; the next check decides."))
 
         if r.hypervisor_platform:
             if _whp_pending():
@@ -100,15 +101,17 @@ def checks(report: hostprobe.HostReport | None = None, online: bool | None = Non
         else:
             out.append(_check(
                 "hypervisor-platform", "Windows Hypervisor Platform is on", "warn",
-                "It is off, so machines would run very slowly. winlab can turn this Windows "
-                "feature on: Windows asks for permission, then the PC needs a restart.",
+                "It is off, so machines would run very slowly. Press the button and winlab turns "
+                "it on: Windows asks for permission, then restart the PC.",
                 "enable-whp", "Turn it on"))
+    elif on_linux:
+        out += linux_checks(r)
     else:
         accel = r.accel in (hostprobe.ACCEL_KVM, hostprobe.ACCEL_HVF)
-        out.append(_check("acceleration", "Hardware acceleration", "ok" if accel else "warn",
-                          f"{r.accel}: machines run at near full speed." if accel else
-                          "No KVM here, so machines run slowly. Turn on virtualization in the "
-                          "firmware and make sure /dev/kvm is usable by your user."))
+        out.append(_check("acceleration", "Fast machines (hardware virtualization)", "ok" if accel else "warn",
+                          f"On ({r.accel}): machines run at near full speed." if accel else
+                          "Off, so machines run very slowly. Turn on virtualization (Intel VT-x or "
+                          "AMD-V) in the PC's BIOS/UEFI settings."))
 
     gb = r.ram_gb
     if gb >= hostprobe.COMFORT_RAM_GB - 0.6:  # a "16 GB" PC reports a little under
@@ -123,10 +126,10 @@ def checks(report: hostprobe.HostReport | None = None, online: bool | None = Non
                           f"machine. A single machine may still start."))
 
     if r.cores >= hostprobe.MIN_CORES:
-        out.append(_check("cpu", "Processor", "ok", f"{r.cores} logical processors."))
+        out.append(_check("cpu", "Processor", "ok", f"{r.cores} processor cores."))
     else:
         out.append(_check("cpu", "Processor", "warn",
-                          f"{r.cores} logical processors; 4 or more keep two machines responsive."))
+                          f"{r.cores} processor cores; 4 or more keep two machines running smoothly."))
 
     store = paths.images_dir()
     free = r.free_gb
@@ -136,11 +139,11 @@ def checks(report: hostprobe.HostReport | None = None, online: bool | None = Non
                           f"a data folder you own."))
     elif free >= hostprobe.MIN_FREE_GB:
         out.append(_check("disk", "Room for the machines", "ok",
-                          f"{free:.0f} GB free where winlab keeps its machines ({store})."))
+                          f"{free:.0f} GB free for the machines ({store})."))
     elif free >= hostprobe.SERVER_ONLY_FREE_GB:
         out.append(_check("disk", "Room for the machines", "warn",
-                          f"{free:.0f} GB free in {store}: enough for the Windows Server machines; "
-                          f"a Windows 11 client as well needs about {hostprobe.MIN_FREE_GB:.0f} GB."))
+                          f"{free:.0f} GB free: enough for labs with server machines only. Labs with a "
+                          f"Windows 11 PC need about {hostprobe.MIN_FREE_GB:.0f} GB, so free some space before those."))
     else:
         out.append(_check("disk", "Room for the machines", "fail",
                           f"{free:.0f} GB free in {store}; winlab needs at least "
@@ -152,8 +155,55 @@ def checks(report: hostprobe.HostReport | None = None, online: bool | None = Non
     out.append(_check("internet", "Internet, for the one-time downloads",
                       "ok" if online else "warn",
                       "Reachable. After setup the labs run with no internet at all." if online else
-                      "Not reachable right now. Setup downloads about 1 GB once; after that the "
-                      "labs never need the internet."))
+                      "Not connected right now. Setup needs it once, to download about 1 GB plus Windows; "
+                      "after that the labs work with no internet."))
+    return out
+
+
+def linux_checks(r: hostprobe.HostReport, kvm: str | None = None, missing: list[str] | None = None) -> list[dict]:
+    """A Linux PC's part of the checklist: KVM, and QEMU from the distribution."""
+    from . import linuxhost
+    out: list[dict] = []
+    kvm = linuxhost.kvm_state() if kvm is None else kvm
+    title = "Fast machines (KVM)"
+    if kvm == "ok":
+        out.append(_check("kvm", title, "ok", "KVM is on and yours to use: machines run at near full speed."))
+    elif kvm == "no-access":
+        if linuxhost.kvm_pending():
+            out.append(_check("kvm", title, "warn",
+                              "You were added to the kvm group: sign out and back in (or restart the PC), "
+                              "then open winlab again. Until then machines would run very slowly."))
+        else:
+            out.append(_check("kvm", title, "warn",
+                              "KVM is on, but your user may not use it yet, so machines would run very slowly. "
+                              "Press the button and winlab adds you to the kvm group (it asks for your "
+                              "password), then sign out and back in.", "kvm-access", "Give me access"))
+    else:
+        out.append(_check("kvm", title, "fail",
+                          "There is no /dev/kvm, so machines would run very slowly. Turn on Intel "
+                          "Virtualization Technology (VT-x), SVM Mode or AMD-V in the PC's BIOS/UEFI "
+                          "settings. If it is on already, load the module: sudo modprobe kvm_intel "
+                          "(kvm_amd on AMD). Inside another virtual machine, turn on nested virtualization."))
+    missing = linuxhost.missing_parts() if missing is None else missing
+    if not missing:
+        out.append(_check("qemu", "QEMU from your distribution", "ok",
+                          "Installed. winlab uses it as it is and installs nothing of its own system-wide."))
+    else:
+        argv = linuxhost.install_argv()
+        can = bool(argv) and linuxhost.has_desktop()
+        parts = ", ".join(missing)
+        # one sentence each, so the desktop's translation finds it whole
+        if can:
+            detail = (f"Not installed yet: {parts}. Press the button and winlab installs it with your package "
+                      f"manager (it asks for your password), or let Get everything ready do it.")
+        elif argv:
+            detail = f"Not installed yet: {parts}. In a terminal run: sudo {' '.join(argv)}."
+        else:
+            detail = (f"Not installed yet: {parts}. Install QEMU (the x86-64 system emulator and qemu-img), the "
+                      f"OVMF/edk2 UEFI firmware and swtpm with your distribution's package manager, then run "
+                      f"winlab setup again.")
+        out.append(_check("qemu", "QEMU from your distribution", "warn", detail,
+                          "install-qemu" if can else "", "Install QEMU" if can else ""))
     return out
 
 
@@ -246,7 +296,28 @@ def downloads_dir() -> Path:
                 return p
         except OSError:
             pass
+    else:
+        xdg = _xdg_download_dir()
+        if xdg is not None:
+            return xdg
     return Path.home() / "Downloads"
+
+
+def _xdg_download_dir(home: Path | None = None) -> Path | None:
+    """XDG_DOWNLOAD_DIR from ~/.config/user-dirs.dirs (a Linux desktop's
+    Downloads, localised or moved)."""
+    home = home or Path.home()
+    cfg = Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config") / "user-dirs.dirs"
+    try:
+        text = cfg.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        k, sep, v = line.partition("=")
+        if sep and k.strip() == "XDG_DOWNLOAD_DIR":
+            p = Path(v.strip().strip('"').replace("$HOME", str(home)))
+            return p if p.is_dir() else None
+    return None
 
 
 def search_dirs() -> list[Path]:
@@ -290,6 +361,16 @@ def _describe_iso(f: Path) -> dict:
         found_id = bsdfw.detect(f)
         if found_id:
             fits, holds = [found_id], bsdfw.label_of(f) or bsdfw.FIREWALLS[found_id].short
+    if not fits:
+        from . import android  # Android-x86's installer: told by its label or name
+        found_id = android.detect(f)
+        if found_id:
+            fits, holds = [found_id], android.label_of(f) or android.BUILDS[found_id].short
+    if not fits:
+        from . import netos  # VyOS's ISO, or Arista's Aboot disc for vEOS-lab
+        found_id = netos.detect(f)
+        if found_id:
+            fits, holds = [found_id], netos.label_of(f) or netos.VENDORS[found_id].short
     row = {"path": str(f), "name": f.name, "folder": str(f.parent),
            "size_gb": round(st.st_size / 1024 ** 3, 1), "fits": fits, "holds": holds}
     _SCAN_CACHE[key] = row
@@ -324,42 +405,95 @@ def _safe_iter(d: Path) -> list[Path]:
         return []
 
 
+def _ps_quote(text: str) -> str:
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+# The dialog's owner. winlab's server is not the program the user is looking
+# at (that is the app window, another process), and Windows will not let a
+# background program bring a window to the front. A Form that is never shown
+# makes TopMost meaningless, so the Open dialog used to open hidden behind the
+# app window with no taskbar button: Browse... looked dead. The owner is now a
+# real, shown, see-through, topmost window with a taskbar button; the dialog
+# it owns sits above it, so above every normal window, and the owner is
+# activated (forced through to the front) before the dialog opens.
+_OWNER = (
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "Add-Type -AssemblyName System.Drawing; "
+    "[System.Windows.Forms.Application]::EnableVisualStyles(); "
+    "$owner = New-Object System.Windows.Forms.Form; "
+    "$owner.Text = {title}; $owner.TopMost = $true; $owner.ShowInTaskbar = $true; "
+    "$owner.FormBorderStyle = 'None'; $owner.Opacity = 0; "
+    "$owner.StartPosition = 'CenterScreen'; $owner.Size = New-Object System.Drawing.Size(1, 1); "
+    "$owner.Show(); $owner.Activate(); [System.Windows.Forms.Application]::DoEvents(); "
+)
+
+
+def dialog_script(kind: str, title: str, filter_: str = "", start: str = "") -> str:
+    """The PowerShell that shows the Windows Open (kind 'file') or folder
+    (kind 'folder') dialog in front of everything and prints the choice."""
+    if kind == "file":
+        make = ("$d = New-Object System.Windows.Forms.OpenFileDialog; "
+                f"$d.Title = {_ps_quote(title)}; $d.Filter = {_ps_quote(filter_)}; "
+                f"$d.InitialDirectory = {_ps_quote(start)}; ")
+        pick = "$d.FileName"
+    else:
+        make = ("$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                f"$d.Description = {_ps_quote(title)}; ")
+        pick = "$d.SelectedPath"
+    return (_OWNER.format(title=_ps_quote(title)) + make
+            + "try { if ($d.ShowDialog($owner) -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; "
+            + f"Write-Output {pick} }} }} finally {{ $owner.Close() }}")
+
+
+def powershell_exe(env: dict | None = None) -> str:
+    """Windows PowerShell by its full path: a PATH trimmed by an installer or
+    a shortcut must not cost the user their Browse... button."""
+    env = os.environ if env is None else env
+    root = env.get("SystemRoot") or env.get("WINDIR") or r"C:\Windows"
+    full = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    return str(full) if full.exists() else "powershell.exe"
+
+
+def _run_dialog(script: str, run=subprocess.run) -> str:
+    """The chosen path, '' when the user cancelled; RuntimeError when the
+    dialog could not open at all, so the page asks for the path instead of
+    doing nothing."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    cp = run([powershell_exe(), "-NoProfile", "-NonInteractive", "-STA", "-ExecutionPolicy", "Bypass",
+              "-Command", script], capture_output=True, timeout=3600, creationflags=flags)
+    out = (cp.stdout or b"").decode("utf-8", "replace").strip()
+    if cp.returncode != 0 and not out:
+        err = (cp.stderr or b"").decode("utf-8", "replace").strip().splitlines()
+        raise RuntimeError("the Windows file dialog did not open"
+                           + (f" ({err[0][:200]})" if err else "") + "; type the path instead")
+    return out
+
+
 def pick_file(title: str = "Choose the ISO you downloaded",
-              filter_: str = "Disk images (*.iso)|*.iso|All files (*.*)|*.*") -> str:
-    """The Windows Open dialog, on top of the browser; '' when cancelled.
+              filter_: str = "Disk images (*.iso)|*.iso|All files (*.*)|*.*",
+              run=subprocess.run, windows: bool | None = None) -> str:
+    """The Windows Open dialog, in front of the app window; '' when cancelled.
     winlab's desktop runs in a browser, which never hands a page a file's
     real path, so the engine asks Windows directly."""
-    if os.name != "nt":
-        raise RuntimeError("the file picker is a Windows dialog; type the path instead")
-    start = str(downloads_dir()).replace("'", "''")
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true; ShowInTaskbar=$false}; "
-        "$d = New-Object System.Windows.Forms.OpenFileDialog; "
-        f"$d.Title = '{title}'; $d.Filter = '{filter_}'; $d.InitialDirectory = '{start}'; "
-        "if ($d.ShowDialog($owner) -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "Write-Output $d.FileName }")
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    cp = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", script],
-                        capture_output=True, timeout=3600, creationflags=flags)
-    return cp.stdout.decode("utf-8", "replace").strip()
+    if not (os.name == "nt" if windows is None else windows):
+        return _other_dialog("file", title, run)
+    return _run_dialog(dialog_script("file", title, filter_, str(downloads_dir())), run)
 
 
-def pick_folder(title: str = "Choose the folder to put on the disc") -> str:
+def pick_folder(title: str = "Choose the folder to put on the disc",
+                run=subprocess.run, windows: bool | None = None) -> str:
     """The Windows folder dialog, for the same reason as pick_file."""
-    if os.name != "nt":
-        raise RuntimeError("the folder picker is a Windows dialog; type the path instead")
-    script = (
-        "Add-Type -AssemblyName System.Windows.Forms; "
-        "$owner = New-Object System.Windows.Forms.Form -Property @{TopMost=$true; ShowInTaskbar=$false}; "
-        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-        f"$d.Description = '{title}'; "
-        "if ($d.ShowDialog($owner) -eq 'OK') { [Console]::OutputEncoding = [Text.Encoding]::UTF8; "
-        "Write-Output $d.SelectedPath }")
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    cp = subprocess.run(["powershell.exe", "-NoProfile", "-STA", "-Command", script],
-                        capture_output=True, timeout=3600, creationflags=flags)
-    return cp.stdout.decode("utf-8", "replace").strip()
+    if not (os.name == "nt" if windows is None else windows):
+        return _other_dialog("folder", title, run)
+    return _run_dialog(dialog_script("folder", title), run)
+
+
+def _other_dialog(kind: str, title: str, run=subprocess.run) -> str:
+    if not sys.platform.startswith("linux"):
+        raise RuntimeError(f"the {kind} picker is a Windows or Linux dialog; type the path instead")
+    from . import linuxhost
+    return linuxhost.pick(kind, title, str(downloads_dir()) if kind == "file" else str(Path.home()), run)
 
 
 def render(items: list[dict]) -> str:

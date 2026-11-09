@@ -1,0 +1,17 @@
+{
+ "Contact support": "Contactar con soporte",
+ "Support": "Soporte",
+ "support": "soporte",
+ "contact": "contacto",
+ "email": "correo electrónico",
+ "help": "ayuda",
+ "bug": "error",
+ "problem": "problema",
+ "logs": "registros",
+ "support file": "archivo de soporte",
+ "bundle": "paquete",
+ "zip": "zip",
+ "report": "informe",
+ "Make a support file and send it to us with a few words on what happened.": "Crea un archivo de soporte y envíanoslo con unas palabras sobre lo que pasó.",
+ "If something does not work and the other topics did not help, write to us. A support file lets us see what happened on this PC.\n\n**Make a support file** below collects, in one zip:\n\n- the checks winlab doctor runs, winlab's version, Windows, Python and QEMU versions\n- the labs and the state of their machines\n- the last part of each machine's log and of the base preparation logs\n- winlab's own settings, with secrets taken out\n\nIt never contains disk images, ISOs, USB sticks, lab passwords, your product key or license, or your own files. The zip stays on this PC until you attach it to an email yourself.\n\nFrom a command prompt: `winlab doctor --bundle`": "Si algo no funciona y los demás temas no han ayudado, escríbenos. Un archivo de soporte nos permite ver lo que pasó en este PC.\n\n**Crear un archivo de soporte**, abajo, reúne en un zip:\n\n- las comprobaciones que ejecuta winlab doctor, la versión de winlab, las versiones de Windows, Python y QEMU\n- los laboratorios y el estado de sus máquinas\n- la última parte del registro de cada máquina y de los registros de preparación de la base\n- la configuración propia de winlab, sin los secretos\n\nNunca contiene imágenes de disco, ISO, memorias USB, contraseñas del laboratorio, tu clave de producto o licencia, ni tus propios archivos. El zip se queda en este PC hasta que tú mismo lo adjuntes a un correo.\n\nDesde un símbolo del sistema: `winlab doctor --bundle`"
+}

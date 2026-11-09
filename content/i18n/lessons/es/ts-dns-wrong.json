@@ -1,0 +1,58 @@
+{
+ "title": "El miembro que no encuentra su dominio",
+ "summary": "La directiva de grupo deja de aplicarse y los inicios de sesión en el dominio fallan en un servidor; todo lo demás va bien.",
+ "why": "Esta es la causa más común de un AD roto: una máquina cuyo cliente DNS apunta a algún sitio que no conoce el dominio. El síntoma nunca es «el DNS está mal». Es «las GPO no se aplican», «no se encuentra un controlador de dominio», un inicio de sesión lento o un recurso compartido que se abre por IP y no por nombre. El hábito que hay que crear es hacer al DNS exactamente la pregunta que hace el dominio, la búsqueda SRV, antes que nada.\n\nUna vez que lo ves, el arreglo es una sola línea. La lección es el camino de diagnóstico desde el síntoma hasta esa línea.",
+ "concepts": [
+  "El localizador de DC y los registros SRV: la consulta que hace un miembro para encontrar un DC",
+  "Resolve-DnsName y nslookup: hacer una pregunta concreta a un servidor concreto",
+  "nltest /dsgetdc: lo que devuelve realmente el localizador ahora mismo",
+  "ipconfig /flushdns y klist purge: vaciar las cachés para que se pruebe tu arreglo, no la respuesta antigua"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 dns-wrong). No leas todavía las pistas.",
+  "Reproduce el síntoma tal como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Arregla la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la prueba que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ],
+ "pitfalls": [
+  "Hacer ping al DC por IP demuestra la red, no la resolución; un ping que funciona con un dominio roto es la firma de esta avería.",
+  "Una segunda entrada DNS que apunta a un resolvedor público falla de forma intermitente: el cliente pasa a ella bajo carga."
+ ],
+ "verify": [
+  "qué servidores DNS usan los adaptadores",
+  "si puede encontrar un DC"
+ ],
+ "quiz": [
+  {
+   "q": "El ping al DC por IP funciona pero el dominio está roto. ¿Qué sugiere eso?",
+   "answer": "La resolución de nombres, no la red",
+   "wrong": [
+    "Un cable de red roto",
+    "Una licencia caducada",
+    "Un disco lleno"
+   ],
+   "why": "El ping por IP solo demuestra la red."
+  },
+  {
+   "q": "¿Qué comando muestra el DC que devuelve el localizador ahora mismo?",
+   "answer": "nltest /dsgetdc:<domain>",
+   "wrong": [
+    "ipconfig /all",
+    "Get-ADDomain",
+    "net view"
+   ],
+   "why": "Pregunta al propio localizador."
+  },
+  {
+   "q": "¿Por qué vaciar las cachés (ipconfig /flushdns, klist purge) después de un arreglo?",
+   "answer": "Para probar el arreglo, no la respuesta antigua en caché",
+   "wrong": [
+    "El arreglo solo se aplica tras vaciarlas",
+    "Las cachés ralentizan la red",
+    "Para cerrar la sesión de los usuarios"
+   ],
+   "why": "Las cachés ocultan tanto los fallos como los arreglos."
+  }
+ ]
+}

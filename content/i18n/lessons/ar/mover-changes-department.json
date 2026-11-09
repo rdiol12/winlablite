@@ -1,0 +1,67 @@
+{
+ "title": "تنقّل وظيفي: شخص يغيّر قسمه",
+ "summary": "انقل شخصًا من Sales إلى Finance: الحساب نفسه، وسمات جديدة، ومجموعات مُستبدلة، ولا وصول متبقٍّ، والمجلد الرئيسي على مشاركة Finance.",
+ "why": "للتعيينات والمغادرات إجراءات؛ أما التنقلات فتُنسى. ينتقل شخص من Sales إلى Finance، فتضيف تقنية المعلومات مجموعات Finance لأن Finance تطلب بإلحاح، ولا أحد يزيل مجموعات Sales لأن Sales لا تطلب شيئًا. وبعد ثلاثة تنقلات يستطيع الشخص قراءة نصف الشركة: تراكم الصلاحيات، وهو أول ما تكشفه مراجعة الوصول لدى المدقق.\n\nالتنقل يحتفظ بالحساب. يبقى SID وصندوق البريد وسجل تسجيلات الدخول والملفات؛ وما يتغير هو ما يتعلق بالحساب. القسم والمسمى الوظيفي (تقرؤهما دفاتر العناوين والمجموعات الديناميكية وتقارير الموارد البشرية)، ومجموعات الأدوار تُستبدل ولا تُضاف، والأذونات التي لم تكن يومًا في مجموعة تُكتشف وتُزال، والبيانات التي تعيش لكل قسم تُنقل إلى حيث يحفظها القسم الجديد.\n\nاضغط اكسر فيُعدّ Dan Price (dprice) في Sales على dc01، مع مجلد رئيسي على Home$ وكما في معظم الشركات الحقيقية، إذن واحد منحه إياه أحدهم مباشرة ذات مرة على مجلد في Sales. يبدأ في Finance يوم الاثنين، والمجلدات الرئيسية لـ Finance تعيش على مشاركتها الخاصة، HomeFinance$.",
+ "concepts": [
+  "التعيين والتنقل والمغادرة: الأحداث الثلاثة في دورة حياة الهوية، ولكل منها قائمة تحقق",
+  "تراكم الصلاحيات: وصول لا يفعل إلا أن يكبر، لأن أحدًا لا يطلب سحب الوصول",
+  "سمات تحرّك أشياء أخرى: Department وTitle وManager (دفتر العناوين، وقوائم التوزيع الديناميكية، وتقارير الموارد البشرية)",
+  "الوصول القائم على المجموعات (AGDLP): G-Sales داخل DL-Sales-Share؛ والتنقل تغييران في العضوية، لا تحرير لقائمة ACL أبدًا",
+  "الأذونات المباشرة: مدخل ACE لشخص لا لمجموعة ينجو من كل تغيير في المجموعات؛ اعثر عليها بـ Get-Acl وIsInherited",
+  "نقل مجلد رئيسي بأذوناته: robocopy /E /MOVE /COPYALL، ثم HomeDirectory؛ وينتقل صندوق البريد بالطريقة نفسها في Exchange (New-MoveRequest) ويبقى مكانه على خادم بريد واحد"
+ ],
+ "steps": [
+  "اضغط اكسر (أو winlab break dc01 mover-to-finance). اقرأ الحساب أولًا: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List.",
+  "اسرد كل المجموعات، بما في ذلك كيف وصل إليها: Get-ADPrincipalGroupMembership dprice | Select-Object Name, GroupScope, GroupCategory.",
+  "عيّن السمات: Set-ADUser dprice -Department Finance -Title 'Finance analyst'.",
+  "استبدل مجموعات الأدوار: Remove-ADGroupMember G-Sales -Members dprice -Confirm:$false; Remove-ADGroupMember 'Sales Team' -Members dprice -Confirm:$false; Add-ADGroupMember G-Finance -Members dprice; Add-ADGroupMember 'Finance Team' -Members dprice.",
+  "اعثر على الوصول غير الموجود في مجموعة: Get-ChildItem C:\\Shares\\Sales -Recurse -Directory | ForEach-Object { $p = $_.FullName; (Get-Acl $p).Access | Where-Object { -not $_.IsInherited } | Select-Object @{n='Path';e={$p}}, IdentityReference, FileSystemRights }.",
+  "أزل المنح المباشر: icacls 'C:\\Shares\\Sales\\Key accounts' /remove CORP\\dprice.",
+  "انقل المجلد الرئيسي بأذوناته: robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL /R:1 /W:1. تحقق من أن Get-Acl C:\\Shares\\HomeFinance\\dprice يُظهر dprice مع Modify، وأن المجلد القديم قد اختفى.",
+  "وجّه الحساب إليه: Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:. عند تسجيل دخوله التالي يكون H: هو المجلد الجديد.",
+  "اقرأ النتيجة مجددًا: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List، ثم اضغط تحقق من عملي."
+ ],
+ "pitfalls": [
+  "إضافة المجموعات الجديدة وترك القديمة هي أكثر ملاحظة شيوعًا في مراجعات الوصول على الإطلاق.",
+  "حذف الحساب وإنشاء حساب جديد للوظيفة الجديدة يُضيّع SID: فتشير الملفات وأذونات صندوق البريد وسجل التدقيق عندها إلى حساب مجهول.",
+  "نسخ المجلد الرئيسي دون /COPYALL (أو باستخدام Copy-Item) يعطي الملفات قائمة ACL الموروثة من المجلد الجديد: فقد يفقد الشخص الوصول، أو قد يكتسبه الجميع.",
+  "انقل المجلد والشخص غير مسجّل الدخول؛ فالملف المفتوح يتخطاه robocopy، والسجل (robocopy /LOG:) يذكر أيها."
+ ],
+ "verify": [
+  "حساب الشخص المتنقل",
+  "الأذونات الصريحة على مجلدات Sales",
+  "المجلد الرئيسي القديم والجديد"
+ ],
+ "quiz": [
+  {
+   "q": "ينتقل شخص من Sales إلى Finance. ماذا يحدث لمجموعات Sales؟",
+   "answer": "تُزال في التغيير نفسه الذي يضيف مجموعات Finance",
+   "wrong": [
+    "تبقى شهرًا تحسبًا لحاجته إلى شيء",
+    "تبقى؛ وتُضاف مجموعات Finance فقط",
+    "يُعاد إنشاء الحساب من دونها"
+   ],
+   "why": "الاستبدال لا الإضافة هو ما يوقف تراكم الصلاحيات."
+  },
+  {
+   "q": "لماذا تحتفظ بالحساب نفسه للمتنقل بدل إنشاء حساب جديد؟",
+   "answer": "SID وصندوق البريد والملفات والسجل كلها تشير إلى الحساب الموجود",
+   "wrong": [
+    "لا يمكن إنشاء حسابات في منتصف السنة",
+    "الحساب الجديد لن تكون له كلمة مرور",
+    "لا يمكن إعادة تسمية إلا حساب المتنقل"
+   ],
+   "why": "تشير الأذونات وسجلات التدقيق إلى SID؛ والحساب الجديد غريب عنها جميعًا."
+  },
+  {
+   "q": "أي إذن ينجو من كل تغيير في المجموعات تجريه للمتنقل؟",
+   "answer": "مدخل تحكم بالوصول ممنوح للشخص مباشرة",
+   "wrong": [
+    "إذن مشاركة على Everyone",
+    "إذن موروث من المجلد الأب",
+    "رفض على Domain Users"
+   ],
+   "why": "اعثر عليها بـ Get-Acl وAccess وIsInherited -eq $false: فهي غير مرئية لمراجعات المجموعات."
+  }
+ ]
+}

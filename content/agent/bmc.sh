@@ -65,7 +65,21 @@ while IFS= read -r h; do
     esac
 done
 body=''
-if [ "${len:-0}" -gt 0 ] 2>/dev/null && [ "$len" -le 8192 ]; then
+# A firmware package for UpdateService's HttpPushUri is the request body
+# itself (application/octet-stream, as bmcweb takes it): it goes to a file,
+# up to UPMAX bytes; every other body is a few lines of JSON or a form.
+UPMAX=4194304
+upload=''
+toobig=''
+case "$method ${target%%\?*}" in
+    "POST /redfish/v1/UpdateService" | "POST /redfish/v1/UpdateService/" | "POST /redfish/v1/UpdateService/update" | "POST /redfish/v1/UpdateService/update/")
+        upload=1
+        rm -f "$D/upload.tar"
+        if [ "${len:-0}" -gt "$UPMAX" ] 2>/dev/null; then toobig=1
+        elif [ "${len:-0}" -gt 0 ] 2>/dev/null; then head -c "$len" > "$D/upload.tar"
+        fi ;;
+esac
+if [ -z "$upload" ] && [ "${len:-0}" -gt 0 ] 2>/dev/null && [ "$len" -le 8192 ]; then
     body=$(head -c "$len")
 fi
 path=${target%%\?*}
@@ -104,6 +118,17 @@ ok() { json '{"@Message.ExtendedInfo":[{"@odata.type":"#Message.v1_1_1.Message",
 
 name=$(get name)
 user=$(get user)
+# The firmware this BMC keeps an inventory of (winlab/bmcfw.py writes the
+# files; these defaults are bmcfw.DEFAULTS): its own image and the backup,
+# the server's BIOS with its release date, and a BIOS image staged for the
+# next power-on from off.
+fw_bmc=$(get fw_bmc); fw_bmc=${fw_bmc:-2.14.0}
+fw_bak=$(get fw_bmc_backup); fw_bak=${fw_bak:-2.13.1}
+set -- $(get fw_bios)
+fw_bios=${1:-1.2.0} fw_bdate=${2:-03/14/2025}
+set -- $(get fw_bios_pending)
+fw_pend=${1:-} fw_pdate=${2:-}
+machine=$(get machine); machine=${machine:-WL-R200}
 want=$(get auth)
 webui=''
 [ -f "$W/index.html" ] && webui=1
@@ -198,6 +223,7 @@ may() {  # operate: power, media, boot, the LED; configure: users and the port
 [ -n "$sid" ] && [ -n "$who" ] && touch "$S/$sid"
 need() {  # a resource behind the sign-in
     [ -n "$who" ] && return 0
+    [ -n "$upload" ] && rm -f "$D/upload.tar"
     [ -z "$xhr" ] && extra='WWW-Authenticate: Basic realm="Management processor of '"$name"'"'"$cr"'
 '
     fail '401 Unauthorized' NoValidSession "Sign in with the user and password on the server's toe tag."
@@ -247,7 +273,7 @@ button{font:inherit;padding:6px 12px;margin:4px 6px 4px 0;border:1px solid #9aa7
 button:hover{background:#e6edf5}.sev-Critical{color:#b3261e}.sev-Warning{color:#9a6700}code{background:#eef1f5;padding:1px 4px}</style></head>
 <body><header><svg width=28 height=28 viewBox='0 0 28 28'><rect x=2 y=5 width=24 height=18 rx=3 fill='#3d7bd9'/><path d='M7 14h4l2-4 3 8 2-4h3' fill=none stroke='#fff' stroke-width=2/></svg>
 <div><b>Management processor</b> <span>of $name</span></div></header>
-<nav><a href='/'>Overview</a><a href='/console'>Virtual console</a><a href='/media'>Virtual media and boot</a><a href='/log'>Event log</a><a href='/redfish/v1/Systems/1'>Redfish</a></nav><main>$2</main></body></html>"
+<nav><a href='/'>Overview</a><a href='/console'>Virtual console</a><a href='/media'>Virtual media and boot</a><a href='/log'>Event log</a><a href='/firmware'>Firmware</a><a href='/redfish/v1/Systems/1'>Redfish</a></nav><main>$2</main></body></html>"
 }
 
 overview() {
@@ -310,6 +336,20 @@ form() {  # one field of an urlencoded form, in the characters it may hold
     printf '%s' "$body" | tr '&' '\n' | sed -n "s/^$1=//p" | head -n 1 | tr -cd "$2"
 }
 
+firmware_page() {
+    st=''
+    [ -n "$fw_pend" ] && st="<tr><th>BIOS staged</th><td>$fw_pend ($fw_pdate): written at the server's next power-on from off</td></tr>"
+    page Firmware "<div class=card><table><tr><th>Model</th><td>$machine</td></tr>
+<tr><th>BMC, active image</th><td>$fw_bmc</td></tr><tr><th>BMC, backup image</th><td>$fw_bak</td></tr>
+<tr><th>BIOS</th><td>$fw_bios ($fw_bdate)</td></tr>$st</table></div>
+<div class=card><b>Update firmware</b><p>A package from the vendor (.tar with a MANIFEST). Check its SHA-256 against the vendor's list first.</p>
+<input type=file id=fwfile accept='.tar'> <button onclick='up()'>Start update</button><p id=fwout></p>
+<script>function up(){var f=document.getElementById('fwfile').files[0],o=document.getElementById('fwout');if(!f){o.textContent='Choose a package first.';return}
+o.textContent='Uploading and verifying...';fetch('/redfish/v1/UpdateService/update',{method:'POST',body:f,credentials:'same-origin',headers:{'Content-Type':'application/octet-stream'}})
+.then(function(r){return r.json().then(function(j){o.textContent=(r.ok?'':'Refused: ')+((j.error&&j.error.message)||(j.Messages&&j.Messages[0]&&j.Messages[0].Message)||r.status)})})}</script>
+<p style='color:#5b6773;margin:6px 0 0'>Scripts: <code>POST /redfish/v1/UpdateService/update</code> with the package as the body.</p></div>"
+}
+
 log_page() {
     rows=$(tail -n 200 "$D/events" 2>/dev/null | awk -F'|' '{r = "<tr><td>" $1 "</td><td class=sev-" $2 ">" $2 "</td><td>" $3 "</td></tr>" r} END {print r}')
     page 'Event log' "<div class=card><table><tr><th>When</th><th>Severity</th><th>Event</th></tr>${rows:-<tr><td colspan=3>empty</td></tr>}</table></div>"
@@ -363,6 +403,7 @@ own_pages() {
             cat "$D/screen.png"
             exit 0 ;;
         "GET /log") log_page ;;
+        "GET /firmware") firmware_page ;;
     esac
     reply '404 Not Found' 'text/plain' 'not found'
 }
@@ -418,9 +459,9 @@ system() {
     last=$(get lastreset)
     set -- $(get boot)
     bt=${1:-None} be=${2:-Disabled}
-    printf '{"@odata.id":"%s","@odata.type":"#ComputerSystem.v1_22_0.ComputerSystem","Id":"system","Name":"system","Description":"The server this BMC manages","HostName":"%s","SystemType":"Physical","Manufacturer":"QEMU","Model":"Standard PC (Q35 + ICH9, 2009)","SerialNumber":"%s","AssetTag":"%s","UUID":"%s","PowerState":"%s",%s"LocationIndicatorActive":%s,"Status":{"State":"%s","Health":"%s","HealthRollup":"%s"},"ProcessorSummary":{"Count":%s,"CoreCount":%s,"Status":{"State":"Enabled","Health":"OK"}},"MemorySummary":{"TotalSystemMemoryGiB":%s,"Status":{"State":"Enabled","Health":"OK"}},"Boot":{"BootSourceOverrideEnabled":"%s","BootSourceOverrideEnabled@Redfish.AllowableValues":["Disabled","Once","Continuous"],"BootSourceOverrideMode":"UEFI","BootSourceOverrideTarget":"%s","BootSourceOverrideTarget@Redfish.AllowableValues":["None","Cd","Hdd","BiosSetup"]},"VirtualMedia":{"@odata.id":"%s"},"LogServices":{"@odata.id":"%s/LogServices"},"Actions":{"#ComputerSystem.Reset":{"target":"%s/Actions/ComputerSystem.Reset","@Redfish.ActionInfo":"%s/ResetActionInfo","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","GracefulRestart","ForceRestart","PushPowerButton","PowerCycle"]}},"Links":{"ManagedBy":[{"@odata.id":"%s"}],"Chassis":[{"@odata.id":"%s"}]}}' \
-        "$SYS" "$(js "$name")" "WL$serial" "$tag" "$uuid" "$power" "${last:+\"LastResetTime\":\"$last\",}" "$led" "$st" "$h" "$h" \
-        "${cpus:-1}" "${cpus:-1}" "$(awk -v m="${mem:-0}" 'BEGIN { printf "%g", m / 1024 }')" "$be" "$bt" "$MGR/VirtualMedia" "$SYS" "$SYS" "$SYS" "$MGR" "$CH"
+    printf '{"@odata.id":"%s","@odata.type":"#ComputerSystem.v1_22_0.ComputerSystem","Id":"system","Name":"system","Description":"The server this BMC manages","HostName":"%s","SystemType":"Physical","Manufacturer":"QEMU","Model":"Standard PC (Q35 + ICH9, 2009)","SerialNumber":"%s","AssetTag":"%s","UUID":"%s","BiosVersion":"%s","PowerState":"%s",%s"LocationIndicatorActive":%s,"Status":{"State":"%s","Health":"%s","HealthRollup":"%s"},"ProcessorSummary":{"Count":%s,"CoreCount":%s,"Status":{"State":"Enabled","Health":"OK"}},"MemorySummary":{"TotalSystemMemoryGiB":%s,"Status":{"State":"Enabled","Health":"OK"}},"Boot":{"BootSourceOverrideEnabled":"%s","BootSourceOverrideEnabled@Redfish.AllowableValues":["Disabled","Once","Continuous"],"BootSourceOverrideMode":"UEFI","BootSourceOverrideTarget":"%s","BootSourceOverrideTarget@Redfish.AllowableValues":["None","Cd","Hdd","BiosSetup"]},"VirtualMedia":{"@odata.id":"%s"},"LogServices":{"@odata.id":"%s/LogServices"},"Actions":{"#ComputerSystem.Reset":{"target":"%s/Actions/ComputerSystem.Reset","@Redfish.ActionInfo":"%s/ResetActionInfo","ResetType@Redfish.AllowableValues":["On","ForceOff","GracefulShutdown","GracefulRestart","ForceRestart","PushPowerButton","PowerCycle"]}},"Bios":{"@odata.id":"%s/Bios"},"Links":{"ManagedBy":[{"@odata.id":"%s"}],"Chassis":[{"@odata.id":"%s"}]}}' \
+        "$SYS" "$(js "$name")" "WL$serial" "$tag" "$uuid" "$fw_bios" "$power" "${last:+\"LastResetTime\":\"$last\",}" "$led" "$st" "$h" "$h" \
+        "${cpus:-1}" "${cpus:-1}" "$(awk -v m="${mem:-0}" 'BEGIN { printf "%g", m / 1024 }')" "$be" "$bt" "$MGR/VirtualMedia" "$SYS" "$SYS" "$SYS" "$SYS" "$MGR" "$CH"
 }
 
 entries() {  # every line of the log an entry; its line number its Id
@@ -452,6 +493,61 @@ account_json() {  # user
     fi
     printf '{"@odata.id":"%s/AccountService/Accounts/%s","@odata.type":"#ManagerAccount.v1_7_0.ManagerAccount","Id":"%s","Name":"User Account","UserName":"%s","RoleId":"%s","Enabled":%s,"Locked":false,"Locked@Redfish.AllowableValues":["false"],"PasswordChangeRequired":false,"AccountTypes":["Redfish","WebUI"],"Links":{"Role":{"@odata.id":"%s/AccountService/Roles/%s"}}}' \
         "$R" "$1" "$1" "$1" "$ar" "${ae:-true}" "$R" "$ar"
+}
+
+inventory() {  # id, version, related item, description, state, extra properties
+    json "{\"@odata.id\":\"$R/UpdateService/FirmwareInventory/$1\",\"@odata.type\":\"#SoftwareInventory.v1_4_0.SoftwareInventory\",\"Id\":\"$1\",\"Name\":\"Software Inventory\",\"Description\":\"$4\",\"Version\":\"$2\",$6\"Manufacturer\":\"winlab\",\"Updateable\":true,\"RelatedItem\":[{\"@odata.id\":\"$3\"}],\"RelatedItem@odata.count\":1,\"Status\":{\"State\":\"$5\",\"Health\":\"OK\",\"HealthRollup\":\"OK\"}}"
+}
+
+fw_refuse() {  # why: the package is not taken
+    rm -rf "$D/upload.tar" "$D/upload.d"
+    event Warning "Firmware update from $peer refused: $1"
+    fail '400 Bad Request' ActionParameterValueError "Firmware update refused: $1"
+}
+
+fw_update() {  # the package in upload.tar, checked as a BMC checks it, then taken
+    [ "$role" = Administrator ] || { rm -f "$D/upload.tar"; may configure; }
+    [ -n "$toobig" ] && fw_refuse "the package is larger than this BMC takes ($UPMAX bytes)"
+    [ -s "$D/upload.tar" ] || fail '400 Bad Request' ActionParameterMissing "Send the firmware package as the body of the POST (Content-Type: application/octet-stream)."
+    u=$D/upload.d
+    rm -rf "$u"
+    mkdir -p "$u"
+    tar -xf "$D/upload.tar" -C "$u" 2>/dev/null && [ -f "$u/MANIFEST" ] ||
+        fw_refuse "not a firmware package (a tar with a MANIFEST)"
+    mf() { sed -n "s/^$1=//p" "$u/MANIFEST" | tr -d '\r' | head -n 1; }
+    fp=$(mf purpose)
+    fver=$(mf version | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+    fmach=$(mf MachineName | tr -cd 'A-Za-z0-9._-' | cut -c1-32)
+    fdate=$(mf ReleaseDate | tr -cd '0-9/' | cut -c1-10)
+    fimg=$(mf ImageFile | tr -cd 'A-Za-z0-9._-')
+    fsum=$(mf ImageSHA256 | tr -cd '0-9a-f')
+    case "$fp" in
+        *.VersionPurpose.BMC) fk=bmc ;;
+        *.VersionPurpose.Host) fk=bios ;;
+        *) fw_refuse "the MANIFEST's purpose is neither BMC nor Host" ;;
+    esac
+    [ -n "$fver" ] || fw_refuse "the MANIFEST names no version"
+    [ "$fmach" = "$machine" ] || fw_refuse "the image is for model ${fmach:-unknown}; this server is $machine"
+    [ -n "$fimg" ] && [ -f "$u/$fimg" ] || fw_refuse "the package holds no image file"
+    got=$(sha256sum "$u/$fimg" | cut -d' ' -f1)
+    [ -n "$fsum" ] && [ "$got" = "$fsum" ] || fw_refuse "the image's SHA-256 does not match its MANIFEST: the package is damaged or was altered"
+    rm -rf "$u" "$D/upload.tar"
+    if [ "$fk" = bmc ]; then
+        [ "$fver" = "$fw_bmc" ] && fw_refuse "BMC firmware $fver is already the active image"
+        printf '%s\n' "$fw_bmc" > "$D/fw_bmc_backup"
+        printf '%s\n' "$fver" > "$D/fw_bmc"
+        printf 'Firmware=bmc:%s %s\n' "$fver" "$peer" >> "$D/queue"
+        event Info "BMC firmware $fver verified (model $fmach, SHA-256 matches) and activated by $who from $peer; the BMC restarted on it. Backup image: $fw_bmc"
+        tm="BMC firmware $fver is active; the BMC restarted on it."
+    else
+        printf '%s' "$fdate" | grep -Eq '^[0-9]{2}/[0-9]{2}/[0-9]{4}$' || fw_refuse "the MANIFEST's ReleaseDate is not MM/DD/YYYY"
+        [ "$fver" = "$fw_bios" ] && fw_refuse "BIOS firmware $fver is already on the server"
+        printf '%s %s\n' "$fver" "$fdate" > "$D/fw_bios_pending"
+        printf 'Firmware=bios:%s:%s %s\n' "$fver" "$fdate" "$peer" >> "$D/queue"
+        event Info "BIOS firmware $fver verified (model $fmach, SHA-256 matches) and staged by $who from $peer: it is written at the server's next power-on from off. Running now: $fw_bios"
+        tm="BIOS firmware $fver is staged: power the server off and on (a power cycle) to write it."
+    fi
+    json "{\"@odata.id\":\"$R/TaskService/Tasks/0\",\"@odata.type\":\"#Task.v1_4_3.Task\",\"Id\":\"0\",\"Name\":\"Firmware update\",\"TaskState\":\"Completed\",\"TaskStatus\":\"OK\",\"PercentComplete\":100,\"Messages\":[{\"@odata.type\":\"#Message.v1_1_1.Message\",\"MessageId\":\"Update.1.0.UpdateSuccessful\",\"Message\":\"$tm\",\"Severity\":\"OK\",\"Resolution\":\"None.\"}]}" '202 Accepted'
 }
 
 login() {
@@ -621,8 +717,23 @@ case "$path" in
         fi
         json "$e" ;;
     $R/Managers) only GET; collection "$path" ManagerCollection.ManagerCollection 'Manager Collection' "$MGR" ;;
-    $MGR) only GET
-        json "{\"@odata.id\":\"$MGR\",\"@odata.type\":\"#Manager.v1_14_0.Manager\",\"Id\":\"bmc\",\"Name\":\"Management processor of $(js "$name")\",\"Description\":\"Baseboard Management Controller\",\"ManagerType\":\"BMC\",\"Model\":\"winlab BMC\",\"FirmwareVersion\":\"winlab-bmc\",\"UUID\":\"$uuid\",\"PowerState\":\"On\",\"DateTime\":\"$(iso)\",\"DateTimeLocalOffset\":\"+00:00\",\"Status\":{\"State\":\"Enabled\",\"Health\":\"OK\",\"HealthRollup\":\"OK\"},\"EthernetInterfaces\":{\"@odata.id\":\"$MGR/EthernetInterfaces\"},\"VirtualMedia\":{\"@odata.id\":\"$MGR/VirtualMedia\"},\"LogServices\":{\"@odata.id\":\"$MGR/LogServices\"},\"Links\":{\"ManagerForServers\":[{\"@odata.id\":\"$SYS\"}],\"ManagerForChassis\":[{\"@odata.id\":\"$CH\"}],\"ActiveSoftwareImage\":{\"@odata.id\":\"$R/UpdateService/FirmwareInventory/bmc_active\"}}}" ;;
+    $MGR)
+        only GET PATCH
+        if [ "$method" = PATCH ]; then
+            may configure
+            ai=$(printf '%s' "$body" | tr -d '\n' | sed -n 's/.*"ActiveSoftwareImage"[ ]*:[ ]*{[^}]*"@odata.id"[ ]*:[ ]*"\([^"]*\)".*/\1/p')
+            [ -n "$ai" ] || fail '400 Bad Request' PropertyNotWritable "This BMC changes only Links.ActiveSoftwareImage of the manager."
+            case "${ai##*/}" in
+                bmc_active) ok ;;
+                bmc_backup)
+                    printf '%s\n' "$fw_bmc" > "$D/fw_bmc_backup"; printf '%s\n' "$fw_bak" > "$D/fw_bmc"
+                    printf 'Firmware=bmc-switch %s\n' "$peer" >> "$D/queue"
+                    event Info "BMC firmware: switched to the backup image $fw_bak by $who from $peer; the BMC restarted on it (backup now $fw_bmc)"
+                    ok ;;
+                *) fail '400 Bad Request' PropertyValueNotInList "ActiveSoftwareImage must be $R/UpdateService/FirmwareInventory/bmc_active or bmc_backup." ;;
+            esac
+        fi
+        json "{\"@odata.id\":\"$MGR\",\"@odata.type\":\"#Manager.v1_14_0.Manager\",\"Id\":\"bmc\",\"Name\":\"Management processor of $(js "$name")\",\"Description\":\"Baseboard Management Controller\",\"ManagerType\":\"BMC\",\"Model\":\"winlab BMC\",\"FirmwareVersion\":\"$fw_bmc\",\"UUID\":\"$uuid\",\"PowerState\":\"On\",\"DateTime\":\"$(iso)\",\"DateTimeLocalOffset\":\"+00:00\",\"Status\":{\"State\":\"Enabled\",\"Health\":\"OK\",\"HealthRollup\":\"OK\"},\"EthernetInterfaces\":{\"@odata.id\":\"$MGR/EthernetInterfaces\"},\"VirtualMedia\":{\"@odata.id\":\"$MGR/VirtualMedia\"},\"LogServices\":{\"@odata.id\":\"$MGR/LogServices\"},\"Links\":{\"ManagerForServers\":[{\"@odata.id\":\"$SYS\"}],\"ManagerForChassis\":[{\"@odata.id\":\"$CH\"}],\"ActiveSoftwareImage\":{\"@odata.id\":\"$R/UpdateService/FirmwareInventory/bmc_active\"}}}" ;;
     $MGR/EthernetInterfaces) only GET; collection "$path" EthernetInterfaceCollection.EthernetInterfaceCollection 'Ethernet Network Interface Collection' "$path/eth0" ;;
     $MGR/EthernetInterfaces/eth0)
         only GET PATCH
@@ -685,10 +796,29 @@ case "$path" in
 $line
 EOF_SENSOR
         json "{\"@odata.id\":\"$path\",\"@odata.type\":\"#Sensor.v1_2_0.Sensor\",\"Id\":\"$sid2\",\"Name\":\"$sn\",\"Description\":\"Modelled by winlab from the server's load, not measured\",\"Reading\":$sr,\"ReadingUnits\":\"$su2\",\"ReadingType\":\"$sty\",\"Status\":{\"State\":\"Enabled\",\"Health\":\"OK\"}}" ;;
-    $R/UpdateService) only GET
-        json "{\"@odata.id\":\"$path\",\"@odata.type\":\"#UpdateService.v1_11_1.UpdateService\",\"Id\":\"UpdateService\",\"Name\":\"Update Service\",\"Description\":\"This BMC's firmware is winlab's, and takes no update\",\"ServiceEnabled\":false,\"HttpPushUriOptions\":{\"HttpPushUriApplyTime\":{\"ApplyTime\":\"OnReset\"}},\"FirmwareInventory\":{\"@odata.id\":\"$path/FirmwareInventory\"}}" ;;
-    $R/UpdateService/FirmwareInventory) only GET; collection "$path" SoftwareInventoryCollection.SoftwareInventoryCollection 'Software Inventory Collection' "$path/bmc_active" ;;
-    $R/UpdateService/FirmwareInventory/bmc_active) only GET
-        json "{\"@odata.id\":\"$path\",\"@odata.type\":\"#SoftwareInventory.v1_1_0.SoftwareInventory\",\"Id\":\"bmc_active\",\"Name\":\"Software Inventory\",\"Description\":\"BMC image\",\"Version\":\"winlab-bmc\",\"Updateable\":false,\"RelatedItem\":[{\"@odata.id\":\"$MGR\"}],\"RelatedItem@odata.count\":1,\"Status\":{\"State\":\"Enabled\",\"Health\":\"OK\",\"HealthRollup\":\"OK\"}}" ;;
+    $R/UpdateService)
+        [ "$method" = POST ] && fw_update
+        only GET
+        json "{\"@odata.id\":\"$path\",\"@odata.type\":\"#UpdateService.v1_11_1.UpdateService\",\"Id\":\"UpdateService\",\"Name\":\"Update Service\",\"Description\":\"Takes a firmware package as the body of a POST to HttpPushUri; checks its MANIFEST, machine name and SHA-256\",\"ServiceEnabled\":true,\"HttpPushUri\":\"$path/update\",\"HttpPushUriOptions\":{\"HttpPushUriApplyTime\":{\"ApplyTime\":\"Immediate\"}},\"MaxImageSizeBytes\":$UPMAX,\"FirmwareInventory\":{\"@odata.id\":\"$path/FirmwareInventory\"}}" ;;
+    $R/UpdateService/update) only POST; fw_update ;;
+    $R/UpdateService/FirmwareInventory)
+        only GET
+        if [ -n "$fw_pend" ]; then
+            collection "$path" SoftwareInventoryCollection.SoftwareInventoryCollection 'Software Inventory Collection' "$path/bmc_active" "$path/bmc_backup" "$path/bios_active" "$path/bios_staged"
+        fi
+        collection "$path" SoftwareInventoryCollection.SoftwareInventoryCollection 'Software Inventory Collection' "$path/bmc_active" "$path/bmc_backup" "$path/bios_active" ;;
+    $R/UpdateService/FirmwareInventory/*)
+        only GET
+        fi_id=${path##*/}
+        case "$fi_id" in
+            bmc_active) inventory "$fi_id" "$fw_bmc" "$MGR" 'BMC image, active' Enabled ;;
+            bmc_backup) inventory "$fi_id" "$fw_bak" "$MGR" 'BMC image, backup' StandbySpare ;;
+            bios_active) inventory "$fi_id" "$fw_bios" "$SYS/Bios" "BIOS image, released $fw_bdate" Enabled "\"ReleaseDate\":\"$(printf '%s' "$fw_bdate" | awk -F/ '{print $3 "-" $1 "-" $2}')T00:00:00+00:00\"," ;;
+            bios_staged) [ -n "$fw_pend" ] || missing
+                inventory "$fi_id" "$fw_pend" "$SYS/Bios" 'BIOS image, staged: written at the next power-on from off' StandbyOffline ;;
+            *) missing ;;
+        esac ;;
+    $SYS/Bios) only GET
+        json "{\"@odata.id\":\"$path\",\"@odata.type\":\"#Bios.v1_2_0.Bios\",\"Id\":\"BIOS\",\"Name\":\"BIOS Configuration\",\"Description\":\"The server's UEFI firmware\",\"Links\":{\"ActiveSoftwareImage\":{\"@odata.id\":\"$R/UpdateService/FirmwareInventory/bios_active\"},\"SoftwareImages\":[{\"@odata.id\":\"$R/UpdateService/FirmwareInventory/bios_active\"}]}}" ;;
 esac
 missing

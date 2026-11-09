@@ -55,3 +55,9 @@ q = "Which cmdlet lists the rules of one group?"
 answer = "Get-NetFirewallRule -DisplayGroup"
 wrong = ["Get-NetFirewallProfile", "Get-NetTCPConnection", "Get-NetFirewallSetting"]
 why = "Then Enable-NetFirewallRule with the same group."
+
+[[quiz]]
+q = "What does Windows Firewall do with inbound traffic no rule allows?"
+answer = "Blocks it: that is the default inbound action"
+wrong = ["Allows it if the service listens", "Asks the signed-in user", "Logs it and lets it through"]
+why = "A disabled allow rule is as good as no rule, so RDP times out with no block rule present."

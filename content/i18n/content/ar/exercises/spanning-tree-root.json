@@ -1,0 +1,19 @@
+{
+ "A loop of switches, with the root bridge where it belongs": "حلقة من المحوّلات، مع الجسر الجذر في مكانه الصحيح",
+ "Three switches cabled in a ring are a loop. Spanning tree keeps the network\nalive by blocking one cable, but which one it blocks depends on which switch\nis the root bridge, and left alone the root is whichever switch has the\nlowest address: an accident. Build the ring under corp's switch, make the\nswitch the router is cabled to the root on purpose, and choose its backup.\nThe checks read the router's own kernel bridges, where the switches' spanning\ntree runs.": "ثلاثة محوّلات موصولة على شكل حلقة تشكّل حلقة تكرار. يُبقي Spanning tree الشبكة\nحية بحجب كابل واحد، لكن الكابل الذي يحجبه يعتمد على أي محوّل\nهو الجسر الجذر، وإذا تُرك الأمر فالجذر هو المحوّل صاحب\nأدنى عنوان: محض صدفة. ابنِ الحلقة تحت محوّل corp، واجعل\nالمحوّل الموصول بالموجّه هو الجذر عن قصد، واختر له بديلاً.\nتقرأ الفحوصات جسور النواة في الموجّه نفسه، حيث يعمل spanning\ntree الخاص بالمحوّلات.",
+ "On the Workbench add two switches and cable each one's uplink (Gi0/1) into the switch corp is on": "في طاولة الشبكة أضف محوّلين وصِل الوصلة الصاعدة (Gi0/1) لكل منهما بالمحوّل الذي يوجد عليه corp",
+ "Drag a free gigabit port of one new switch onto the other: a spare cable, and a loop": "اسحب منفذ gigabit حراً من أحد المحوّلين الجديدين إلى الآخر: كابل احتياطي، وحلقة",
+ "On the console of the switch cabled to the router: spanning-tree vlan 1 priority 4096 (or spanning-tree vlan 1 root primary)": "على وحدة تحكم المحوّل الموصول بالموجّه: spanning-tree vlan 1 priority 4096 (أو spanning-tree vlan 1 root primary)",
+ "On one of the other two: spanning-tree vlan 1 root secondary": "على أحد المحوّلين الآخرين: spanning-tree vlan 1 root secondary",
+ "Leave spanning tree on everywhere, and check with show spanning-tree that one port blocks": "اترك spanning tree مفعّلاً في كل مكان، وتحقق باستخدام show spanning-tree أن منفذاً واحداً محجوب",
+ "the ring is there and spanning tree blocks one port of it": "الحلقة موجودة وspanning tree يحجب أحد منافذها",
+ "Three switches, two uplinks into the top one and a spare cable between the two below: drag a free Gi0/2-4 port of one onto the other. With spanning tree on, one port of the ring blocks (B on the canvas).": "ثلاثة محوّلات، ووصلتان صاعدتان إلى المحوّل العلوي وكابل احتياطي بين المحوّلين السفليين: اسحب منفذ Gi0/2-4 حراً من أحدهما إلى الآخر. مع تفعيل spanning tree، يُحجب منفذ واحد في الحلقة (B على اللوحة).",
+ "spanning tree runs on every switch bridge": "يعمل spanning tree على كل جسر محوّل",
+ "show spanning-tree on each switch: 'instance for vlan 1 does not exist' means it is off there; spanning-tree vlan 1 in configure terminal turns it back on.": "show spanning-tree على كل محوّل: 'instance for vlan 1 does not exist' تعني أنه متوقف هناك؛ ويعيد spanning-tree vlan 1 في configure terminal تشغيله.",
+ "the switch cabled to the router is the root bridge": "المحوّل الموصول بالموجّه هو الجسر الجذر",
+ "The lowest bridge ID wins: priority first, then the address. On the top switch's console: configure terminal, spanning-tree vlan 1 priority 4096.": "يفوز أدنى معرّف جسر: الأولوية أولاً ثم العنوان. على وحدة تحكم المحوّل العلوي: configure terminal، ثم spanning-tree vlan 1 priority 4096.",
+ "it is root by its priority, not by luck of its address": "هو الجذر بفضل أولويته، لا بحظ عنوانه",
+ "Every switch ships at priority 32768; a root chosen by the address changes the day a switch with a lower one is plugged in.": "تأتي كل المحوّلات بالأولوية 32768؛ والجذر المختار حسب العنوان يتغير في اليوم الذي يوصل فيه محوّل بعنوان أدنى.",
+ "a backup root is chosen": "تم اختيار جذر احتياطي",
+ "spanning-tree vlan 1 root secondary on one of the other switches sets 28672: it takes over if the root goes.": "spanning-tree vlan 1 root secondary على أحد المحوّلات الأخرى يضبط القيمة 28672: فيتولى المهمة إذا سقط الجذر."
+}

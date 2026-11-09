@@ -1,0 +1,26 @@
+[solution]
+exercise = "join-a-member"
+notes = "fs01 gets its fixed address from the lab plan (10.10.10.20) before its DNS points at dc01."
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+$if = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).ifIndex
+if (-not (Get-NetIPAddress -IPAddress 10.10.10.20 -ErrorAction SilentlyContinue)) {
+  New-NetIPAddress -InterfaceIndex $if -IPAddress 10.10.10.20 -PrefixLength 24 -DefaultGateway 10.10.10.1 | Out-Null
+}
+Set-DnsClientServerAddress -InterfaceIndex $if -ServerAddresses 10.10.10.10
+Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab | Out-Null
+'''
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+$pw = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force
+$cred = New-Object System.Management.Automation.PSCredential('CORP\Administrator', $pw)
+Add-Computer -DomainName corp.lab -Credential $cred -Force -Restart
+'''
+reboot = true
+wait = 60

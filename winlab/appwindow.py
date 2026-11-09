@@ -44,7 +44,8 @@ _MAC = (
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
 )
 _PATH_NAMES = ("msedge", "microsoft-edge", "microsoft-edge-stable", "google-chrome",
-               "google-chrome-stable", "chromium", "chromium-browser", "chrome")
+               "google-chrome-stable", "chromium", "chromium-browser", "chrome",
+               "brave-browser", "vivaldi-stable", "vivaldi")
 
 
 def find_browser(env: dict | None = None, platform: str | None = None,

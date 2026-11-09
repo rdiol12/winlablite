@@ -1,0 +1,60 @@
+{
+ "title": "Zonas DNS, reenviadores y limpieza (scavenging)",
+ "summary": "Lee las zonas que aloja un DC, envía las consultas externas a un sitio útil y evita que se acumulen registros obsoletos.",
+ "why": "Todo problema de Active Directory es un problema de DNS hasta que se demuestre lo contrario. El DC\naloja la zona del dominio y la zona _msdcs, donde los DC registran sus registros de\nservicio; los clientes registran sus propios registros A de forma dinámica y, si nadie limpia,\nuna zona se llena de direcciones de máquinas que se fueron hace años. Los reenviadores deciden\nqué pasa con los nombres que el DC no posee: sin uno, el DC pregunta a los servidores\nraíz, lo que en un laboratorio aislado significa que cada búsqueda externa agota el tiempo lentamente.\n\nEntiende los tres tipos de registro que importan para AD (A, SRV y el CNAME de _msdcs\npara la replicación), y los dos ajustes que mantienen honesta una zona: actualizaciones\ndinámicas solo seguras, y limpieza con intervalos razonables de no actualización y\nactualización.",
+ "concepts": [
+  "Zona integrada en AD: se almacena en el directorio y se replica con él; multimaestro, actualizaciones dinámicas seguras",
+  "Reenviador frente a reenviador condicional: todo lo que no es local, frente a un dominio concreto",
+  "Envejecimiento y limpieza: los registros llevan una marca de tiempo; la limpieza elimina los que superan el intervalo de no actualización más el de actualización",
+  "Registros SRV: prioridad, peso, puerto y destino; _ldap._tcp.dc._msdcs es el que piden los clientes"
+ ],
+ "steps": [
+  "En dc01, enumera las zonas: Get-DnsServerZone | Select-Object ZoneName, ZoneType, IsDsIntegrated, DynamicUpdate.",
+  "Lee los registros SRV: Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv | Format-Table HostName, RecordData -AutoSize.",
+  "Mira los reenviadores: Get-DnsServerForwarder (un bosque nuevo no tiene ninguno, o el DNS que tuviera el servidor antes de la promoción). Configura uno con Set-DnsServerForwarder -IPAddress 10.10.10.1 y observa cómo una búsqueda de un nombre externo agota el tiempo, ya que el laboratorio no tiene internet.",
+  "Añade un reenviador condicional para un dominio asociado: Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99 y míralo en Get-DnsServerZone.",
+  "Activa el envejecimiento para corp.lab: Set-DnsServerZoneAging -Name corp.lab -Aging $true; léelo con Get-DnsServerZoneAging -Name corp.lab, y el intervalo de limpieza de todo el servidor con Get-DnsServerScavenging.",
+  "Crea un registro estático para la intranet: Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; registra uno dinámico (ipconfig /registerdns en fs01) y compara su propiedad Timestamp."
+ ],
+ "pitfalls": [
+  "Activar la limpieza con intervalos cortos elimina los registros estáticos de servidores que nunca vuelven a registrarse; marca como estáticos los registros importantes o usa intervalos largos.",
+  "Un DC que apunta a un resolutor público como DNS principal no podrá encontrarse a sí mismo tras un reinicio; la propia dirección del DC va primero."
+ ],
+ "verify": [
+  "zonas alojadas aquí",
+  "reenviadores",
+  "estado de la limpieza"
+ ],
+ "quiz": [
+  {
+   "q": "¿Cuál es la diferencia entre un reenviador y un reenviador condicional?",
+   "answer": "Un reenviador gestiona todo lo que no es local; un reenviador condicional gestiona un dominio concreto",
+   "wrong": [
+    "Son lo mismo",
+    "Un reenviador condicional solo funciona con zonas inversas",
+    "Un reenviador solo funciona dentro de AD"
+   ],
+   "why": "Los reenviadores condicionales envían las consultas de un dominio a servidores concretos."
+  },
+  {
+   "q": "¿Dónde se almacena una zona integrada en AD?",
+   "answer": "En el directorio, replicada con él",
+   "wrong": [
+    "Solo en un archivo de texto en System32\\dns",
+    "En el servidor DHCP",
+    "En el registro de cada cliente"
+   ],
+   "why": "Eso la hace multimaestro con actualizaciones dinámicas seguras."
+  },
+  {
+   "q": "¿Qué riesgo conllevan unos intervalos de limpieza agresivos?",
+   "answer": "Se eliminan los registros estáticos de servidores que nunca vuelven a registrarse",
+   "wrong": [
+    "Las zonas dejan de replicarse",
+    "Los clientes no pueden registrarse en absoluto",
+    "El DC se degrada a sí mismo"
+   ],
+   "why": "Marca como estáticos los registros importantes o mantén intervalos largos."
+  }
+ ]
+}

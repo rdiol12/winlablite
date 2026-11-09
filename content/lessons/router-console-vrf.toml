@@ -79,3 +79,9 @@ q = "Why can a guest in a VRF not reach the office, without any access list?"
 answer = "The VRF's routing table has no route to the office's network"
 wrong = ["The VRF drops all traffic by default", "The router blocks traffic between VLANs", "The guest's gateway is a different router"]
 why = "Each VRF routes only with the networks in its own table."
+
+[[quiz]]
+q = "You put an interface into VRF GUEST and it seems dead. What is the usual reason?"
+answer = "vrf forwarding removed its IP address: type ip address again"
+wrong = ["The VRF needs an rd before it forwards", "Interfaces in a VRF must be shut and no shut twice", "OSPF must be restarted for the VRF"]
+why = "IOS removes the address when an interface changes routing table; it belongs to the VRF only once typed again."

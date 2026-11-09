@@ -21,6 +21,14 @@ console setting, a disc, a change made outside the workbench).
 The lab file before and after each change is kept by its hash beside the
 history (``history/<hash>.toml``), so a long run of moves costs one copy per
 distinct design.
+
+This is the workbench's undo trail, not a configuration backup. A console
+setting appears here as one line of who changed what, so the bench can tell
+what it may undo; keeping the devices' configurations, their versions and
+the diffs between them is the job of the open-source tool the lab gives the
+student for it: in a lab with a Network operations server, Oxidized, which
+logs in to the router and the switches over SSH (winlab/netops.py,
+winlab/iosssh.py) and keeps each configuration in git.
 """
 
 from __future__ import annotations
@@ -54,7 +62,7 @@ WATCHED = PHYSICAL | {"node-set", "nic-set"}  # outside the workbench, recorded 
 HIDDEN_KEYS = ("password", "key", "psk", "secret")
 
 KINDS = {"wb-add": "add", "wb-rm": "remove", "wb-move": "move", "wb-cable": "cable",
-         "wb-unplug": "unplug", "wb-parts": "parts", "wb-media": "media", "wb-burn": "media",
+         "wb-unplug": "unplug", "wb-parts": "parts", "wb-hw": "parts", "wb-media": "media", "wb-burn": "media",
          "wb-wifi": "wifi", "wb-ap": "wifi", "wb-ap-read": "wifi", "wb-wan": "wan", "wb-cli": "console",
          "wb-switch": "switch", "node-set": "parts", "nic-set": "cable"}
 
@@ -343,12 +351,16 @@ def _apply(dash, text: str) -> str:
         raise HistoryError(f"that version of the network does not load: {exc}") from None
     lab.password_in_toml, lab.admin_password = cur.password_in_toml, cur.admin_password
     lab.source_path = cur.source_path
+    had = set(cur.nodes)
     dash.lab = lab
     try:
         workbench._save(dash)
     except editor.EditError as exc:
         dash.reload()
         raise HistoryError(str(exc)) from None
+    from . import mylabs  # a machine taken off the bench and put back: its disks too
+    for nid in set(dash.lab.nodes) - had:
+        mylabs.unpark_machine(dash.lab.name, nid)
     cons = dash.__dict__.get("dev_consoles", {})
     for key in [k for k in cons if k != "router" and k.removeprefix("sw:") not in dash.lab.networks]:
         cons.pop(key, None)

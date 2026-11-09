@@ -1,0 +1,68 @@
+{
+ "title": "EtherChannel: שני כבלים בין מתגים כקישור אחד, עם LACP",
+ "summary": "אחד שני כבלים בין מתגים ל-port-channel עם LACP, קרא את show etherchannel summary, ושבור אותו בדרך הקלאסית: on מול active.",
+ "why": "כבל גיגה אחד בין מתג הליבה למתג קומה הוא גיגה אחד לכל הקומה, וכבל אחד שאפשר לאבד.\nכבל שני נראה כמו הפתרון, אבל שני כבלים בין שני מתגים הם לולאה, ו-spanning tree חוסם\nאחד מהם: שילמת על שניים ואתה משתמש באחד.\n\nEtherChannel (השם של Cisco; התקן הוא IEEE 802.3ad, היום 802.1AX, צבירת קישורים) מאחד\nאת הכבלים לקישור לוגי אחד, port-channel. spanning tree רואה פורט אחד, אז שום דבר לא\nנחסם; כל שיחה עוברת דרך חבר אחד שנבחר לפי hash של הכתובות שלה, כך שרוחב הפס מצטבר על\nפני שיחות רבות; וכבל שנשלף לוקח איתו רק את החלק שלו.\n\nשני הקצוות חייבים להסכים להתאחד. LACP (התקן) מנהל משא ומתן: פורט active שואל, פורט\npassive רק עונה. mode on מאחד בלי לשאול כלום, ובדיוק בגלל זה הוא מסוכן: on בקצה אחד\nו-LACP (או כלום) בקצה השני הוא תצורה שגויה ש-Catalyst תופס ומעביר ל-err-disable. PAgP\n(desirable ו-auto) הוא הפרוטוקול הישן של Cisco, ל-Cisco בלבד.\n\nבמעבדה הזו הכבלים של המתגים הם זוגות veth בין גשרי kernel בנתב. ערוץ שנוצר הוא bond\nאמיתי של Linux בכל צד (802.3ad עבור LACP, balance-xor עבור on), כך שה-LACP של ה-kernel\nרץ ביניהם באמת ו-spanning tree רואה פורט אחד. ל-Linux אין PAgP: winlab מיישם את כללי\nPAgP כדי להחליט אם ערוץ נוצר, ואז האיחוד מריץ LACP על הכבל; הקונסולה אומרת זאת.",
+ "concepts": [
+  "port-channel הוא קישור לוגי אחד שמורכב מעד שמונה פורטים חברים; spanning tree, טבלת ה-MAC והגדרות ה-trunk רואים את ה-port-channel, לא את החברים",
+  "מצבים: active (LACP, שואל), passive (LACP, רק עונה), on (בלי שום פרוטוקול), desirable ו-auto (PAgP, של Cisco)",
+  "מה מתאחד: active עם active או passive; on עם on; desirable עם desirable או auto. passive עם passive, ו-auto עם auto, אף פעם לא: אף אחד לא שואל",
+  "איזון העומס הוא לפי שיחה, לא לפי מסגרת: hash של כתובות MAC או IP (port-channel load-balance) בוחר את החבר, כך שהעתקת קובץ אחת אף פעם לא מהירה יותר מכבל אחד",
+  "החברים חייבים להתאים: מהירות, duplex, trunk או access, VLANs מותרים ו-native. הגדר אותם תחת interface port-channel והחברים יורשים את זה",
+  "הגנה מפני תצורה שגויה של EtherChannel: מתג עם mode on ששומע spanning tree מכמה פורטים בקצה השני מעביר את ה-port-channel שלו ל-err-disable (channel-misconfig)",
+  "דגלים ב-show etherchannel summary: SU בשימוש, SD למטה; חברים P מאוחד, I עצמאי, s מושעה, D למטה"
+ ],
+ "steps": [
+  "פתח את שולחן רשת. המתג של corp הוא זה שהנתב מחובר אליו בכבל. הוסף מתג מהמדף וגרור את ה-uplink שלו (Gi0/1) אל המתג של corp: זה כבל אחד. אחר כך גרור פורט גיגה פנוי של המתג החדש שוב אל המתג של corp: כבל שני בין אותם שני מתגים (Gi0/2 במתג החדש, Gi0/3 בזה של corp).",
+  "הסתכל קודם על הלולאה. לחץ פעמיים על המתג החדש, enable, show spanning-tree: אחד משני הכבלים חסום (Altn BLK). שני כבלים, אחד בשימוש. show cdp neighbors מראה איזה פורט מקומי הולך לאיזה פורט בקצה השני.",
+  "אחד את הקצה של corp. במתג של corp: enable, configure terminal, interface range gi0/2 - 3, channel-group 1 mode active. המתג אומר Creating a port-channel interface Port-channel 1. אחר כך show etherchannel summary: Po1(SD) עם החברים שלו (I), עצמאיים, כי הקצה השני עדיין לא מדבר LACP.",
+  "אחד את הקצה השני: במתג החדש, interface range gi0/1 - 2, channel-group 1 mode passive. פורט passive רק עונה, והפורטים ה-active של corp שואלים, כך שהערוץ נוצר: %LINK-3-UPDOWN: Interface Port-channel1, changed state to up. show etherchannel summary בשניהם: Po1(SU), חברים (P).",
+  "קרא את זה מכל צד: show interfaces port-channel 1 (BW 2000000 Kbit/sec, Members in this channel), show lacp neighbor (ה-system ID של השותף הוא הכתובת של המתג השני; A או P אומר אם הוא שואל), show etherchannel detail, ו-show spanning-tree: שורה אחת, Po1, forwarding, עלות 3 במקום 4. שום דבר כבר לא חסום.",
+  "הגדר את האיחוד, לא את החברים: interface port-channel 1, description to the floor switch, switchport trunk allowed vlan 1,10. show running-config: התיאור נמצא על Port-channel1, והגדרת ה-trunk נחתה על שני החברים, כי IOS מוריד אותה אליהם.",
+  "בחר את ה-hash: port-channel load-balance src-dst-ip בשני המתגים (show etherchannel load-balance). ברירת המחדל של ה-2960, src-mac, שמה את כל מה שמגיע ממכונה אחת (הנתב, למשל) על חבר אחד; כתובות IP של מקור ויעד מפזרות את השיחות טוב יותר.",
+  "שבור את זה בדרך הקלאסית. במתג החדש: interface range gi0/1 - 2, no channel-group, channel-group 1 mode on. on מאחד בלי לשאול, אבל הקצה של corp הוא LACP: המתג החדש רושם %PM-4-ERR_DISABLE: channel-misconfig (STP) error detected on Po1 וה-port-channel שלו עובר ל-err-disabled. show etherchannel summary מציג Po1(SD) עם חברים (D), ו-show spanning-tree מציג אותם כ-BKN*. מתג הקומה מנותק.",
+  "תקן את זה כמו שמתג אמיתי צריך: גרום למצבים להסכים (no channel-group, ואז channel-group 1 mode active בשני הפורטים), ואז כבה והדלק את האיחוד כדי לנקות את ה-err-disable: interface port-channel 1, shutdown, no shutdown. שוב Po1(SU).",
+  "נסה את הזוגות שאף פעם לא מתאחדים: passive בשני הקצוות (אף אחד לא שואל: חברים (I), ו-spanning tree שוב חוסם כבל אחד), ו-desirable בקצה אחד מול active בשני (PAgP מול LACP: (I)). החזר את שני הקצוות ל-active, ו-copy running-config startup-config בשני המתגים."
+ ],
+ "pitfalls": [
+  "mode on בקצה אחד ו-active, passive או כלום בשני: הצד של on עובר ל-err-disable (channel-misconfig). תקן את המצבים, ואז shutdown / no shutdown על ה-port-channel.",
+  "passive עם passive (או auto עם auto) אף פעם לא נוצר: קצה אחד חייב לשאול.",
+  "שינוי ידני של הגדרות ה-trunk של חבר כך שישתנו משל האחרים משעה אותו (s): הגדר את interface port-channel במקום.",
+  "לצפות שהעתקה גדולה אחת תהיה מהירה פי שניים: שיחה תמיד משתמשת בחבר אחד; האיחוד עוזר להרבה שיחות, לא לאחת.",
+  "במעבדה הזו desirable ו-auto של PAgP פועלים לפי הכללים של PAgP, אבל ה-bond בנתב מריץ LACP על הכבל, כי ל-Linux אין PAgP. 2960 אמיתי מדבר PAgP בעצמו."
+ ],
+ "verify": [
+  "ה-bonds בנתב: המצב, ה-hash, וה-aggregator והשותף של כל חבר"
+ ],
+ "quiz": [
+  {
+   "q": "במתג אחד יש channel-group 1 mode passive על שני פורטים, וגם בשני mode passive. מה קורה?",
+   "answer": "שום ערוץ לא נוצר: שניהם רק עונים, כך שאף אחד לא מתחיל LACP והפורטים נשארים עצמאיים (I)",
+   "wrong": [
+    "הערוץ נוצר עם LACP",
+    "שני הפורטים עוברים ל-err-disable",
+    "הערוץ נוצר בלי פרוטוקול"
+   ],
+   "why": "לפחות קצה אחד חייב להיות active (LACP) או desirable (PAgP) כדי לשאול."
+  },
+  {
+   "q": "mode on בקצה אחד, mode active בשני. מה Catalyst עושה?",
+   "answer": "הצד של on מעביר את ה-port-channel שלו ל-err-disable: channel-misconfig, שזוהה על ידי spanning tree",
+   "wrong": [
+    "הם מנהלים משא ומתן כלפי מטה ל-on",
+    "הצד של active עובר ל-on",
+    "כלום: on תמיד עובד"
+   ],
+   "why": "on לא שולח LACP בכלל; הקצה של active אף פעם לא מתאחד ומריץ כל כבל לבד, והקצה של on שומע spanning tree משני פורטים, דבר שההגנה מפני תצורה שגויה תופסת."
+  },
+  {
+   "q": "port-channel של שני כבלי גיגה נושא העתקת קובץ גדולה אחת בין שני שרתים. כמה מהר היא יכולה ללכת?",
+   "answer": "גיגה אחד: שיחה ממופה ב-hash לחבר אחד",
+   "wrong": [
+    "שני גיגה",
+    "חצי גיגה על כל כבל",
+    "זה תלוי ב-spanning tree"
+   ],
+   "why": "איזון העומס הוא לפי זרימה, לפי hash של כתובות; הרבה זרימות מתפזרות, זרימה אחת לא."
+  }
+ ]
+}

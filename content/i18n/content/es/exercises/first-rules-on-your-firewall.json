@@ -1,0 +1,20 @@
+{
+ "The firewall you installed routes the office out and blocks port 8080": "El firewall que instalaste enruta la salida de la oficina y bloquea el puerto 8080",
+ "fw01 is the OPNsense or pfSense CE firewall you installed by hand. winlab runs\nnothing inside it, so the grade is read from both sides of it: pc01 on the LAN\nmust lease its address from the firewall and reach the Internet host only\nthrough it (the LAN switch has no other way out), inet01 must see pc01 arrive\nfrom the firewall's WAN address, the GUI must stay closed to the Internet, and\nyour first rule must block TCP 8080, a port inet01 really answers on.": "fw01 es el firewall OPNsense o pfSense CE que instalaste a mano. winlab no ejecuta nada dentro de él, así que la nota se obtiene desde ambos lados: pc01 en la LAN debe obtener su dirección del firewall y llegar al host de Internet solo a través de él (el switch de la LAN no tiene otra salida), inet01 debe ver llegar a pc01 desde la dirección WAN del firewall, la GUI debe permanecer cerrada a Internet y tu primera regla debe bloquear TCP 8080, un puerto en el que inet01 responde de verdad.",
+ "Install the firewall on fw01, WAN on em0 (the ISP), LAN on em1": "Instala el firewall en fw01, WAN en em0 (el ISP), LAN en em1",
+ "Let pc01 lease 192.168.1.x from the firewall and finish the setup wizard from its browser": "Deja que pc01 obtenga una 192.168.1.x del firewall y termina el asistente de configuración desde su navegador",
+ "Open http://198.51.100.10/ from pc01 through the firewall": "Abre http://198.51.100.10/ desde pc01 a través del firewall",
+ "On LAN, block TCP to port 8080 above the default allow rule; port 80 keeps working": "En LAN, bloquea TCP al puerto 8080 por encima de la regla de permiso predeterminada; el puerto 80 sigue funcionando",
+ "pc01 leased its address from the firewall on the LAN": "pc01 obtuvo su dirección del firewall en la LAN",
+ "The firewall serves DHCP on LAN once em1 is assigned as LAN; ipconfig /renew on pc01, and check the cable on fw01's port 2": "El firewall sirve DHCP en LAN cuando em1 se asigna como LAN; ipconfig /renew en pc01, y comprueba el cable en el puerto 2 de fw01",
+ "pc01 reaches the Internet host on port 80, through the firewall": "pc01 llega al host de Internet en el puerto 80, a través del firewall",
+ "The LAN switch has no other way out: WAN must be em0 with a lease from the ISP segment, and LAN's default allow rule must still be there": "El switch de la LAN no tiene otra salida: WAN debe ser em0 con una concesión del segmento del ISP, y la regla de permiso predeterminada de LAN debe seguir ahí",
+ "the Internet host saw pc01 arrive from the firewall's WAN address (NAT)": "el host de Internet vio llegar a pc01 desde la dirección WAN del firewall (NAT)",
+ "Open http://198.51.100.10/ from pc01 once; with outbound NAT on (automatic is the default) the source is the WAN lease": "Abre http://198.51.100.10/ desde pc01 una vez; con el NAT saliente activado (el automático es el predeterminado) el origen es la concesión WAN",
+ "the firewall's web GUI is closed to the Internet": "la GUI web del firewall está cerrada a Internet",
+ "Nothing may pass in on WAN to the GUI: remove any WAN rule that allows 443, and leave the GUI listening on LAN": "Nada puede entrar por WAN a la GUI: elimina cualquier regla de WAN que permita 443 y deja la GUI escuchando en LAN",
+ "TCP 8080 to the Internet host is blocked from the LAN": "TCP 8080 hacia el host de Internet está bloqueado desde la LAN",
+ "Firewall, Rules, LAN: Block, TCP, source LAN net, destination port 8080, above the default allow rule; then Apply": "Firewall, Rules, LAN: Block, TCP, origen LAN net, puerto de destino 8080, por encima de la regla de permiso predeterminada; después Apply",
+ "inet01 still answers on 8080, so the block is the firewall's": "inet01 sigue respondiendo en 8080, así que el bloqueo es del firewall",
+ "inet01's test service starts with the lab; power it off and on from the Workbench if it is not listening": "El servicio de prueba de inet01 arranca con el laboratorio; apágalo y enciéndelo desde el Banco de red si no está escuchando"
+}

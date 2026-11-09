@@ -1,0 +1,16 @@
+{
+ "System requirements": "Requisitos del sistema",
+ "Start here": "Empieza aquí",
+ "requirements": "requisitos",
+ "ram": "ram",
+ "memory": "memoria",
+ "disk": "disco",
+ "cpu": "cpu",
+ "cores": "núcleos",
+ "windows 10": "windows 10",
+ "windows 11": "windows 11",
+ "hardware": "hardware",
+ "pc": "pc",
+ "What this PC needs to run a lab, and how many machines fit.": "Lo que necesita este PC para ejecutar un laboratorio, y cuántas máquinas caben.",
+ "- A 64-bit PC with virtualization turned on in its firmware (Intel VT-x or AMD-V).\n- **8 GB of memory** at least. 16 GB runs every lesson; 24 GB runs the biggest labs as they are defined.\n- About **40 GB of free disk** for a Windows Server base and a Windows client base (about 25 GB with the Server base alone). Each machine you boot adds 2 to 6 GB.\n- Windows 10 or 11, any edition, Home included. winlab uses the Windows Hypervisor Platform, an optional feature on all of them.\n- 4 processor cores or more for a lab with several machines.\n\n| Memory | What runs |\n|---|---|\n| 8 GB | every one- and two-machine lesson, and on a quiet PC the whole ad-ds-basics lab |\n| 16 GB | every lesson, and the enterprise-multisite lab trimmed for that run |\n| 24 GB | enterprise-multisite and every-role as defined |\n\nSetup checks all of this for you. From a command prompt, `winlab doctor` prints the same checks with more detail.": "- Un PC de 64 bits con la virtualización activada en su firmware (Intel VT-x o AMD-V).\n- **8 GB de memoria** como mínimo. Con 16 GB se ejecutan todas las lecciones; con 24 GB, los laboratorios más grandes tal como están definidos.\n- Unos **40 GB de disco libre** para una base de Windows Server y una base de cliente Windows (unos 25 GB solo con la base de Server). Cada máquina que arrancas añade de 2 a 6 GB.\n- Windows 10 u 11, cualquier edición, incluida Home. winlab usa Windows Hypervisor Platform, una característica opcional en todas ellas.\n- 4 núcleos de procesador o más para un laboratorio con varias máquinas.\n\n| Memoria | Qué se ejecuta |\n|---|---|\n| 8 GB | todas las lecciones de una y dos máquinas y, en un PC sin otra carga, todo el laboratorio ad-ds-basics |\n| 16 GB | todas las lecciones, y el laboratorio enterprise-multisite recortado para esa ejecución |\n| 24 GB | enterprise-multisite y every-role tal como están definidos |\n\nInstalación comprueba todo esto por ti. Desde un símbolo del sistema, `winlab doctor` muestra las mismas comprobaciones con más detalle."
+}

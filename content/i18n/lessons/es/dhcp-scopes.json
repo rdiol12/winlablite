@@ -1,0 +1,61 @@
+{
+ "title": "Ámbitos, opciones y reservas de DHCP",
+ "summary": "Reparte direcciones, puertas de enlace y DNS desde un solo lugar, y fija las máquinas que no deben moverse.",
+ "why": "DHCP es el servicio que nadie nota hasta que se detiene: cada PC, teléfono e impresora\nobtiene de él su dirección, su puerta de enlace y sus servidores DNS. En una red Windows el\ndetalle importante es la opción 006 (servidores DNS): un cliente que recibe un resolutor\npúblico no puede encontrar el dominio. En AD el servidor además debe estar autorizado, para que un\nservidor DHCP no autorizado que alguien conecte sea rechazado por los miembros del dominio.\n\nLas reservas son la forma de dar a una impresora o a un servidor una dirección fija sin\ntocar el dispositivo: la concesión queda ligada a su dirección MAC, y la dirección se puede\ncambiar más adelante de forma centralizada. Las exclusiones mantienen el intervalo estático fuera del grupo.",
+ "concepts": [
+  "Ámbito: el grupo de direcciones de una subred, la duración de la concesión y las opciones; un ámbito por cada subred que atiende el servidor",
+  "Opciones 003 y 006: enrutador y servidores DNS, las dos que lo rompen todo cuando son incorrectas",
+  "Autorización: un servidor DHCP en un dominio debe estar autorizado en AD antes de atender",
+  "Reserva frente a exclusión: una reserva es una concesión fija para una MAC; una exclusión es un intervalo que nunca se ofrece",
+  "DORA: Discover, Offer, Request, Acknowledge, las cuatro difusiones de una concesión"
+ ],
+ "steps": [
+  "En dc01, enumera los ámbitos: Get-DhcpServerv4Scope, y las opciones de uno: Get-DhcpServerv4OptionValue -ScopeId 10.10.10.0.",
+  "Confirma que el servidor está autorizado: Get-DhcpServerInDC.",
+  "Observa cómo se produce una concesión: en pc01 ejecuta ipconfig /release e ipconfig /renew; en dc01, Get-DhcpServerv4Lease -ScopeId 10.10.10.0.",
+  "Reserva la dirección de pc01: Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <MAC de pc01> -Name pc01, y luego renueva en pc01.",
+  "Reserva la parte alta del ámbito para impresoras configuradas a mano: Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (una exclusión debe estar dentro del intervalo del ámbito).",
+  "Lee el registro del servidor DHCP en C:\\Windows\\System32\\dhcp y encuentra la concesión que acabas de observar."
+ ],
+ "pitfalls": [
+  "Un ámbito que entrega la dirección del DC como servidor DNS pero un resolutor público como segunda entrada sigue rompiendo los inicios de sesión del dominio de forma intermitente.",
+  "Dos servidores DHCP en un mismo segmento sin conmutación por error significan direcciones duplicadas; usa la conmutación por error de DHCP o divide los ámbitos de forma deliberada."
+ ],
+ "verify": [
+  "ámbitos",
+  "opciones de DNS y enrutador",
+  "autorizado en AD"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué dos opciones de DHCP lo rompen todo cuando son incorrectas?",
+   "answer": "003 (enrutador) y 006 (servidores DNS)",
+   "wrong": [
+    "015 y 042",
+    "051 y 066",
+    "001 y 002"
+   ],
+   "why": "Una puerta de enlace o un servidor DNS incorrectos impiden que los clientes lleguen a nada."
+  },
+  {
+   "q": "¿Qué debe ocurrir antes de que un servidor DHCP de dominio entregue concesiones?",
+   "answer": "Debe estar autorizado en Active Directory",
+   "wrong": [
+    "Debe ser un controlador de dominio",
+    "Debe tener una dirección pública",
+    "Debe ejecutar WINS"
+   ],
+   "why": "Los servidores DHCP de Windows no autorizados en un dominio dejan de atender."
+  },
+  {
+   "q": "¿Reserva frente a exclusión?",
+   "answer": "Una reserva es una concesión fija para una MAC; una exclusión es un intervalo que nunca se ofrece",
+   "wrong": [
+    "Son lo mismo",
+    "Una exclusión es una concesión fija; una reserva bloquea un intervalo",
+    "Las reservas solo funcionan en ámbitos retransmitidos"
+   ],
+   "why": "Usa reservas para impresoras y dispositivos similares."
+  }
+ ]
+}

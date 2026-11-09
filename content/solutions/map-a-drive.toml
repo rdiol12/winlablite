@@ -1,0 +1,44 @@
+[solution]
+exercise = "map-a-drive"
+notes = "GPMC's Drive Maps editor writes Drives.xml into the GPO's SYSVOL folder and registers the Drive Maps extension; the solution writes the same file and attributes."
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+if (-not (Get-SmbShare -Name Company -ErrorAction SilentlyContinue)) {
+  $raw = Get-Disk | Where-Object PartitionStyle -eq 'RAW' | Select-Object -First 1
+  if ($raw) { $raw | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter D -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel Data -Confirm:$false | Out-Null }
+  New-Item -ItemType Directory -Force D:\Shares\Company | Out-Null
+  New-SmbShare -Name Company -Path D:\Shares\Company -FullAccess 'CORP\Domain Admins' -ChangeAccess 'CORP\Domain Users' | Out-Null
+}
+if (-not (Get-SmbShareAccess -Name Company | Where-Object { $_.AccessControlType -eq 'Allow' -and $_.AccountName -match 'Authenticated Users|Domain Users' })) {
+  Grant-SmbShareAccess -Name Company -AccountName 'CORP\Domain Users' -AccessRight Change -Force | Out-Null
+}
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+$g = Get-GPO -Name 'Map S Drive' -ErrorAction SilentlyContinue
+if (-not $g) { $g = New-GPO -Name 'Map S Drive' }
+$dir = "\\corp.lab\SYSVOL\corp.lab\Policies\{$($g.Id)}\User\Preferences\Drives"
+New-Item -ItemType Directory -Force $dir | Out-Null
+$uid = '{' + ([guid]::NewGuid().ToString().ToUpper()) + '}'
+$now = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+$xml = '<?xml version="1.0" encoding="utf-8"?>' +
+  '<Drives clsid="{8FDDCC1A-0C3C-43cd-A6B4-71A6DF20DA8C}">' +
+  '<Drive clsid="{935D1B74-9CB8-4e3c-9914-7DD559B7A417}" name="S:" status="S:" image="2" changed="' + $now + '" uid="' + $uid + '">' +
+  '<Properties action="U" thisDrive="NOCHANGE" allDrives="NOCHANGE" userName="" path="\\fs01\Company" label="" persistent="1" useLetter="1" letter="S"/>' +
+  '</Drive></Drives>'
+Set-Content -Path "$dir\Drives.xml" -Value $xml -Encoding UTF8
+$dn = "CN={$($g.Id)},CN=Policies,CN=System,DC=corp,DC=lab"
+$ad = Get-ADObject $dn -Properties versionNumber
+Set-ADObject $dn -Replace @{ gPCUserExtensionNames = '[{00000000-0000-0000-0000-000000000000}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}][{5794DAFD-BE60-433F-88A2-1A31939AC01F}{2EA1A81B-48E5-45E9-8BB7-A6E3AC170006}]'; versionNumber = ([int]$ad.versionNumber + 65536) }
+$ini = "\\corp.lab\SYSVOL\corp.lab\Policies\{$($g.Id)}\GPT.INI"
+Set-Content -Path $ini -Value "[General]`r`nVersion=$([int]$ad.versionNumber + 65536)" -Encoding ASCII
+if (-not ((Get-GPInheritance -Target 'OU=Sales,DC=corp,DC=lab').GpoLinks | Where-Object DisplayName -eq 'Map S Drive')) {
+  New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab' | Out-Null
+}
+'''

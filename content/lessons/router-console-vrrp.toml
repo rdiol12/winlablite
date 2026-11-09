@@ -21,9 +21,9 @@ Cisco has its own protocol for this, HSRP (the standby command), and the open
 standard is VRRP (RFC 3768 for version 2, RFC 5798 for version 3), which Cisco
 routers speak too. In this lab the second gateway is a real router: rtr-edge,
 Ubuntu with FRRouting's vrrpd, on the office LAN beside the lab router. Both speak
-VRRP version 2, the version IOS's vrrp command uses. HSRP is not here, and the
-console says why when you type standby: no Linux router speaks it, so the second
-gateway would have to be pretend.
+VRRP version 2, the version IOS's vrrp command uses. HSRP, Cisco's own, has a
+lesson of its own after this one (router-console-hsrp): no open-source router
+speaks it, so there both gateways run winlab's own HSRP speaker.
 
 How it looks underneath: on both routers the virtual address lives on a small
 interface of its own (a macvlan with the virtual MAC 00:00:5e:00:01:01). vrrpd
@@ -41,7 +41,7 @@ concepts = [
 ]
 steps = [
   "Start pc-office, rtr-edge and pc-edge. OSPF from the first lesson stays up: both routers already know both networks, so either can be the office's gateway. On pc-office, ip route shows its default gateway: 10.80.0.2, the lab router itself.",
-  "Try the command a Cisco engineer types first: on the router's console, configure terminal, interface g0/1/0, standby 1 ip 10.80.0.1. The console refuses with its reason. HSRP is Cisco's own; the protocol both routers here speak is VRRP.",
+  "A Cisco engineer often types standby first: that is HSRP, Cisco's own protocol, and the next lesson. Here both routers speak VRRP, the open standard, which FRRouting's vrrpd runs on both.",
   "The lab router's side: still in interface g0/1/0, vrrp 1 ip 10.80.0.1, then vrrp 1 priority 110, end. show vrrp brief: group 1, priority 110, and a few seconds later State Master. It is master because nobody else is in the group yet.",
   "rtr-edge's side, by hand. Switch vrrpd on: sudo sed -i 's/^vrrpd=no/vrrpd=yes/' /etc/frr/daemons, sudo systemctl restart frr. Make the virtual interface on eth1 (the office card) with the group's virtual MAC and address: sudo ip link add vrrp4-1 link eth1 addrgenmode random type macvlan mode bridge; sudo ip link set dev vrrp4-1 address 00:00:5e:00:01:01; sudo ip addr add 10.80.0.1/24 dev vrrp4-1; sudo ip link set dev vrrp4-1 up. Let only that interface answer ARP for the address: sudo sysctl -w net.ipv4.conf.eth1.arp_ignore=1.",
   "Then the group in FRRouting: sudo vtysh, configure terminal, interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory. Version 2 is what IOS speaks; FRRouting would use version 3 otherwise and the two routers would ignore each other. show vrrp in vtysh: rtr-edge is Backup (priority 100 against 110), and ip -d link show vrrp4-1 says protodown on: vrrpd holds the address down while it is backup.",
@@ -88,10 +88,10 @@ wrong = ["The master router's own MAC address", "ff:ff:ff:ff:ff:ff", "Each route
 why = "The virtual MAC moves with the master role, so the PC's ARP entry stays right after a failover."
 
 [[quiz]]
-q = "Why does the lab router refuse 'standby 1 ip 10.80.0.1'?"
-answer = "HSRP is Cisco's own protocol and the other gateway, a Linux router, cannot speak it"
-wrong = ["HSRP needs a licence", "The address is taken", "HSRP only works on switches"]
-why = "VRRP is the open standard both routers speak; HSRP and VRRP do not interoperate."
+q = "One gateway runs VRRP group 1 and the other HSRP group 1 for the same address. What happens?"
+answer = "They ignore each other: VRRP and HSRP are different protocols and do not interoperate"
+wrong = ["They elect one master between them", "HSRP wins because it is Cisco's", "VRRP wins because it is the standard"]
+why = "Each protocol only hears its own packets; both routers would answer for the address as if alone."
 
 [[quiz]]
 q = "Two VRRP routers both claim to be master. What is the likeliest cause?"

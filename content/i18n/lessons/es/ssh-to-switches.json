@@ -1,0 +1,68 @@
+{
+ "title": "SSH al switch: claves, usuarios locales y las líneas vty",
+ "summary": "Da al switch de corp una dirección de administración, una clave RSA y un administrador local, permite solo SSH en sus líneas vty y conéctate desde pc01 con ssh en lugar del cable de consola.",
+ "why": "El cable de consola es la forma de configurar un switch la primera vez; nadie va a la sala de comunicaciones para cada cambio posterior. Los switches se administran por la red, y telnet, la forma antigua, envía la contraseña y cada comando en texto claro para que cualquiera en la LAN los lea. SSH cifra la sesión y demuestra que el switch es el switch (su clave de host).\n\nEn IOS, SSH requiere cinco cosas: un hostname distinto del de fábrica y un ip domain-name (juntos dan nombre al par de claves), un par de claves RSA (crypto key generate rsa; su tamaño importa: SSH versión 2 necesita al menos 768 bits y los clientes actuales quieren 2048), un usuario local con un secreto (username), y las líneas vty (los terminales virtuales del switch, line vty 0 4) configuradas para usarlos: login local, transport input ssh. ip ssh version 2 desactiva el protocolo antiguo. Y el switch necesita una dirección en la que se le pueda alcanzar: interface vlan 1 e ip default-gateway.\n\nEn este laboratorio el servidor SSH del switch es Dropbear en el router, dentro de la propia dirección de administración del switch, y la sesión que abre es la misma consola en la que escribes con el cable. Con login local tu cliente ssh pide la contraseña, como con un switch real, y se comprueba contra la lista de usuarios propia del switch (el secreto del usuario, tal como lo escribiste en la consola).",
+ "concepts": [
+  "Telnet envía la contraseña en claro; SSH cifra toda la sesión y autentica al servidor con su clave de host",
+  "El par de claves se llama hostname.domain: crypto key generate rsa se niega hasta que ambos están definidos",
+  "Tamaño de clave: 768 bits es el mínimo de SSH versión 2, 2048 es lo que hay que usar; show ip ssh dice 1.99 (ambas versiones) hasta ip ssh version 2",
+  "line vty 0 4 son los cinco inicios de sesión por red; login local comprueba la lista de usuarios, transport input ssh rechaza telnet",
+  "username admin privilege 15 entra directamente en el modo privilegiado (#); un usuario de nivel 1 necesita el enable secret, y sin él una línea vty responde % No password set",
+  "La primera conexión te pide confirmar la huella de la clave de host; show ip ssh imprime la que debes comparar. Una clave cambiada más adelante es una advertencia para detenerse, no para seguir haciendo clic",
+  "Las claves viven con la configuración: generadas pero nunca escritas, desaparecen tras un reinicio"
+ ],
+ "steps": [
+  "Da una dirección al switch. En la consola del switch de corp (doble clic en él en el Banco de red, o el cable de consola): enable, configure terminal, interface vlan 1, ip address 10.10.10.2 255.255.255.0, no shutdown, exit, ip default-gateway 10.10.10.1. Desde pc01, ping 10.10.10.2 responde.",
+  "Intenta crear una clave enseguida: crypto key generate rsa modulus 2048. El switch se niega: % Please define a hostname other than Switch. hostname CORP-SW1, y de nuevo: % Please define a domain-name first. ip domain-name corp.lab.",
+  "Ahora la clave: crypto key generate rsa (sin el tamaño, pregunta: How many bits in the modulus [512]: responde 2048). The name for the keys will be: CORP-SW1.corp.lab, y %SSH-5-ENABLED: SSH 1.99 has been enabled. do show ip ssh, y do show crypto key mypubkey rsa para ver la mitad pública.",
+  "Desactiva la versión 1: ip ssh version 2. Luego un usuario y un secreto privilegiado: username admin privilege 15 secret seguido de una contraseña propia; y enable secret con otra (show running-config muestra ambas como hashes de tipo 9, nunca las palabras).",
+  "Las líneas vty: line vty 0 4, login local, transport input ssh, end. Luego copy running-config startup-config: el par de claves se guarda con ella, y uno sin guardar desaparece tras un reinicio.",
+  "Conéctate desde pc01: abre PowerShell y ejecuta ssh admin@10.10.10.2 (el cliente OpenSSH forma parte de Windows 11). La primera vez muestra la huella de la clave de host del switch: compárala con la que imprime show ip ssh y responde yes. Luego ssh pide admin@10.10.10.2's password:, y llegas a CORP-SW1#.",
+  "Es el mismo switch: show running-config | include hostname, y show ssh (tu sesión, versión 2.0). Haz un cambio por SSH (interface fa0/1, description pc01) y míralo también en la consola. exit termina la sesión.",
+  "Mira cómo muerden las reglas vty: en la consola, line vty 0 4, transport input telnet. ssh desde pc01 se cierra ahora al instante: la línea no acepta SSH. Vuelve a poner transport input ssh. Luego prueba username admin privilege 1 (mismo secreto): tu inicio de sesión SSH llega a CORP-SW1>, y enable sin un enable secret respondería % No password set.",
+  "Haz lo mismo en el router si quieres: ya tiene direcciones en todas las VLAN (aquí 10.10.10.1): hostname, ip domain-name, crypto key generate rsa modulus 2048, username, line vty 0 4 login local transport input ssh; luego ssh admin@10.10.10.1 desde pc01."
+ ],
+ "pitfalls": [
+  "crypto key generate rsa con los 512 bits predeterminados: SSH versión 2 necesita 768, y los clientes ssh actuales rechazan claves de menos de 1024. Usa 2048.",
+  "Olvidar copy running-config startup-config: tras un reinicio las claves han desaparecido y SSH vuelve a estar desactivado.",
+  "login en las líneas vty sin contraseña de línea: % Password required, but none set. login local quiere un username; sin él no entra nadie.",
+  "transport input all deja telnet activado: en un switch real cualquiera en la LAN puede leer una contraseña de telnet. Usa solo ssh.",
+  "Un Catalyst real con un IOS antiguo solo ofrece algoritmos antiguos de intercambio de claves y de cifrado, y un cliente ssh actual necesita -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa para hablar con él. El servidor SSH del laboratorio es más nuevo y no los necesita.",
+  "Este laboratorio no ejecuta ningún servidor telnet: transport input telnet se guarda y se muestra, pero solo escucha SSH."
+ ],
+ "verify": [
+  "los servidores SSH en el router: qué dispositivo, en qué dirección, y sus líneas vty"
+ ],
+ "quiz": [
+  {
+   "q": "crypto key generate rsa responde % Please define a domain-name first. ¿Por qué necesita uno el switch?",
+   "answer": "El par de claves se llama hostname.domain-name, así que ambos deben definirse primero",
+   "wrong": [
+    "SSH busca el switch en DNS",
+    "El controlador de dominio firma la clave",
+    "El nombre de dominio es la contraseña de SSH"
+   ],
+   "why": "IOS nombra el par de claves de uso general según el nombre completo del dispositivo."
+  },
+  {
+   "q": "¿Qué hacen login local y transport input ssh bajo line vty 0 4?",
+   "answer": "Los inicios de sesión por red piden un usuario de la lista de usuarios del switch, y solo SSH puede iniciar sesión",
+   "wrong": [
+    "La consola pide un usuario",
+    "Las claves SSH sustituyen a las contraseñas",
+    "Telnet se cifra"
+   ],
+   "why": "login local comprueba la lista local de usuarios; transport input dice qué protocolos aceptan las líneas vty."
+  },
+  {
+   "q": "Generaste la clave RSA e iniciaste sesión por SSH, luego reiniciaste el switch sin guardar. ¿Qué pasa?",
+   "answer": "SSH vuelve a estar desactivado: el par de claves nunca se escribió con la configuración",
+   "wrong": [
+    "Nada: las claves siempre se conservan",
+    "El switch crea una clave nueva al arrancar",
+    "SSH recurre a telnet"
+   ],
+   "why": "Las claves se guardan en NVRAM con la configuración; write memory (copy running-config startup-config) las conserva."
+  }
+ ]
+}

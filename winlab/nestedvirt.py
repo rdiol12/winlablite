@@ -78,7 +78,7 @@ CLIENT_WARN_MB = 4096
 # The Linux machines the setting is fitted to: the hand installs whose DVD
 # (or whose archive) carries QEMU/KVM and libvirt (not the Alpine standard
 # disc), and the ready-made Ubuntu appliance (the kvm pack).
-HAND_LINUX = ("rocky9", "rhel9", "rhel10", "debian13", "ubuntu24")
+HAND_LINUX = ("rocky9", "rhel9", "rhel10", "debian13", "ubuntu24", "proxmox-ve9")
 APPLIANCES = ("ubuntu",)
 SETTING = "Intel Virtualization Technology (VT-x)"
 # What the setting means on a Windows 11 PC, said plainly: VT-x is one of the
@@ -123,6 +123,12 @@ LINUX_HINTS = (
     + " to Enabled. Start it again: grep -c vmx /proc/cpuinfo counts the processors, /dev/kvm is back; "
     "start your VM and press " + CHECK + ".",
 )
+
+
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
 
 
 class NestedError(Exception):
@@ -447,7 +453,7 @@ def drill_hint(lab) -> dict:
     n = min(dr["hints"] + 1, len(ladder))
     dr["hints"] = n
     _write(lab.name, data)
-    return {"n": n, "of": len(ladder), "text": ladder[n - 1].format(machine=naming.display(lab, dr["node"])),
+    return {"n": n, "of": len(ladder), "text": _pt(ladder[n - 1]).format(machine=naming.display(lab, dr["node"])),
             "message": f"hint {n} of {len(ladder)}"}
 
 

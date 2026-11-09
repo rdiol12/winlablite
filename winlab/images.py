@@ -22,6 +22,8 @@ from . import paths
 from .appliances import APPLIANCES, is_appliance
 from .linuxiso import DISTROS
 from .bsdfw import FIREWALLS
+from .android import BUILDS as ANDROID
+from .netos import VENDORS
 from .bootstrap import BootstrapError, _download_to, _get
 
 FETCH = "fetch"
@@ -150,6 +152,24 @@ CATALOG: dict[str, Entry] = {
         min_gb=2.0,
         get="winlab mecm prepare",
     ),
+    # VM-level backup (winlab/vmbackup.py): Veeam's free edition, from the
+    # user's own download, installed by the student on the backup server.
+    "veeam-br": Entry(
+        id="veeam-br",
+        title="Veeam Backup & Replication Community Edition (installation media)",
+        short="Veeam Backup & Replication",
+        mode=IMPORT,
+        kind=MEDIA,
+        license=("Veeam's Community Edition licence: free, no licence file, up to 10 protected workloads; "
+                 "under Veeam's own EULA, which you accept in its setup. \"Veeam\" is Veeam Software's "
+                 "trademark"),
+        note=("download the Community Edition ISO from Veeam's site (a free Veeam account, several GB), then "
+              "import it; nothing of Veeam's ships with winlab. You install it yourself on the backup "
+              "server from the disc in its drive, the way its own setup asks"),
+        page="https://www.veeam.com/products/free/backup-recovery.html",
+        accepts=(".iso",),
+        min_gb=2.0,
+    ),
     # RSAT on Windows 11 is a set of Features on Demand: with no internet in
     # the lab they install from Microsoft's own disc, which the user imports.
     "fod-win11": Entry(
@@ -207,6 +227,23 @@ for _f in FIREWALLS.values():
         id=_f.id, title=_f.title, short=_f.short, mode=FETCH if _f.folder else IMPORT,
         kind="firewall-installer", license=_f.license, note=_f.get or _f.defaults,
         url=_f.folder, page=_f.page, accepts=(".iso", ".gz", ".bz2"), min_gb=0.2,
+    )
+
+# Android installers (winlab/android.py): Android-x86 fetched from the
+# project's SourceForge files, a phone or tablet the student installs by hand.
+for _b in ANDROID.values():
+    CATALOG[_b.id] = Entry(
+        id=_b.id, title=_b.title, short=_b.short, mode=FETCH, kind="android-installer",
+        license=_b.license, note=_b.android, url=_b.url, page=_b.page, accepts=(".iso",), min_gb=0.5,
+    )
+
+# Vendor routers (winlab/netos.py): the router makers' own OS, MikroTik CHR
+# and VyOS fetched from their publishers, Juniper's and Arista's imported.
+for _v in VENDORS.values():
+    CATALOG[_v.id] = Entry(
+        id=_v.id, title=_v.title, short=_v.short, mode=FETCH if _v.fetch else IMPORT,
+        kind="router-os", license=_v.license, note=_v.get or _v.limits, page=_v.page,
+        accepts=(".iso", ".img", ".zip", ".qcow2", ".vmdk", ".vdi", ".vhdx"), min_gb=0.05,
     )
 
 # The Windows images in the order the desktop lists them.
@@ -498,6 +535,18 @@ def fetch(image_id: str, progress=None) -> Path:
             return bsdfw.fetch(image_id, progress=progress)
         except bsdfw.BsdFwError as exc:
             raise ImageError(str(exc)) from exc
+    if image_id in ANDROID:
+        from . import android
+        try:
+            return android.fetch(image_id, progress=progress)
+        except android.AndroidError as exc:
+            raise ImageError(str(exc)) from exc
+    if image_id in VENDORS:
+        from . import netos
+        try:
+            return netos.fetch(image_id, progress=progress)
+        except netos.NetOsError as exc:
+            raise ImageError(str(exc)) from exc
     if image_id in DISTROS:
         from . import linuxiso
         try:
@@ -535,10 +584,12 @@ def fetch(image_id: str, progress=None) -> Path:
 
 
 def copy_with_progress(src: Path, dest: Path, progress=None, label: str = "") -> Path:
-    """Copies into dest.part and renames, so a cancelled or failed copy never
-    looks like imported media; reports whole percents through progress."""
+    """Copies into dest.copying and renames, so a cancelled or failed copy
+    never looks like imported media (a copy cut off by closing winlab is
+    removed at the next start: bootstrap.clean_leftovers); reports whole
+    percents through progress."""
     total = src.stat().st_size or 1
-    part = dest.with_name(dest.name + ".part")
+    part = dest.with_name(dest.name + ".copying")
     done = shown = 0
     with src.open("rb") as fi, part.open("wb") as fo:
         while True:
@@ -572,6 +623,20 @@ def import_media(image_id: str, source: str | Path, progress=None) -> Path:
         except bsdfw.BsdFwError as exc:
             raise ImageError(str(exc)) from exc
         print(f"  {src.name}: {FIREWALLS[image_id].short}", file=sys.stderr)
+    if image_id == "android" and src.is_file():
+        from . import android  # an Android installer: which build is read off the disc or its name
+        try:
+            image_id = android.which(src)
+        except android.AndroidError as exc:
+            raise ImageError(str(exc)) from exc
+        print(f"  {src.name}: {ANDROID[image_id].short}", file=sys.stderr)
+    if image_id == "router" and src.is_file():
+        from . import netos  # a vendor router image: which vendor is read off its name
+        try:
+            image_id = netos.which(src)
+        except netos.NetOsError as exc:
+            raise ImageError(str(exc)) from exc
+        print(f"  {src.name}: {VENDORS[image_id].short}", file=sys.stderr)
     entry = CATALOG.get(image_id)
     if entry is None:
         raise ImageError(f"unknown image {image_id!r}")
@@ -585,6 +650,18 @@ def import_media(image_id: str, source: str | Path, progress=None) -> Path:
         try:
             return bsdfw.import_file(image_id, src, progress)
         except bsdfw.BsdFwError as exc:
+            raise ImageError(str(exc)) from exc
+    if image_id in ANDROID:  # checked against what the disc says, copied in (winlab/android.py)
+        from . import android
+        try:
+            return android.import_file(image_id, src, progress)
+        except android.AndroidError as exc:
+            raise ImageError(str(exc)) from exc
+    if image_id in VENDORS:  # a disk image converted, the VyOS or Aboot ISO copied (winlab/netos.py)
+        from . import netos
+        try:
+            return netos.import_file(image_id, src, progress)
+        except netos.NetOsError as exc:
             raise ImageError(str(exc)) from exc
     if entry.accepts and src.suffix.lower() not in entry.accepts:
         raise ImageError(
@@ -626,6 +703,76 @@ def import_media(image_id: str, source: str | Path, progress=None) -> Path:
     )
     _run_img(["convert", "-p", "-O", "qcow2", str(src), str(dest)])
     return dest
+
+
+def custom_id_for(src: Path) -> str:
+    """A free custom image id made from an ISO's file name."""
+    base = re.sub(r"[^a-z0-9-]+", "-", Path(src).stem.lower()).strip("-")
+    base = re.sub(r"^[^a-z]+", "", base)[:28].strip("-") or "disc"
+    if len(base) < 2:
+        base = f"{base}-disc"
+    taken = set(CATALOG) | set(custom_images())
+    cand, n = base, 2
+    while cand in taken or not CUSTOM_ID.match(cand):
+        cand, n = f"{base[:28]}-{n}", n + 1
+    return cand
+
+
+def import_any(source: str | Path, wanted: str = "", progress=None) -> tuple[str, Path, str]:
+    """Whatever ISO the user picked. winlab reads what is on the disc and
+    files it where it fits: a Windows it installs goes in as that Windows
+    (the one asked for when it holds several), a Linux or firewall installer
+    as that, and anything else (another Windows, another system, a tools
+    disc) as the user's own ISO, which a machine boots to install by hand.
+    Nothing is refused for being "the wrong ISO". Returns (image id, file,
+    a note for the user, '' when it went in as asked)."""
+    src = Path(str(source).strip().strip('"')).expanduser()
+    if not src.is_file():
+        raise ImageError(f"not found: {src}")
+    from . import netos
+    if src.suffix.lower() != ".iso" and netos.detect(src):
+        # A vendor router's disk image (MikroTik CHR, vJunos, vSRX, vEOS-lab), by the name it ships with.
+        target = netos.detect(src)
+        return target, import_media(target, src, progress=progress), (
+            f"{src.name} is {CATALOG[target].title}; it went in as that" if wanted and wanted != target else "")
+    if src.suffix.lower() != ".iso":
+        raise ImageError(f"{src.name}: choose a disc image (.iso), or a vendor router's image")
+    from . import wim
+    found: list[dict] = []
+    readable = False
+    try:
+        _, found = wim.images_in_iso(src)
+        readable = True
+    except wim.WimError:
+        pass
+    target, note = "", ""
+    if found:
+        fits = media_fits(found)
+        if wanted in fits:
+            target = wanted
+        elif fits:
+            target = fits[0]
+            if wanted:
+                note = (f"{src.name} holds {wim.describe(pick_edition(target, found))}, not "
+                        f"{CATALOG[wanted].title if wanted in CATALOG else wanted}; it went in as that")
+    if not target and not found:
+        from . import bsdfw, linuxiso
+        from . import android
+        target = linuxiso.detect(src) or bsdfw.detect(src) or android.detect(src) or netos.detect(src) or ""
+        if target and wanted and target != wanted:
+            note = f"{src.name} is {CATALOG[target].title if target in CATALOG else target}; it went in as that"
+    if not target and not readable and wanted in CATALOG and CATALOG[wanted].kind.startswith("windows-"):
+        target = wanted  # unreadable media: the stock image name, as import_media always did
+    if target:
+        dest = import_media(target, src, progress=progress)
+        return target, dest, note
+    own = custom_id_for(src)
+    entry = add_custom(own, src, title=src.stem, firmware="uefi", disk_gb=64)
+    what = (f"it holds {wim.describe(found[0])}, which winlab cannot set up by itself" if found
+            else "winlab does not know this disc")
+    note = (f"{src.name} is in as your own ISO '{own}': {what}, so a machine boots it and you "
+            f"install it yourself (on the workbench: a new machine, Your own disc)")
+    return own, entry.iso, note
 
 
 def _import_linux(image_id: str, src: Path, size_gb: float, progress=None) -> Path:
@@ -882,7 +1029,9 @@ def remove_custom(image_id: str) -> None:
 # it. One per Windows release; Server Core is a choice Setup offers. The
 # Linux installer DVDs (winlab/linuxiso.py) are hand installs the same way,
 # and so are the firewall installers (winlab/bsdfw.py).
-HAND_INSTALL = [i for i in WINDOWS_IMAGES if not i.endswith("-core")] + list(DISTROS) + list(FIREWALLS)
+HAND_INSTALL = ([i for i in WINDOWS_IMAGES if not i.endswith("-core")] + list(DISTROS) + list(FIREWALLS)
+                + list(ANDROID)
+                + [v.id for v in VENDORS.values() if v.form == "installer"])
 HAND_DISK_GB = 64
 
 
@@ -902,6 +1051,12 @@ def hand_media(image_id: str) -> Path:
     if image_id in FIREWALLS:
         from .bsdfw import missing_text as fw_missing
         raise ImageError(fw_missing(image_id))
+    if image_id in ANDROID:
+        from .android import missing_text as android_missing
+        raise ImageError(android_missing(image_id))
+    if image_id in VENDORS:
+        from .netos import missing_text as rtr_missing
+        raise ImageError(rtr_missing(image_id))
     entry = CATALOG[image_id]
     gone = retired_installer(image_id)
     raise ImageError(
@@ -1052,7 +1207,7 @@ def render_status() -> str:
                 state += ", virtio drivers"
             if st["installer_retired"]:
                 state += ", ISO copy removed after preparation"
-        elif st["installer"] and entry.kind in ("linux-installer", "firewall-installer"):
+        elif st["installer"] and entry.kind in ("linux-installer", "firewall-installer", "router-os"):
             state = f"installer DVD present ({st['installer_gb']:.1f} GiB): machines boot it, you install by hand"
         elif st["installer"]:
             state = f"installer present ({st['installer_gb']:.1f} GiB), not prepared"
@@ -1072,6 +1227,8 @@ def render_status() -> str:
                 lines.append(f"  {'':<12} or:      winlab images import linux <your.iso>")
             elif entry.kind == "firewall-installer":
                 lines.append(f"  {'':<12} or:      winlab images import firewall <your.iso>")
+            elif entry.kind == "router-os":
+                lines.append(f"  {'':<12} or:      winlab images import router <your file>")
         lines.append("")
     custom = custom_images()
     if custom:

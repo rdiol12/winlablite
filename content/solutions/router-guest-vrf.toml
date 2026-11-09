@@ -1,0 +1,21 @@
+[solution]
+exercise = "router-guest-vrf"
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+vrf definition GUEST
+rd 65000:20
+address-family ipv4
+exit-address-family
+exit
+interface g0/0/0
+vrf forwarding GUEST
+ip address 10.80.20.1 255.255.255.0
+end
+write memory
+'''
+wait = 10

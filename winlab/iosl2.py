@@ -101,8 +101,8 @@ def render(plan, reset: bool = False) -> list[str]:
         for net in devcli.vlans_of(lab, sw):
             if net.routed and net.vlan_no not in allow:
                 cuts.append(plan.segment_of(net.id).vid)
-    from . import iosssh, span  # SPAN's mirrors and the SSH servers follow the ports and addresses set here
-    extra = span.render(plan, reset) + iosssh.render(plan, reset)
+    from . import iosssh, lldp, span  # SPAN's mirrors, SSH servers, CDP/LLDP follow the ports and addresses set here
+    extra = span.render(plan, reset) + iosssh.render(plan, reset) + lldp.render(plan, reset)
     if not (mgmt or rates or cuts or extra) and not reset:
         return []
     out.append("### the switches' own settings on the router (winlab/iosl2.py)")
@@ -144,6 +144,8 @@ def render(plan, reset: bool = False) -> list[str]:
                     f"ip -n {ns} link set {n} address {mac_of(lab, sw, tag)}",
                     f"ip -n {ns} addr replace {addr} dev {n}",
                     f"ip -n {ns} link set {n} up"]
+            from . import iosv6  # its IPv6 address there, if one was typed
+            out += iosv6.sw_lines(lab, sw, tag, ns, n)
         if own.get("default-gw"):
             out.append(f"ip -n {ns} route replace default via {own['default-gw']} 2>/dev/null || true")
     for link, root, ingress in rates:
@@ -168,6 +170,8 @@ def _sig(lab, plan, sw: str, addrs) -> str:
     for tag, addr in addrs:
         net = devcli_vlan(lab, sw, tag)
         parts.append(f"{tag}={addr}@{plan.segment_of(net.id).vid if net is not None else 0}/{mac_of(lab, sw, tag)}")
+        from . import iosv6
+        parts[-1] += iosv6.sw_sig(own, tag)
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:10]
 
 

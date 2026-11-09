@@ -1,0 +1,17 @@
+{
+ "The trial and activating winlab": "גרסת הניסיון והפעלת winlab",
+ "Start here": "התחל כאן",
+ "trial": "ניסיון",
+ "license": "רישיון",
+ "licence": "רישיון",
+ "activate": "הפעל",
+ "activation": "הפעלה",
+ "product key": "מפתח מוצר",
+ "key": "מפתח",
+ "offline": "לא מקוון",
+ "purchase": "רכישה",
+ "buy": "קנייה",
+ "seat": "עמדה",
+ "What works before you activate, and how to enter your product key.": "מה עובד לפני ההפעלה, ואיך להזין את מפתח המוצר שלך.",
+ "**The free trial.** Before you activate, the first lab, ad-ds-basics, works completely: its machines, its lessons, exercises and its scenario days (Company merger and Monday morning lockouts). The other labs, their lessons, the scenario days built on them and the exam-prep tracks are listed with a lock. They are stored encrypted on this PC and open once you activate.\n\n**Activate.** Open Settings, then Activation (or click any locked lab). Type the product key from your purchase email (it starts with WLAB-) and press Activate. winlab checks the key with the licensing server once, when you activate, and ties it to this PC. The window then shows who the license belongs to and how many PCs use the key. From a command prompt:\n\n```\nwinlab license activate <your product key>\nwinlab license status\n```\n\n**After that.** A lifetime key never needs the internet again. A monthly key renews itself once at the end of each paid month; if this PC is offline then, it keeps working for 14 more days, and `winlab license refresh` renews it once you are back online.\n\n**A PC with no internet.** Run `winlab license fingerprint` and send the result with your key to support. You get a token back; save it as a file and run `winlab license activate-offline @token.json`.\n\n**Moving to another PC.** Press Move to another PC in the Activation window, or run `winlab license deactivate` on the old PC. That frees its place on the key, and you then activate on the new PC.\n\n**School keys.** A school key works on as many classroom PCs as it allows, and it unlocks Class results for the teacher.": "**גרסת הניסיון החינמית.** לפני ההפעלה, המעבדה הראשונה, ad-ds-basics, עובדת במלואה: המכונות שלה, השיעורים, התרגילים וימי התרחיש שלה (מיזוג חברות ונעילות של יום שני בבוקר). שאר המעבדות, השיעורים שלהן, ימי התרחיש שבנויים עליהן ומסלולי ההכנה לבחינות מוצגים עם מנעול. הם מאוחסנים מוצפנים במחשב הזה ונפתחים ברגע שאתה מפעיל.\n\n**הפעלה.** פתח את הגדרות, ולאחר מכן הפעלת מוצר (או לחץ על מעבדה נעולה כלשהי). הקלד את מפתח המוצר מדוא\"ל הרכישה שלך (הוא מתחיל ב-WLAB-) ולחץ על הפעל. winlab בודק את המפתח מול שרת הרישוי פעם אחת, בעת ההפעלה, וקושר אותו למחשב הזה. החלון מציג אז למי שייך הרישיון וכמה מחשבים משתמשים במפתח. משורת פקודה:\n\n```\nwinlab license activate <your product key>\nwinlab license status\n```\n\n**לאחר מכן.** מפתח לכל החיים לא צריך שוב את האינטרנט. מפתח חודשי מתחדש מעצמו פעם אחת בסוף כל חודש ששולם; אם המחשב הזה לא מקוון באותו רגע, הוא ממשיך לעבוד עוד 14 יום, ו-`winlab license refresh` מחדש אותו כשאתה חוזר להיות מקוון.\n\n**מחשב ללא אינטרנט.** הרץ `winlab license fingerprint` ושלח את התוצאה עם המפתח שלך לתמיכה. תקבל בחזרה token; שמור אותו כקובץ והרץ `winlab license activate-offline @token.json`.\n\n**מעבר למחשב אחר.** לחץ על העבר למחשב אחר בחלון הפעלת מוצר, או הרץ `winlab license deactivate` במחשב הישן. זה משחרר את מקומו במפתח, ולאחר מכן אתה מפעיל במחשב החדש.\n\n**מפתחות לבתי ספר.** מפתח של בית ספר עובד בכמה מחשבי כיתה שהוא מתיר, והוא פותח את תוצאות הכיתה עבור המורה."
+}

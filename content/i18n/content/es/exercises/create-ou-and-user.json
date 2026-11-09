@@ -1,0 +1,18 @@
+{
+ "Create an OU, a user and a global group": "Crea una OU, un usuario y un grupo global",
+ "Everything in the flat default containers is a policy and delegation dead end:\nGPOs cannot link to CN=Users. Give the Sales department a proper home. Create\nan OU, put a user in it, and give the department a global security group, the\n\"G\" in AGDLP that permissions are later granted through.": "Todo lo que está en los contenedores predeterminados planos es un callejón sin salida para directivas y delegación: las GPO no pueden vincularse a CN=Users. Dale al departamento de ventas un hogar como es debido. Crea una OU, pon un usuario en ella y dale al departamento un grupo de seguridad global, la \"G\" de AGDLP a través de la cual se conceden luego los permisos.",
+ "On dc01, create an organizational unit named Sales at the root of corp.lab": "En dc01, crea una unidad organizativa llamada Sales en la raíz de corp.lab",
+ "Create an enabled user John Doe, logon name jdoe, inside OU=Sales": "Crea un usuario habilitado John Doe, nombre de inicio de sesión jdoe, dentro de OU=Sales",
+ "Create a global security group G-Sales inside OU=Sales": "Crea un grupo de seguridad global G-Sales dentro de OU=Sales",
+ "Make jdoe a member of G-Sales": "Haz que jdoe sea miembro de G-Sales",
+ "OU=Sales exists at the domain root": "OU=Sales existe en la raíz del dominio",
+ "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'": "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'",
+ "jdoe lives in OU=Sales": "jdoe está en OU=Sales",
+ "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true": "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true",
+ "jdoe is enabled": "jdoe está habilitado",
+ "An account created without a password is disabled: Enable-ADAccount jdoe": "Una cuenta creada sin contraseña queda deshabilitada: Enable-ADAccount jdoe",
+ "G-Sales is a global security group": "G-Sales es un grupo de seguridad global",
+ "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'": "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'",
+ "jdoe is in G-Sales": "jdoe está en G-Sales",
+ "Add-ADGroupMember G-Sales -Members jdoe": "Add-ADGroupMember G-Sales -Members jdoe"
+}

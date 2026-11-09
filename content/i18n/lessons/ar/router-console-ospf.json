@@ -1,0 +1,71 @@
+{
+ "title": "OSPF على موجّه المختبر: جار عبر شبكة المكتب المحلية",
+ "summary": "فعّل OSPF في وحدة تحكم موجّه المختبر وعلى موجّه Ubuntu يعمل بـ FRRouting، وشاهدهما ينتخبان موجّهًا معيّنًا على شبكة محلية مشتركة، وأبقِ الواجهات الأخرى صامتة، وصِل إلى شبكة الورشة التي لم يكتب أحد مسارًا لها.",
+ "why": "معظم الشبكات التي ستصادفها خليط: موجّه Cisco في النواة، وشيء\nآخر بجانبه، جدار حماية أو جهاز Linux أو موجّه من مورّد آخر. وهي تتفق على\nالمسارات لأنها تتحدث البروتوكول المفتوح نفسه، وOSPF هو الذي يتحدثه\nالجميع. هنا يُعدّ موجّه المختبر كما يُعدّ موجّه Cisco، في وحدة\nتحكمه (router ospf 1، network ... area 0)، والموجّه المجاور له هو Ubuntu\nمع FRRouting، ويُعدّ في vtysh. يلتقيان على شبكة المكتب المحلية، وهي مقطع\nبث، لذا ينتخبان أيضًا موجّهًا معيّنًا، وهو ما لا يفعله رابط من نقطة إلى نقطة\nأبدًا.\n\nما يفعله winlab في الأسفل، كي تعرف مع من تتحدث: يحوّل موجّه المختبر\nما تكتبه إلى إعدادات FRRouting ويشغّلها. رسائل hello\nوتبادل قاعدة البيانات والمسارات حقيقية؛ ويقرأ show ip ospf neighbor في وحدة التحكم\nجدول FRRouting نفسه. واختلافان عن موجّه Cisco حقيقي\nصادقان: رقم العملية (router ospf 1) مجرد تسمية، لأن هذا الموجّه يشغّل\nعملية OSPF واحدة لكل VRF، ويُرفض router eigrp، لأن EIGRP بروتوكول Cisco الخاص\nولا يتحدثه أي موجّه Linux بإتقان يكفي لتعليمه.",
+ "concepts": [
+  "يختار كل من network <address> <wildcard> area <n> (IOS) وnetwork <prefix> area <n> (FRRouting) الواجهات حسب العنوان؛ و0.0.0.255 هو wildcard لشبكة /24",
+  "Router ID: اضبطه يدويًا (router-id في IOS، وospf router-id في FRRouting)؛ ولا يسري التغيير إلا بعد clear ip ospf process",
+  "على شبكة بث محلية تنتخب الموجّهات موجّهًا معيّنًا (DR) واحتياطيًا (BDR): تفوز أعلى أولوية للواجهة، ثم أعلى router ID، ولا يُعاد الانتخاب أبدًا لمجرد ظهور موجّه أفضل",
+  "ip ospf priority 0 تعني ألا يكون DR أبدًا؛ ويضبط ip ospf cost كلفة عبور الواجهة (تفوز أدنى كلفة إجمالية)",
+  "يوقف passive-interface default رسائل hello على كل واجهة؛ ويشغّلها no passive-interface <if> حيث يوجد جار. وتظل شبكة الواجهة الخاملة معلنة",
+  "تحمل مسارات O في show ip route القيمة [110/<cost>]: المسافة الإدارية 110، ثم كلفة OSPF للوصول إلى هناك"
+ ],
+ "steps": [
+  "شغّل rtr-edge وpc-office وpc-edge، وشغّل الشبكة. سجّل الدخول إلى rtr-edge باسم ubuntu بكلمة مرور المختبر (يحملها المفتاح في شريط المهام). rtr-edge خادم Ubuntu Server جديد: eth0 هو 10.81.0.1/24 (edge-lan، الورشة)، وeth1 هو 10.80.0.3/24 (office). تحقق باستخدام ip -br addr.",
+  "ثبّت FRRouting على rtr-edge من ذاكرة حزمة frr (لا يتصل المختبر بالإنترنت): في الأجهزة افتح الإعدادات الخاصة بـ rtr-edge واضغط صِل ذاكرة الحزم frr. ثم sudo mkdir -p /mnt/winlab-pack; sudo mount LABEL=WLPACK /mnt/winlab-pack; cat /mnt/winlab-pack/README.txt واتبعه لتثبيت frr frr-pythontools traceroute. ثم انزع الذاكرة (الإعدادات): يحتاجها rtr-isp في الدرس التالي.",
+  "اجعل rtr-edge يمرّر الحزم بين بطاقاته: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf، ثم sudo sysctl --system. شغّل خدمة OSPF في FRRouting: sudo sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons، ثم sudo systemctl restart frr.",
+  "انظر إلى المشكلة أولًا. على pc-office، يفشل ping -c 2 10.81.0.10 (pc-edge): بوابة pc-office هي موجّه المختبر (10.80.0.2)، وموجّه المختبر لم يسمع قط بـ 10.81.0.0/24. انقر نقرًا مزدوجًا على الموجّه في طاولة الشبكة (أو خريطة الشبكة) لفتح وحدة تحكمه: enable، show ip route. ثلاث شبكات متصلة (C) ولا شيء غيرها. يعرض show ip interface brief أي واجهة هي أي: GigabitEthernet0/1/0 هي المكتب (10.80.0.2)، وGigabitEthernet0/0/0 شبكة الضيوف، وGigabitEthernet0/0/1 الرابط إلى مزوّد الإنترنت.",
+  "OSPF على موجّه المختبر: configure terminal، router ospf 1. يصبح المحث Router(config-router)#. اكتب router-id 2.2.2.2، ثم network 10.80.0.0 0.0.0.255 area 0. اتركه هكذا الآن واكتب end. في أول مرة يُعدّ فيها بروتوكول توجيه يثبّت الموجّه FRRouting من وحدة تخزين الحزم في المختبر، لذا امنحه بضع ثوانٍ.",
+  "OSPF على rtr-edge: sudo vtysh، configure terminal، router ospf، ospf router-id 3.3.3.3، network 10.80.0.0/24 area 0، network 10.81.0.0/24 area 0، end، write memory. الفكرة نفسها بكلمات FRRouting: بادئة بدلًا من عنوان وwildcard.",
+  "شاهدهما يلتقيان. في وحدة تحكم الموجّه: show ip ospf neighbor. يظهر 3.3.3.3 على GigabitEthernet0/1/0، أولًا في INIT أو 2WAY، ثم EXSTART وEXCHANGE، وبعد نحو 40 ثانية (مؤقت الانتظار قبل الانتخاب) FULL/DR أو FULL/BDR. وفي vtysh على rtr-edge، يعرض show ip ospf neighbor الجار 2.2.2.2 من الجهة الأخرى.",
+  "الآن المسارات: في show ip route على وحدة تحكم الموجّه يوجد O 10.81.0.0/24 [110/20] via 10.80.0.3, GigabitEthernet0/1/0. على pc-office، يجيب ping -c 2 10.81.0.10، ويعرض traceroute -n 10.81.0.10 العنوان 10.80.0.2، ثم 10.80.0.3، ثم الحاسوب. لم يكتب أحد مسارًا.",
+  "اجعل موجّه المختبر هو DR عمدًا. في وحدة تحكمه: configure terminal، interface g0/1/0، ip ospf priority 200، end. show ip ospf neighbor: لا يتغير شيء، لأن OSPF لا يجري انتخابًا جديدًا عند ظهور موجّه أفضل. افرضه: clear ip ospf process في وحدة التحكم (تقول جهة rtr-edge إن جارها سقط وعاد). بعد الأربعين ثانية يظهر rtr-edge بالحالة FULL/BDR في show ip ospf neighbor على وحدة التحكم، فيكون موجّه المختبر هو DR.",
+  "أبعد OSPF عن الواجهات التي لا ينبغي أن يوجد فيها موجّه أبدًا. في وحدة التحكم: configure terminal، router ospf 1، passive-interface default، no passive-interface g0/1/0، end. افعل الشيء نفسه على rtr-edge لبطاقة الورشة: في vtysh، configure terminal، interface eth0، ip ospf passive، end، write memory. يسرد show ip protocols في وحدة التحكم الواجهات الخاملة والشبكات التي يوجّه لها OSPF.",
+  "اقرأ الباقي: show ip ospf interface brief (كل واجهة ومنطقتها وكلفتها ودور DR أو BDR وجيرانها)، وshow ip ospf database (LSA موجّه واحد لكل موجّه، وLSA شبكة من DR)، وshow running-config | section router ospf. في وحدة التحكم، يحفظ write memory ذلك للتشغيل التالي للشبكة.",
+  "اضغط تحقق من عملي: يقرأ جار OSPF ومسارات موجّه المختبر، وما يراه rtr-edge، وأي موجّه هو DR، ويرسل ping من pc-office إلى pc-edge."
+ ],
+ "pitfalls": [
+  "جار عالق في INIT أو لا شيء إطلاقًا: يجب أن يتفق الطرفان على الشبكة الفرعية والمنطقة ومؤقتي hello وdead. يطبع show ip ospf interface على الطرفين (وحدة التحكم وvtysh) المؤقتات جنبًا إلى جنب.",
+  "الـ wildcard ليس قناعًا: network 10.80.0.0 255.255.255.0 area 0 عبارة مختلفة (وخاطئة). ويرفض الموجّه قيم wildcard التي فيها ثغرات.",
+  "router-id المكتوب بعد قيام الجيران لا يفعل شيئًا حتى clear ip ospf process؛ وتقول وحدة التحكم ذلك.",
+  "passive-interface default على موجّه المختبر دون no passive-interface g0/1/0 يُسكت المكتب أيضًا: يسقط الجار بعد فاصل dead (40 ثانية).",
+  "الإعدادات المكتوبة في وحدة التحكم هي الإعدادات الجارية: نفّذ write memory، وإلا فسيعيد التشغيل التالي للشبكة إعدادات بدء التشغيل. على rtr-edge، يحفظ write memory في vtysh الملف /etc/frr/frr.conf."
+ ],
+ "verify": [
+  "جيران OSPF لموجّه المختبر (جدول FRRouting نفسه)",
+  "المسارات التي تعلّمها موجّه المختبر عبر OSPF، في النواة الخاصة به",
+  "يصل pc-office إلى الورشة"
+ ],
+ "quiz": [
+  {
+   "q": "أي wildcard يرافق network 10.80.0.0 ليطابق 10.80.0.0/24 كاملة في router ospf الخاص بـ IOS؟",
+   "answer": "0.0.0.255",
+   "wrong": [
+    "255.255.255.0",
+    "0.0.0.0",
+    "255.255.255.255"
+   ],
+   "why": "يحدد الـ wildcard البتات التي يجوز أن تختلف: الثمانية الأخيرة في /24."
+  },
+  {
+   "q": "ترفع أولوية OSPF لموجّه بعد انتخاب DR. ماذا يحدث؟",
+   "answer": "لا شيء حتى تُعاد علاقة الجوار أو العملية: لا ينتزع OSPF دور DR",
+   "wrong": [
+    "يصبح DR فورًا",
+    "يصبح DR القديم BDR عند رسالة hello التالية",
+    "يصبح كلاهما DR"
+   ],
+   "why": "يجري الانتخاب عندما ينضم موجّه إلى المقطع، لا عندما تتغير الأولوية."
+  },
+  {
+   "q": "ماذا يفعل passive-interface بشبكة الواجهة؟",
+   "answer": "تظل معلنة، لكن لا تُرسل رسائل hello ولا يُجاب عنها هناك",
+   "wrong": [
+    "لا تعود معلنة",
+    "تُعلن كمسار خارجي",
+    "تُزال من جدول التوجيه"
+   ],
+   "why": "الخمول يبعد الجيران عن الواجهة؛ وتبقى الشبكة في OSPF."
+  }
+ ]
+}

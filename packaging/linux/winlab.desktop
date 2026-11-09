@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=winlab
+GenericName=Sysadmin lab
+Comment=Build and run real Windows and Linux lab networks on this PC
+Exec=@EXEC@
+Icon=winlab
+Terminal=false
+Categories=Education;System;Emulator;
+Keywords=windows;server;lab;active directory;network;virtual machine;
+StartupWMClass=winlab

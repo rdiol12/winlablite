@@ -557,6 +557,74 @@ _reg(GuestFault(
             "[bool]($p -and ([string]$p.PrinterStatus -notmatch 'Paused') -and $j.Count -eq 0)"),
 ))
 
+_reg(GuestFault(
+    id="printer-unshared",
+    roles=("printer",),
+    title="A shared printer is no longer shared",
+    os=WINDOWS,
+    teaches="printer sharing on a print server, share names clients map, and testing from a client",
+    symptom="clients' {printer} printer shows offline or 'Windows cannot connect to the printer'; the queue on the server looks fine",
+    apply=("$p = Get-Printer -Name '{printer}' -ErrorAction Stop; if (-not $p.Shared) { throw 'the printer is not shared' }; "
+           "New-Item -ItemType Directory -Path C:\\winlab\\faults -Force | Out-Null; "
+           "Set-Content -Path 'C:\\winlab\\faults\\printer-share-{printer}.txt' -Value $p.ShareName; "
+           "Set-Printer -Name '{printer}' -Shared $false"),
+    clear=("$n = Get-Content -Path 'C:\\winlab\\faults\\printer-share-{printer}.txt' -ErrorAction SilentlyContinue | Select-Object -First 1; "
+           "if (-not $n) { $n = '{printer}' }; Set-Printer -Name '{printer}' -Shared $true -ShareName $n.Trim()"),
+    hints=(
+        "The server's queue is fine, so look at what clients connect to: a print queue is published under a share name. "
+        "Get-Printer -Name '{printer}' | Format-List Name, Shared, ShareName on the print server.",
+        "Shared is False: the queue still prints locally on the server, but no client can reach \\\\<server>\\<share name>. "
+        "Clients keep the old connection and show it offline.",
+        "Share it again under the name clients already use: Set-Printer -Name '{printer}' -Shared $true -ShareName <the old name> "
+        "(Print Management > Printers > Properties > Sharing does the same). Then print a test page from a client.",
+    ),
+    verify=("$n = Get-Content -Path 'C:\\winlab\\faults\\printer-share-{printer}.txt' -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "$p = Get-Printer -Name '{printer}' -ErrorAction SilentlyContinue; "
+            "[bool]($p -and $p.Shared -and (-not $n -or $p.ShareName -eq $n.Trim()))"),
+))
+
+_reg(GuestFault(
+    id="dns-record-typo",
+    roles=("ad-ds", "dns"),
+    title="A server's DNS record has a typo",
+    os=WINDOWS,
+    teaches="host (A) records, reading what DNS really answers, stale client caches, and why a ping by number works",
+    symptom="\\\\{typohost} and anything by its name fail for everyone, while the server answers by its address",
+    # Somebody retyped the record by hand and swapped two digits: the right
+    # address is kept on the DNS server so Fix-for-me and the check know it.
+    apply=("$z = '{domain}'; $h = '{typohost}'; "
+           "$r = @(Get-DnsServerResourceRecord -ZoneName $z -Name $h -RRType A -ErrorAction Stop); "
+           "if (-not $r) { throw \"no host record for $h\" }; "
+           "$ip = $r[0].RecordData.IPv4Address.IPAddressToString; $o = $ip.Split('.'); $l = $o[3]; $b = ''; "
+           "if ($l.Length -ge 2 -and $l[-1] -ne $l[-2]) { $b = $l.Substring(0, $l.Length - 2) + $l[-1] + $l[-2] }; "
+           "if (-not $b -or [int]$b -lt 1 -or [int]$b -gt 254 -or [int]$b -eq [int]$l) { $b = [string](([int]$l % 253) + 1) }; "
+           "$bad = ($o[0..2] -join '.') + '.' + [int]$b; "
+           "New-Item -ItemType Directory -Path C:\\winlab\\faults -Force | Out-Null; "
+           "Set-Content -Path \"C:\\winlab\\faults\\dns-typo-$h.txt\" -Value $ip; "
+           "$r | Remove-DnsServerResourceRecord -ZoneName $z -Force; "
+           "Add-DnsServerResourceRecordA -ZoneName $z -Name $h -IPv4Address $bad; "
+           "Clear-DnsServerCache -Force -ErrorAction SilentlyContinue"),
+    clear=("$z = '{domain}'; $h = '{typohost}'; "
+           "$ip = Get-Content -Path \"C:\\winlab\\faults\\dns-typo-$h.txt\" -ErrorAction SilentlyContinue | Select-Object -First 1; "
+           "if ($ip) { Get-DnsServerResourceRecord -ZoneName $z -Name $h -RRType A -ErrorAction SilentlyContinue | "
+           "Remove-DnsServerResourceRecord -ZoneName $z -Force; "
+           "Add-DnsServerResourceRecordA -ZoneName $z -Name $h -IPv4Address $ip.Trim(); "
+           "Clear-DnsServerCache -Force -ErrorAction SilentlyContinue }"),
+    hints=(
+        "Works by address, fails by name: that is name resolution. Ask DNS what it answers: "
+        "Resolve-DnsName {typohost}.{domain} (or nslookup {typohost}), and compare with the address the server really has (ipconfig on it).",
+        "The answer is wrong for everyone, so it is not one PC's cache: the host (A) record in the {domain} zone on the DNS server "
+        "has the wrong address. Get-DnsServerResourceRecord -ZoneName {domain} -Name {typohost} -RRType A shows it.",
+        "Fix the record: remove the wrong one and add the right address (DNS Manager, or Remove-DnsServerResourceRecord and "
+        "Add-DnsServerResourceRecordA -ZoneName {domain} -Name {typohost} -IPv4Address <its real address>). "
+        "Then Clear-DnsServerCache on the server and ipconfig /flushdns on the clients that cached the wrong answer.",
+    ),
+    verify=("$ip = Get-Content -Path 'C:\\winlab\\faults\\dns-typo-{typohost}.txt' -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "$a = @(Get-DnsServerResourceRecord -ZoneName '{domain}' -Name '{typohost}' -RRType A -ErrorAction SilentlyContinue | "
+            "ForEach-Object { $_.RecordData.IPv4Address.IPAddressToString }); "
+            "[bool]($ip -and $a.Count -ge 1 -and @($a | Where-Object { $_ -ne $ip.Trim() }).Count -eq 0)"),
+))
+
 _PROFILES = "'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList'"
 _THEIRS = "Where-Object { [string](Get-ItemProperty -Path $_.PSPath).ProfileImagePath -match '\\\\{user}(\\.[^\\\\]+)?$' }"
 
@@ -646,8 +714,7 @@ _reg(GuestFault(
            "New-Service -Name 'WinTelemetryHelper' -DisplayName 'Windows Telemetry Helper' "
            "-BinaryPathName 'C:\\ProgramData\\Microsoft\\Crypto\\wth.exe -k netsvcs' -StartupType Manual | Out-Null"),
     clear=("Get-ADUser -Filter \"SamAccountName -eq 'svc-sync'\" | Remove-ADUser -Confirm:$false; "
-           "if (Get-Service -Name 'WinTelemetryHelper' -ErrorAction SilentlyContinue) { sc.exe delete WinTelemetryHelper | Out-Null }; "
-           "Remove-Item -Path 'C:\\winlab\\incident.txt' -ErrorAction SilentlyContinue"),
+           "if (Get-Service -Name 'WinTelemetryHelper' -ErrorAction SilentlyContinue) { sc.exe delete WinTelemetryHelper | Out-Null }"),
     hints=(
         "Work from the evidence, newest first. On the domain controller: Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4720, 4728, 4732, 4756 } "
         "lists accounts created and members added to security groups; Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = 7045 } "
@@ -656,15 +723,78 @@ _reg(GuestFault(
         "Domain Admins minutes after a burst of failed sign-ins (4625, 4771 or 4776 for many different users from one place: a spray). "
         "A service with an odd path under C:\\ProgramData was installed at the same time.",
         "Contain and record: Remove-ADGroupMember 'Domain Admins' svc-sync and Disable-ADAccount svc-sync (or delete it), "
-        "sc.exe delete WinTelemetryHelper, and write C:\\winlab\\incident.txt naming the account and the service. In real life: "
+        "sc.exe delete WinTelemetryHelper, and record the incident where the team keeps them (the wiki's incidents "
+        "namespace, or the helpdesk ticket) naming the account and the service. In real life: "
         "reset the sprayed users' passwords and krbtgt's twice, and find how the intruder got the rights to do this.",
     ),
     verify=("$u = Get-ADUser -Filter \"SamAccountName -eq 'svc-sync'\" -Properties MemberOf -ErrorAction SilentlyContinue; "
             "$da = (Get-ADGroup 'Domain Admins').DistinguishedName; "
             "$okU = (-not $u) -or ((-not $u.Enabled) -and ($u.MemberOf -notcontains $da)); "
             "$okS = -not (Get-Service -Name 'WinTelemetryHelper' -ErrorAction SilentlyContinue); "
-            "$t = [string](Get-Content -Path 'C:\\winlab\\incident.txt' -Raw -ErrorAction SilentlyContinue); "
-            "[bool]($okU -and $okS -and $t -match 'svc-sync' -and $t -match 'WinTelemetryHelper')"),
+            "[bool]($okU -and $okS)"),
+))
+
+
+# The incident-response drill on a member PC: a stand-in intruder's foothold.
+# Everything planted is harmless (the "payload" only writes the date to a
+# file); it exists to be found from the logs and the SIEM, contained,
+# preserved as evidence, removed, and written up in the lifecycle's terms.
+_IR_DIR = "C:\\ProgramData\\EdgeUpdateHelper"
+_IR_RUN = "'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'"
+
+_reg(GuestFault(
+    id="compromised-workstation",
+    roles=("domain-join",),
+    title="A PC has a foothold on it: respond to the incident from detection to lessons learned",
+    os=WINDOWS,
+    teaches="the incident response lifecycle on one PC: detect from the SIEM and the logs, scope, contain, keep the evidence with its hash, eradicate every persistence, recover and write the report",
+    symptom="the SIEM shows a new local administrator and a new scheduled task on this PC overnight, and nobody in IT made them; the user noticed nothing",
+    apply=("$d = '" + _IR_DIR + "'; New-Item -ItemType Directory -Path $d -Force | Out-Null; "
+           "Set-Content -Path ($d + '\\helper.ps1') -Encoding ASCII -Value @("
+           "'# winlab incident drill: a harmless stand-in for an intruder''s script', "
+           "'Get-Date | Out-File -FilePath " + _IR_DIR + "\\last.txt'); "
+           "New-LocalUser -Name 'support_tmp' -Description 'Remote support' -AccountPassword (" + _RANDOM_SECRET + ") | Out-Null; "
+           "Add-LocalGroupMember -SID 'S-1-5-32-544' -Member 'support_tmp'; "
+           "$a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File ' + $d + '\\helper.ps1'); "
+           "$t = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 15); "
+           "Register-ScheduledTask -TaskName 'EdgeUpdateHelper' -Action $a -Trigger $t -User 'SYSTEM' -RunLevel Highest -Force | Out-Null; "
+           "Set-ItemProperty -Path " + _IR_RUN + " -Name 'EdgeUpdateHelper' "
+           "-Value ('powershell.exe -NoProfile -WindowStyle Hidden -File ' + $d + '\\helper.ps1'); "
+           "New-NetFirewallRule -Name 'winlab-ir-remote-support' -DisplayName 'Remote Support' -Direction Inbound "
+           "-Protocol TCP -LocalPort 4444 -Action Allow -Profile Any | Out-Null"),
+    clear=("Unregister-ScheduledTask -TaskName 'EdgeUpdateHelper' -Confirm:$false -ErrorAction SilentlyContinue; "
+           "Remove-ItemProperty -Path " + _IR_RUN + " -Name 'EdgeUpdateHelper' -ErrorAction SilentlyContinue; "
+           "Remove-NetFirewallRule -Name 'winlab-ir-remote-support' -ErrorAction SilentlyContinue; "
+           "Remove-LocalUser -Name 'support_tmp' -ErrorAction SilentlyContinue; "
+           "Remove-Item -Path '" + _IR_DIR + "' -Recurse -Force -ErrorAction SilentlyContinue; "
+           "Remove-Item -Path 'C:\\winlab\\incident-report.txt', 'C:\\winlab\\evidence' -Recurse -Force -ErrorAction SilentlyContinue"),
+    hints=(
+        "Start where the alert came from, then widen: in the Wazuh dashboard filter agent.name for this PC and the last day. On the PC: "
+        "Get-WinEvent -FilterHashtable @{ LogName = 'Security'; Id = 4720, 4732, 4698, 4688 } -MaxEvents 50 | Format-List TimeCreated, Id, Message "
+        "(4698 and the command lines in 4688 appear only if the endpoint logging lesson is done). Scope it: an account, a task, and what else ran at the same minute?",
+        "Look for every way it comes back, not just the first: Get-LocalGroupMember Administrators, Get-ScheduledTask | Where-Object TaskPath -eq '\\', "
+        "Get-ItemProperty HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run, and Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True "
+        "| Get-NetFirewallPortFilter for a port nothing in the company uses. The task and the Run key start the same script.",
+        "Contain first (Disable-LocalUser support_tmp, Disable-ScheduledTask, Disable-NetFirewallRule), then keep the evidence: copy the script to "
+        "C:\\winlab\\evidence and record Get-FileHash -Algorithm SHA256 of the copy. Then eradicate: remove the account, the task, the Run value, the rule "
+        "and C:\\ProgramData\\EdgeUpdateHelper. Write C:\\winlab\\incident-report.txt with what you found (names, port, hash) under the headings "
+        "Containment, Eradication, Recovery and Lessons learned.",
+    ),
+    verify=("$u = Get-LocalUser -Name 'support_tmp' -ErrorAction SilentlyContinue; "
+            "$adm = @(Get-LocalGroupMember -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '\\\\support_tmp$' }); "
+            "$okU = ((-not $u) -or (-not $u.Enabled)) -and ($adm.Count -eq 0); "
+            "$okT = -not (Get-ScheduledTask -TaskName 'EdgeUpdateHelper' -ErrorAction SilentlyContinue); "
+            "$okR = -not (Get-ItemProperty -Path " + _IR_RUN + " -Name 'EdgeUpdateHelper' -ErrorAction SilentlyContinue); "
+            "$okF = -not (Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction SilentlyContinue "
+            "| Get-NetFirewallPortFilter | Where-Object { $_.LocalPort -contains '4444' }); "
+            "$okP = -not (Test-Path -Path '" + _IR_DIR + "\\helper.ps1'); "
+            "$ev = Get-ChildItem -Path 'C:\\winlab\\evidence' -Filter 'helper.ps1' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1; "
+            "$h = if ($ev) { (Get-FileHash -Path $ev.FullName -Algorithm SHA256).Hash } else { 'none' }; "
+            "$okE = [bool]$ev -and ([string](Get-Content -Path $ev.FullName -Raw) -match 'winlab incident drill'); "
+            "$t = [string](Get-Content -Path 'C:\\winlab\\incident-report.txt' -Raw -ErrorAction SilentlyContinue); "
+            "$okW = ($t -match 'support_tmp') -and ($t -match 'EdgeUpdateHelper') -and ($t -match '4444') -and ($t -match $h) "
+            "-and ($t -match 'containment') -and ($t -match 'eradication') -and ($t -match 'recovery') -and ($t -match 'lessons learned'); "
+            "[bool]($okU -and $okT -and $okR -and $okF -and $okP -and $okE -and $okW)"),
 ))
 
 
@@ -771,6 +901,65 @@ _reg(GuestFault(
 ))
 
 
+# The edge-firewall lab's drills (content/labs/edge-firewall.toml): both break
+# a part of OPNsense the student built, at run time, so the configuration (and
+# the GUI's pages) still look right; OPNsense puts both back when the part is
+# applied again in the GUI or the firewall reboots.
+_reg(GuestFault(
+    id="opn-wg-down",
+    images=("opnsense",),
+    title="The home workers' VPN stopped answering",
+    os=LINUX,
+    teaches="reading a WireGuard tunnel from both ends: the handshake time, the interface's own "
+            "state and the rules, before touching keys or peers",
+    symptom="the home worker's laptop says the tunnel is active and nothing in the office answers; "
+            "on the firewall the instance and the peer are still configured and enabled, the WAN "
+            "rule for UDP 51820 is there, and the last handshake grows older by the minute",
+    apply="for i in $(ifconfig -g wg 2>/dev/null); do ifconfig \"$i\" down; done; echo down",
+    clear="for i in $(ifconfig -g wg 2>/dev/null); do ifconfig \"$i\" up; done; echo up",
+    shell="sh",
+    hints=(
+        "Start at the firewall end: wg show prints the instance and its peer with the latest "
+        "handshake. Minutes old while the laptop keeps trying means the firewall is not answering.",
+        "The configuration is fine, so ask the interface: ifconfig -g wg lists the WireGuard "
+        "interfaces, and ifconfig wg0 shows its flags. A tunnel interface without UP on its first "
+        "line takes no packets in or out.",
+        "ifconfig wg0 up brings it back at once; VPN, WireGuard, Apply (or a restart of the "
+        "service on the dashboard) does the same through OPNsense. Then read the system log for "
+        "who or what took it down.",
+    ),
+    verify="n=0; for i in $(ifconfig -g wg 2>/dev/null); do ifconfig \"$i\" | head -1 | grep -q '<UP' "
+           "|| n=$((n+1)); done; echo $n",
+    expect="0",
+))
+
+
+_reg(GuestFault(
+    id="opn-ids-stopped",
+    images=("opnsense",),
+    title="The intrusion detection went quiet",
+    os=LINUX,
+    teaches="telling a quiet network from a blind sensor: the service's state, its log and a "
+            "known test alert, before you trust an empty alert list",
+    symptom="no new alerts since this morning; the test page that always raises 2100498 raises "
+            "nothing; Intrusion Detection is still ticked Enabled in Settings and its rule sets "
+            "are all there",
+    apply="configctl ids stop >/dev/null 2>&1; pkill -x suricata 2>/dev/null; echo stopped",
+    clear="configctl ids start >/dev/null 2>&1; echo started",
+    shell="sh",
+    hints=(
+        "An empty alert list proves nothing on its own. Make the test alert happen (the test page "
+        "from pc01) and see whether it arrives.",
+        "Ask for the engine, not the setting: the dashboard's Services widget, or on the shell "
+        "configctl ids status and pgrep -lf suricata. The last lines of /var/log/suricata/suricata.log "
+        "say when it stopped.",
+        "Start it: Services, Intrusion Detection, Administration, Apply restarts it with the saved "
+        "settings, or configctl ids start on the shell. Then raise the test alert again.",
+    ),
+    verify="pgrep -x suricata >/dev/null && echo True || echo False",
+))
+
+
 # Wake-on-LAN (winlab/power.py): QEMU's card keeps no such setting, so winlab
 # reads Windows' own one while the machine runs and a card set to Disabled
 # stays asleep when its magic packet arrives, as on a real PC.
@@ -859,8 +1048,8 @@ def render_catalog() -> str:
         lines.append(f"{osname}:")
         for f in items:
             where = f" [{', '.join(f.images)}]" if f.images else ""
-            lines.append(f"  {f.id:<22} {f.title}{where}")
-            lines.append(f"  {'':<22} symptom: {f.symptom}")
+            lines.append(f"  {f.id:<22} {_fill(f.title, {})}{where}")
+            lines.append(f"  {'':<22} symptom: {_fill(f.symptom, {})}")
         lines.append("")
     lines.append("inject:  winlab break <node> <id> [--param k=v ...]")
     lines.append("hint:    winlab break <node> <id> --hint 1   (1, 2 or 3)")
@@ -873,20 +1062,35 @@ DEFAULTS = {"service": "DNS", "user": "asmith", "share": "Company", "dns": "10.1
             "unit": "rsyslog", "domain": "corp.lab", "scope": "10.10.10.0",
             "gpo": "Map Company Share", "printer": "Lab-PDF", "wsus": "app01", "ntp": "",
             "timesrc": "the domain controller", "mailhost": "mail.corp.lab", "mailip": "",
-            "mailserver": "the mail server", "registry": "the lab registry", "k3sserver": "the k3s server",
+            "mailserver": "the mail server", "registry": "the lab registry", "k3sserver": "the k3s server", "k8scp": "the control plane",
             "pgprimary": "db01.corp.lab", "pgprimaryip": "",
             "pgstandby": "db03.corp.lab", "mariahost": "db02.corp.lab", "dbnet": "10.88.0.0/24",
-            "dbhosts": "10.88.0.%",
+            "dbhosts": "10.88.0.%", "typohost": "fs01",
             "proxyhost": "px01.corp.lab", "proxyip": "",
             "proxyport": "3128", "corpnet": "", "inetip": "203.0.113.80",
             "v6host": "lnx01", "v6hostip": "fd12:3456:789a:2::25", "v6prefix": "fd12:3456:789a:1::",
             "sensor": "rt01", "corpgw": "", "dmzgw": "", "dmznet": "", "srvip": "",
+            "mcserver": "ops01.corp.lab", "mcip": "", "mcwrong": "192.0.2.250",
             "vpnname": "vpn.corp.example", "crlname": "pki.corp.example", "vpnhost": "vpn01",
             "vpnpublic": "203.0.113.10", "officenet": "10.96.0.0/24", "fsip": "10.96.0.20",
             "fshost": "fs01.corp.lab", "poolnet": "10.96.8.0/24", "caname": "CORP Root CA",
             "vpnconn": "Corp VPN", "rapolicy": "Remote-Workers VPN", "ragroup": "Remote-Workers",
             "anscontrol": "ctl01.corp.lab", "anstarget": "lnx02", "anstargetfqdn": "lnx02.corp.lab",
-            "anstargetip": "", "dscnode": "srv01"}
+            "anstargetip": "", "dscnode": "srv01",
+            "netbios": "CORP", "smbhost": "fs01.corp.lab", "smbserver": "fs01", "smbip": "",
+            "smbshare": "projects", "nshost": "ns01.corp.lab", "nsip": "", "subzone": "dev.corp.lab",
+            "fsshare": "Departments", "fsserver": "fs01", "dfsroot": "\\\\corp.lab\\Files",
+            "dfsfolder": "Departments",
+            "attackerip": "10.94.0.66", "toolsserver": "the tools server", "toolsip": "",
+            "opsserver": "the network operations server", "opsip": "",
+            "inetdns": "203.0.113.53", "inetmx": "203.0.113.25", "inetspam": "203.0.113.66",
+            "mailpublic": "203.0.113.10",
+            "forgejoip": "10.83.0.20", "forgejourl": "http://10.83.0.20:3000", "forgejoreg": "10.83.0.20:3000",
+            "cihost": "ci01", "apphost": "app01", "appip": "10.83.0.31"}
+
+
+from .printing import DEFAULTS as _PRINT_DEFAULTS  # noqa: E402
+DEFAULTS.update(_PRINT_DEFAULTS)
 
 
 def lab_params(lab) -> dict[str, str]:
@@ -912,6 +1116,9 @@ def lab_params(lab) -> dict[str, str]:
                 out["scope"] = str(ipaddress.ip_network(net.cidr, strict=False).network_address)
         if "wsus" in n.roles and "wsus" not in out:
             out["wsus"] = n.hostname or n.id
+        if "typohost" not in out and n.kind != "linux" and "ad-ds" not in n.roles \
+                and any(r in n.roles for r in ("file", "printer", "iis", "web")):
+            out["typohost"] = naming.hostname_of(n).lower()   # a server staff reach by name
     from .timesync import fault_params  # the NTP server, lab time now
     out.update(fault_params(lab))
     from .mail import fault_params as mail_params  # the mail server's name and address
@@ -926,12 +1133,28 @@ def lab_params(lab) -> dict[str, str]:
     out.update(v6_params(lab))
     from .ids import fault_params as ids_params  # the sensor's legs, the inside segments, the DMZ server
     out.update(ids_params(lab))
+    from .remotesupport import fault_params as rs_params  # MeshCentral's name and address, a dead one
+    out.update(rs_params(lab))
     from .remoteaccess import fault_params as ra_params  # the VPN edge, its public names, the office
     out.update(ra_params(lab))
     from .automation import fault_params as auto_params  # the control node, the managed servers
     out.update(auto_params(lab))
     from .doctools import fault_params as docs_params  # the Admin tools server's name and address
     out.update(docs_params(lab))
+    from .netops import fault_params as ops_params  # the Network operations server's name and address
+    out.update(ops_params(lab))
+    from .linuxdomain import fault_params as lx_params  # the Linux track's file server, BIND server, subdomain
+    out.update(lx_params(lab))
+    from .filesharing import fault_params as fs_params  # the file-sharing lab's share and namespace
+    out.update(fs_params(lab))
+    from .incidents import fault_params as ir_params  # the incident drills' attacker address nobody owns
+    out.update(ir_params(lab))
+    from .printing import fault_params as print_params  # the print queues, the print servers, the printers
+    out.update(print_params(lab))
+    from .devops import fault_params as devops_params  # Forgejo's address and URL, the runner, the deploy target
+    out.update(devops_params(lab))
+    from .hwfaults import fault_params as hw_params  # what is in the PC's case: supply, cooling, sticks, cards, drives
+    out.update(hw_params(lab))
     return out
 
 
@@ -961,14 +1184,30 @@ def verify_command(scenario_id: str, params: dict[str, str]) -> tuple[str, str, 
     return _fill(f.verify, params), f.shell, f.expect
 
 
-def hint(scenario_id: str, n: int, params: dict[str, str] | None = None) -> str:
-    """Hint n (1-based); the ladder goes from where to look to the command."""
+def words(scenario_id: str, params: dict[str, str] | None = None,
+          lang: str | None = None) -> dict[str, str]:
+    """The scenario's title, symptom and teaches in the desktop's language
+    (content/i18n/content/<lang>/problems.json) with the lab's names filled
+    in ({subzone}, {domain}, {nshost}...): what a student reads must never
+    show a raw placeholder."""
+    from .content import problem_text
+    f = SCENARIOS.get(scenario_id)
+    if not f:
+        raise KeyError(scenario_id)
+    return {k: _fill(problem_text(getattr(f, k) or "", lang), params or {})
+            for k in ("title", "symptom", "teaches")}
+
+
+def hint(scenario_id: str, n: int, params: dict[str, str] | None = None,
+         lang: str | None = None) -> str:
+    """Hint n (1-based), translated; the ladder goes from where to look to the command."""
+    from .content import problem_text
     f = SCENARIOS.get(scenario_id)
     if not f:
         raise KeyError(scenario_id)
     if n < 1 or n > len(f.hints):
         raise IndexError(n)
-    return _fill(f.hints[n - 1], params or {})
+    return _fill(problem_text(f.hints[n - 1], lang), params or {})
 
 
 def is_fixed(stdout: str, expect: str = "True") -> bool:
@@ -986,6 +1225,11 @@ _remoteadmin.register_faults(_reg)
 from . import pki as _pki  # noqa: E402
 _pki.register_faults(_reg)
 
+# The certificate-authority lab: a template taken off the issuing CA, the
+# ACME renewal timer stopped on the step-ca server (winlab/calab.py).
+from . import calab as _calab  # noqa: E402
+_calab.register_faults(_reg)
+
 # Time: the NTP server, the domain hierarchy, skew and time zones
 # (winlab/timesync.py).
 from . import timesync as _timesync  # noqa: E402
@@ -995,6 +1239,16 @@ _timesync.register_faults(_reg)
 # (winlab/wsbackup.py).
 from . import wsbackup as _wsbackup  # noqa: E402
 _wsbackup.register_faults(_reg)
+
+# VM-level backup on the Hyper-V host: a deleted VM, a checkpoint a backup
+# left behind (winlab/vmbackup.py).
+from . import vmbackup as _vmbackup  # noqa: E402
+_vmbackup.register_faults(_reg)
+# Bareos on the disaster-recovery lab's backup server and clients: the
+# storage daemon's disk full, a client's Director password changed
+# (winlab/bareos.py).
+from . import bareos as _bareos  # noqa: E402
+_bareos.register_faults(_reg)
 
 # Imaging: a WDS server that stops answering PXE clients (winlab/imaging.py).
 from . import imaging as _imaging  # noqa: E402
@@ -1032,11 +1286,23 @@ _mail.register_faults(_reg)
 # agent pointed at the wrong port (winlab/containers.py).
 from . import containers as _containers  # noqa: E402
 _containers.register_faults(_reg)
+# Kubernetes administration: a kubelet that will not start, the API server
+# pointed at etcd's peer port, a leftover taint, a lockdown NetworkPolicy, a
+# stopped storage provisioner, a RoleBinding with the wrong subject
+# (winlab/kubeadm.py).
+from . import kubeadm as _kubeadm  # noqa: E402
+_kubeadm.register_faults(_reg)
 
 # Dynamic routing: OSPF timers that disagree, an MTU that stalls the database
 # exchange, an eBGP neighbour with the wrong AS (winlab/routing.py).
 from . import routing as _routing  # noqa: E402
 _routing.register_faults(_reg)
+
+# Advanced networking on open source: a leaf that stopped advertising its
+# VXLAN VNI in EVPN, a keepalived pair split by a VRID that differs, a flow
+# exporter sending to the wrong port (winlab/advnet.py).
+from . import advnet as _advnet  # noqa: E402
+_advnet.register_faults(_reg)
 
 # IPv6: router advertisements switched off, a DHCPv6 scope on the wrong
 # prefix, a missing AAAA and PTR, ICMPv6 blocked (winlab/ipv6.py).
@@ -1052,6 +1318,32 @@ _webproxy.register_faults(_reg)
 # office out, a rule written and never loaded (winlab/ids.py).
 from . import ids as _ids  # noqa: E402
 _ids.register_faults(_reg)
+
+# Monitoring dashboards: rule files Prometheus no longer finds, Grafana's
+# data source on the wrong port, a silence that swallows every alert
+# (winlab/dashlab.py).
+from . import dashlab as _dashlab  # noqa: E402
+_dashlab.register_faults(_reg)
+# The AI data center: a drained node, GPU counts that drift, a MUNGE key and
+# a clock that lock a node out, an NFS export on the wrong network, a full
+# checkpoint volume, a model moved under the server, a context too big for
+# memory (winlab/aidc.py).
+from . import aidc as _aidc  # noqa: E402
+_aidc.register_faults(_reg)
+# The aws-cloud lab: a login script that overrides the CLI's region, a
+# pipeline policy that names the bucket instead of its objects, the lab's
+# root gone from ops01's trust store (winlab/aws.py).
+from . import aws as _aws  # noqa: E402
+_aws.register_faults(_reg)
+# The azure-admin lab: a ReadOnly lock left from an audit, an allowed-locations
+# assignment with the wrong values, a stored access policy that expired, a
+# slot swap that moved the database setting (winlab/azure.py).
+from . import azure as _azure  # noqa: E402
+_azure.register_faults(_reg)
+# Remote support: the Mesh Agent stopped, a hosts entry that sends it to the
+# wrong server, MeshCentral unable to bind port 443 (winlab/remotesupport.py).
+from . import remotesupport as _remotesupport  # noqa: E402
+_remotesupport.register_faults(_reg)
 
 # Remote access: the CRL blocked at the edge, the SSTP certificate for the
 # wrong name, NPS's default deny above the group's policy, a split tunnel
@@ -1075,10 +1367,19 @@ _databases.register_faults(_reg)
 from . import automation as _automation  # noqa: E402
 _automation.register_faults(_reg)
 
+# Network automation: the inventory's network_cli gone (winlab/netauto.py).
+from . import netauto as _netauto  # noqa: E402
+_netauto.register_faults(_reg)
+
 # The admin's documentation tools: a PC's GLPI Agent stopped, the wiki's data
 # folder not writable, GLPI's database switched off (winlab/doctools.py).
 from . import doctools as _doctools  # noqa: E402
 _doctools.register_faults(_reg)
+
+# Network operations: LibreNMS's poller container stopped with no restart
+# policy (winlab/netops.py).
+from . import netops as _netops  # noqa: E402
+_netops.register_faults(_reg)
 
 # Wear: a service that crashed after the night's updates with no recovery
 # options, a web server's logs never cleaned (winlab/wearfaults.py).
@@ -1096,18 +1397,42 @@ _fileops.register_faults(_reg)
 from . import identityops as _identityops  # noqa: E402
 _identityops.register_faults(_reg)
 
+# Switch security and device logins: a rogue DHCP server someone plugged into the
+# office LAN, the RADIUS server's key for the router retyped wrong
+# (winlab/snooping.py, winlab/aaa.py).
+from . import aaa as _aaa  # noqa: E402
+from . import snooping as _snooping  # noqa: E402
+_snooping.register_faults(_reg)
+_aaa.register_faults(_reg)
+
 # Faults winlab breaks from outside the machine: a DC's disk reverted to a
 # checkpoint (winlab/dcrollback.py). host_break runs them for `winlab break`
 # and the Break button; the verify still runs inside the machine.
-HOST_BREAKS = {"dc-rollback": "winlab.dcrollback"}
+# HR's joiner and leaver requests (winlab/lifecycle.py) set a scene on the DC
+# and the mail server and mail the helpdesk: "module:function" names which.
+HOST_BREAKS = {"dc-rollback": "winlab.dcrollback", "voice-vlan": "winlab.lldp",
+               "hr-joiner": "winlab.lifecycle:joiner_break", "hr-leaver": "winlab.lifecycle:leaver_break",
+               "ios-confreg": "winlab.iosboot:confreg_break", "ios-lockout": "winlab.iosboot:lockout_break",
+               "poe-budget": "winlab.poe", "phys-split": "winlab.cabletest:split_break",
+               "phys-wrong-port": "winlab.cabletest:wrong_port_break"}
+
+
+def _host_module(scenario_id: str):
+    import importlib
+    modname, _, fn = HOST_BREAKS[SCENARIOS[scenario_id].host].partition(":")
+    mod = importlib.import_module(modname)
+    return mod, getattr(mod, fn or "host_break")
 
 
 def host_break(scenario_id: str, lab_name: str, node: str, clear: bool = False,
                say=lambda line: None) -> tuple[bool, str]:
-    import importlib
-    f = SCENARIOS[scenario_id]
-    mod = importlib.import_module(HOST_BREAKS[f.host])
-    return mod.host_break(lab_name, node, clear, say=say)
+    return _host_module(scenario_id)[1](lab_name, node, clear, say=say)
+
+
+def host_break_is_quick(scenario_id: str) -> bool:
+    """Whether a break from outside takes seconds (the desktop waits for it
+    and says what happened) rather than minutes and a restart."""
+    return bool(getattr(_host_module(scenario_id)[0], "QUICK", False))
 # Security operations: a WEF source that cannot read its Security log, a Wazuh
 # agent pointed at a server that is gone, a scan target that stopped answering
 # ping, legacy audit policy overriding the baseline, the software share closed
@@ -1115,3 +1440,207 @@ def host_break(scenario_id: str, lab_name: str, node: str, clear: bool = False,
 # renew, the daily report's log folder locked (winlab/secops.py).
 from . import secops as _secops  # noqa: E402
 _secops.register_faults(_reg)
+# A phone's switch port advertising the wrong voice VLAN over LLDP-MED, set
+# from outside the phone (winlab/lldp.py).
+from . import lldp as _lldp  # noqa: E402
+_lldp.register_faults(_reg)
+# The Linux track: an idmap range too small, a file server's lost trust, a
+# share folder's Linux permissions reset, SMB1 only, a zone file BIND will not
+# load, and Windows DNS refusing the transfer to BIND (winlab/linuxdomain.py).
+from . import linuxdomain as _linuxdomain  # noqa: E402
+_linuxdomain.register_faults(_reg)
+# File sharing: share permissions cut to Read, access-based enumeration off, a
+# namespace folder's targets offline, the DFS Replication firewall rules closed,
+# a Samba share limited to the wrong network (winlab/filesharing.py).
+from . import filesharing as _filesharing  # noqa: E402
+_filesharing.register_faults(_reg)
+# EIGRP and HSRP on the router-protocols lab: rtr-edge put in another EIGRP AS,
+# rtr-edge's HSRP speaker on the other version (winlab/ioseigrp.py, winlab/ioshsrp.py).
+from . import ioseigrp as _ioseigrp  # noqa: E402
+from . import ioshsrp as _ioshsrp  # noqa: E402
+_ioseigrp.register_faults(_reg)
+_ioshsrp.register_faults(_reg)
+# The router console's layer 3 services on the router-protocols lab: a NAT
+# pool exhausted and an IP SLA never scheduled (broken on the lab router's
+# console settings), and on rtr-edge an OSPF key, a PIM RP and an IS-IS area
+# and level that no longer match the lab router's (winlab/consolel3.py).
+from . import consolel3 as _consolel3  # noqa: E402
+_consolel3.register_faults(_reg)
+HOST_BREAKS.update(_consolel3.HOSTS)
+# The router console's CCNP routing on the router-protocols lab: a BGP
+# prefix-list and an iBGP next hop broken on the lab router's console
+# settings, and on rtr-edge an OSPF stub flag and the LDP loopback taken
+# out of OSPF (winlab/ccnpfaults.py).
+from . import ccnpfaults as _ccnpfaults  # noqa: E402
+_ccnpfaults.register_faults(_reg)
+HOST_BREAKS.update(_ccnpfaults.HOSTS)
+# HR's requests for a joiner and a leaver, worked from osTicket through AD,
+# the mail server and GLPI (winlab/lifecycle.py).
+from . import lifecycle as _lifecycle  # noqa: E402
+_lifecycle.register_faults(_reg)
+
+# Security incident drills: an SSH brute force and a backdoor account on the
+# Ubuntu servers, staged for Wazuh to alert on (winlab/incidents.py).
+from . import incidents as _incidents  # noqa: E402
+_incidents.register_faults(_reg)
+
+# Printer support: the spooler's dependencies, a queue's driver and port on
+# the Windows print server; CUPS's queue switches, device URI, driver filter
+# and sharing (winlab/printing.py).
+from . import printing as _printing  # noqa: E402
+_printing.register_faults(_reg)
+
+# Linux administration basics on linux-by-hand's practice server: a line in
+# fstab for a disk that is not there, cron given a user that does not exist,
+# a deleted log still held open, a timer systemd cannot parse
+# (winlab/linuxadmin.py).
+from . import linuxadmin as _linuxadmin  # noqa: E402
+_linuxadmin.register_faults(_reg)
+
+# Linux administration, part two, on linux-by-hand's lx01 and lx02: a job
+# started at a raised priority, a rootless container's user without
+# lingering, a mirror without a member or a spare, and a Kea configuration
+# whose pool lies outside its subnet (winlab/linuxplus.py).
+from . import linuxplus as _linuxplus  # noqa: E402
+_linuxplus.register_faults(_reg)
+
+# Linux identity and single sign-on on linux-in-the-domain: sssd.conf made
+# world-readable on the FreeIPA client, sss gone from nsswitch's sudoers
+# line, and Grafana holding a client secret Keycloak does not know
+# (winlab/linuxidentity.py).
+from . import linuxidentity as _linuxidentity  # noqa: E402
+_linuxidentity.register_faults(_reg)
+
+# The analyst's desk (CySA+ style, defensive only): a quiet foothold to hunt
+# on a server, a reported phishing mail to triage, Sysmon's channel switched
+# off, and a Wazuh suppression rule with no condition (winlab/blueteam.py).
+from . import blueteam as _blueteam  # noqa: E402
+_blueteam.register_faults(_reg)
+
+# Incident response in depth (defensive only, harmless plants): a task to hunt
+# across the fleet, a share to sweep with YARA, a beaconing task worked as an
+# incident, a Velociraptor client lost, a Zeek script that does not parse, a
+# Sigma-converted Wazuh rule with the wrong field names (winlab/irtools.py).
+from . import irtools as _irtools  # noqa: E402
+_irtools.register_faults(_reg)
+
+# Desktop support on Windows 11: a deleted boot entry, a PC stuck in Safe Mode,
+# a hosts-file redirect, a home router's fixed address, a slow start, a memory
+# leak and a "PC booster" nuisance (winlab/desksupport.py).
+from . import desksupport as _desksupport  # noqa: E402
+_desksupport.register_faults(_reg)
+# A blue screen at every start after a "driver update" switched the disk
+# controller's driver off (winlab/bluescreen.py), and the printer's own
+# faults as its sensors report them: a jam, toner empty, an empty tray
+# (winlab/printerfaults.py).
+from . import bluescreen as _bluescreen  # noqa: E402
+from . import printerfaults as _printerfaults  # noqa: E402
+_bluescreen.register_faults(_reg)
+_printerfaults.register_faults(_reg)
+
+# Windows Server availability and trust: DHCP failover's port closed, an
+# RODC's branch group moved to the Denied list, a selective trust's Allowed
+# to Authenticate grants removed (winlab/serverha.py).
+from . import serverha as _serverha  # noqa: E402
+_serverha.register_faults(_reg)
+# Windows Server hybrid: a SET team down to one card, a cluster's file share
+# witness closed to the cluster, SMB over QUIC's UDP 443 blocked, BranchCache
+# switched off on the content server's shares (winlab/wshybrid.py).
+from . import wshybrid as _wshybrid  # noqa: E402
+_wshybrid.register_faults(_reg)
+
+# The router's and the switches' start-up: a configuration register left at
+# 0x2142 after a password recovery, and a switch nobody can log in to with a
+# PC's port shut (winlab/iosboot.py; both end with the lab's power cut).
+from . import iosboot as _iosboot  # noqa: E402
+_iosboot.register_faults(_reg)
+
+# DevOps: a runner pointed at a Forgejo that is not there, the deploy target's
+# Docker no longer trusting the lab registry over HTTP, the deploy account's
+# .ssh opened up so sshd's StrictModes ignores its key (winlab/devops.py).
+from . import devops as _devops  # noqa: E402
+_devops.register_faults(_reg)
+
+# Desk-side support, second batch: the troubleshooting method on a ticket
+# mailed to the lab's osTicket (an outbound rule blocking SMB), a PC on the
+# DHCP server's deny filter (APIPA), a broken Winsock catalog, one user's
+# proxy left on, and a metered office network (winlab/deskops.py).
+from . import deskops as _deskops  # noqa: E402
+_deskops.register_faults(_reg)
+HOST_BREAKS.update(_deskops.HOST_BREAKS)
+# The physical layer on the workbench switches: a desk with link lights and
+# no network (a split pair the cable tester finds), a cable in a port of
+# another VLAN traced with the toner (winlab/cabletest.py), and a PoE budget
+# used up by new access points (winlab/poe.py).
+from . import cabletest as _cabletest  # noqa: E402
+from . import poe as _poe  # noqa: E402
+_cabletest.register_faults(_reg)
+_poe.register_faults(_reg)
+# CCNA and Network+ basics, broken on the switches and the router from outside
+# the PC (a native VLAN mismatch, a VLAN missing from a trunk, a port in the
+# wrong VLAN, err-disabled, a duplex mismatch, an access list the wrong way
+# round, NAT's sides swapped, another machine's address) and inside it (a
+# wrong gateway, a wrong mask) (winlab/netbasics.py).
+from . import netbasics as _netbasics  # noqa: E402
+_netbasics.register_faults(_reg)
+HOST_BREAKS.update(_netbasics.HOSTS)
+# Rapid spanning tree: core's port to the floor switch given PortFast and BPDU
+# guard as if a desk were there, so the floor switch's BPDUs err-disable it
+# (winlab/stp.py; mstpd enforces it on the router when it was fetched).
+from . import stp as _stp  # noqa: E402
+_stp.register_faults(_reg)
+HOST_BREAKS.update(_stp.HOSTS)
+# Storm control err-disabling a server's port, a private-VLAN host in the
+# wrong community, an IPv6 list that blocks neighbour discovery and RA guard
+# on the uplink to the router, set from outside the machines (winlab/l2checks.py).
+from . import l2checks as _l2checks  # noqa: E402
+_l2checks.register_faults(_reg)
+HOST_BREAKS.update(_l2checks.HOSTS)
+# FTP backups of the devices' configurations: the backup account's folder
+# given to root, so vsftpd refuses the upload after a good login
+# (winlab/ftpscp.py).
+from . import ftpscp as _ftpscp  # noqa: E402
+_ftpscp.register_faults(_reg)
+# Wi-Fi on a Linux laptop over the real air (vwifi): the access point's key
+# rotated under a saved profile, a profile pinned to the other band
+# (winlab/vwifi.py).
+from . import vwifi as _vwifi  # noqa: E402
+_vwifi.register_faults(_reg)
+HOST_BREAKS[_vwifi.HOST_KEY] = "winlab.vwifi:key_rotated_break"
+# Vendor Wi-Fi gear: a WLAN out of the 9800-style controller's policy tag, a
+# lightweight AP sent by DNS to a retired controller, an EWC's guest WLAN lost
+# on reload without write memory, an Aruba change never committed, an AP's
+# RADIUS secret that no longer matches NPS's (winlab/wifivendors.py).
+from . import wifivendors as _wifivendors  # noqa: E402
+_wifivendors.register_faults(_reg)
+HOST_BREAKS.update(_wifivendors.HOSTS)
+# The company phone's MDM: Headwind MDM's panel moved off the port the phones
+# were enrolled with, a pushed app's stored URL naming the server's old name
+# (winlab/hmdm.py).
+from . import hmdm as _hmdm  # noqa: E402
+_hmdm.register_faults(_reg)
+# Server hardware and storage (Server+ style): a member kicked out of the
+# student's md RAID array on lx01, a data disk taken offline under an
+# OfflineAll SAN policy on fs01 (winlab/serverhw.py).
+from . import serverhw as _serverhw  # noqa: E402
+_serverhw.register_faults(_reg)
+
+# PC technician calls on Windows 11 (CompTIA A+ Core 2 software troubleshooting):
+# USB storage disabled, no sound, a custom display scale, an Edge policy
+# hijack, an app missing its runtime, a broken .log association, a mapped
+# drive to a retired server, search off, a runaway log, a tiny page file, UAC
+# denying standard users, a user's keyboard and region (winlab/pcsupport.py).
+from . import pcsupport as _pcsupport  # noqa: E402
+_pcsupport.register_faults(_reg)
+
+
+# Hardware faults of a PC, set from outside it and found at the bench and in
+# Windows: a dead or overloaded power supply, a stick that stops POST or is
+# not detected, a dead CPU fan, a flat CMOS battery, a loose network card or
+# SATA cable, no video after a processor swap, a drive failing SMART
+# (winlab/hwfaults.py, winlab/pcbuild.py).
+from . import hwfaults as _hwfaults  # noqa: E402
+_hwfaults.register_faults(_reg)
+HOST_BREAKS.update(_hwfaults.HOSTS)
+# What a lab with no PC fills them with: a verify that cannot pass.
+DEFAULTS.update(_hwfaults.DEFAULTS)

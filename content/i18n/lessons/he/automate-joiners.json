@@ -1,0 +1,67 @@
+{
+ "title": "אוטומציה של קליטת עובדים מקובץ ה-CSV של משאבי אנוש",
+ "summary": "הפוך את לולאת Import-Csv החד-פעמית לסקריפט שהגיליון השבועי של משאבי אנוש עובר בו לבד: עם בדיקות, עם רישום, ובטוח להרצה פעמיים.",
+ "why": "בפעם הראשונה שמגיעים עובדים חדשים, לולאה בקונסולה מספיקה (השיעור onboard-new-starters). בשבוע השלישי זו כבר מטלה שמשתבשת ביום שאתה לא נמצא: משאבי אנוש שולחים את אותו אדם פעמיים, מחלקה שאף אחד לא סיפר עליה ל-IT, שגיאת הקלדה בשם משתמש. סקריפט קליטה הוא אותה לולאה עם הבדיקות שמנהל זהיר עושה בעין: האם החשבון כבר קיים, האם יש למחלקה קבוצה, האם כל העמודות קיימות. מה שעובר נוצר; מה שנכשל נכתב ללוג במילים שמשאבי אנוש יכולים לפעול לפיהן; הגיליון מועבר כדי שלעולם לא יעובד פעמיים; ומשימה מתוזמנת מריצה אותו כל בוקר.\n\nלחץ על שבור והגיליון של השבוע ממשאבי אנוש מגיע ל-C:\\HR\\Joiners ב-dc01, תיקיית ההפקדה שהשיתוף שלהם מצביע עליה. שש שורות: למחלקה אחת עדיין אין קבוצה, ואדם אחד מופיע בגיליון פעמיים.",
+ "concepts": [
+  "תיקיית הפקדה: משאבי אנוש כותבים, הסקריפט של IT קורא, תיקיית Processed שומרת את מה שבוצע ותיקיית Logs מסבירה למה משהו לא בוצע",
+  "אידמפוטנטיות: הרצה שנייה של אותו גיליון לא משנה כלום, כי הסקריפט מדלג על חשבונות שקיימים (Get-ADUser -Filter על SamAccountName)",
+  "אימות לפני יצירה: קבוצת ה-G- של המחלקה חייבת להתקיים, ה-SamAccountName חייב להיות פנוי, העמודות הנדרשות חייבות להיות מלאות",
+  "סיסמה ראשונה שאף אחד לא מקליד: נוצרת לכל אדם, מוגדרת עם -ChangePasswordAtLogon ונמסרת בערוץ נפרד (לעולם לא בלוג)",
+  "הרצה ללא השגחה: משימה מתוזמנת כ-SYSTEM על ה-DC (או gMSA עם הרשאות מואצלות), Start-Transcript או קובץ לוג לכל הרצה, ו-LastTaskResult למעקב"
+ ],
+ "steps": [
+  "לחץ על שבור (או winlab break dc01 hr-joiners-drop). קרא את הגיליון: Import-Csv C:\\HR\\Joiners\\joiners-*.csv | Format-Table DisplayName, Department, SamAccountName.",
+  "השווה אותו למדריך: Get-ADGroup -Filter \"Name -like 'G-*'\" | Select-Object Name. רשום את המחלקה שאין לה קבוצה ואת האדם שמופיע פעמיים.",
+  "צור את התיקיות שהסקריפט משתמש בהן: New-Item -ItemType Directory C:\\Scripts, C:\\HR\\Joiners\\Processed, C:\\HR\\Joiners\\Logs -Force.",
+  "כתוב את C:\\Scripts\\New-Starters.ps1 בעורך (notepad או PowerShell ISE). המבנה שלו: $log = Join-Path C:\\HR\\Joiners\\Logs ('run-' + (Get-Date -Format yyyyMMdd-HHmm) + '.log'); foreach ($file in Get-ChildItem C:\\HR\\Joiners -Filter *.csv -File) { foreach ($r in Import-Csv $file.FullName) { ... }; Move-Item $file.FullName C:\\HR\\Joiners\\Processed -Force }.",
+  "בתוך לולאת השורות, בדוק לפני שאתה יוצר: if (Get-ADUser -Filter \"SamAccountName -eq '$($r.SamAccountName)'\") { Add-Content $log \"skip $($r.SamAccountName): exists\"; continue }; $g = 'G-' + ($r.Department -replace ' ', ''); if (-not (Get-ADGroup -Filter \"Name -eq '$g'\")) { Add-Content $log \"refuse $($r.SamAccountName): no group $g\"; continue }.",
+  "צור את החשבון עם סיסמה ראשונה אקראית לכל אדם ($first = ConvertTo-SecureString -AsPlainText -Force ([guid]::NewGuid().ToString('N').ToUpper() + '-' + [guid]::NewGuid().ToString('N'))); New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $first -ChangePasswordAtLogon $true -Enabled $true; Add-ADGroupMember $g -Members $r.SamAccountName; Add-Content $log \"created $($r.SamAccountName)\".",
+  "הרץ אותו פעם אחת ידנית: powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1. קרא את הלוג ובדוק את החשבונות עם Get-ADUser -Filter * -SearchBase 'OU=Staff,DC=corp,DC=lab' -Properties Department | Format-Table SamAccountName, Department, Enabled.",
+  "הוכח שהוא בטוח להרצה פעמיים: העתק את הגיליון המעובד בחזרה ל-C:\\HR\\Joiners והרץ את הסקריפט שוב. הלוג אומר skip לכל שורה; שום דבר חדש לא מופיע.",
+  "תזמן אותו: Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM -RunLevel Highest. Start-ScheduledTask 'New starters', ואז (Get-ScheduledTaskInfo 'New starters').LastTaskResult הוא 0.",
+  "ספר למשאבי אנוש על Marketing במילים שלהם (שורת הלוג), ואז לחץ על בדוק את העבודה שלי."
+ ],
+ "pitfalls": [
+  "סקריפט בלי בדיקת 'exists' נכשל באמצע ההרצה השנייה, או גרוע מזה, יוצר את tbecker2 כי מישהו 'תיקן' את השגיאה עם מונה.",
+  "כתיבת הסיסמאות הראשונות ללוג או ל-CSV: יותר אנשים ממה שאתה חושב קוראים לוגים. מסור את הסיסמה בטלפון או פנים אל פנים, וחייב את האדם לשנות אותה בכניסה הראשונה.",
+  "שם מחלקה עם רווח (Front desk) הופך ל-G-Frontdesk במקום אחד ול-G-FrontDesk במקום אחר; נרמל אותו בשורה אחת בסקריפט והשתמש בערך הזה בכל מקום.",
+  "לעולם אל תיתן למשימה המתוזמנת להריץ סקריפט שכל אחד יכול לערוך: רק מנהלים צריכים הרשאת כתיבה ל-C:\\Scripts, אחרת מי שיכול לשנות את הסקריפט מריץ קוד כ-SYSTEM על DC."
+ ],
+ "verify": [
+  "העובדים החדשים של השבוע",
+  "תיקיית ההפקדה, הגיליונות המעובדים והלוגים",
+  "המשימה והתוצאה האחרונה שלה"
+ ],
+ "quiz": [
+  {
+   "q": "משאבי אנוש שולחים את אותו אדם בשני גיליונות. מה מונע מסקריפט הקליטה להיכשל או ליצור כפילות?",
+   "answer": "הוא בודק אם ה-SamAccountName קיים ומדלג על השורה אם כן",
+   "wrong": [
+    "New-ADUser דורס את החשבון הקיים",
+    "Import-Csv מסיר שורות כפולות",
+    "המשימה המתוזמנת רצה רק פעם אחת לכל גיליון"
+   ],
+   "why": "בדיקה לפני יצירה הופכת את הסקריפט לאידמפוטנטי: הרצה פעמיים לא משנה כלום בפעם השנייה."
+  },
+  {
+   "q": "שורה מציינת מחלקה שאין לה קבוצה. מה הסקריפט צריך לעשות?",
+   "answer": "לדחות את השורה ולרשום בלוג את הסיבה, כדי שמשאבי אנוש או IT יתקנו את המקור",
+   "wrong": [
+    "ליצור את המשתמש בלי קבוצה",
+    "ליצור את הקבוצה החסרה תוך כדי ריצה",
+    "לעצור את כל ההרצה"
+   ],
+   "why": "המצאת קבוצות מתוך גיליון אלקטרוני מגדילה את המדריך בטעות; שורה שנדחתה עם סיבה היא שאלה לאדם."
+  },
+  {
+   "q": "איפה צריכה להיות הסיסמה הראשונה של עובד חדש?",
+   "answer": "נמסרת בערוץ נפרד, עם חובת שינוי בכניסה הבאה",
+   "wrong": [
+    "בלוג ההרצה, כדי שהתמיכה תוכל לקרוא אותה",
+    "ב-CSV שמשאבי אנוש שולחים",
+    "בשדה Description של החשבון"
+   ],
+   "why": "לוגים ותיאורים קריאים לרבים; הסיסמה הראשונה חיה רק עד שהאדם מתחבר ובוחר סיסמה משלו."
+  }
+ ]
+}

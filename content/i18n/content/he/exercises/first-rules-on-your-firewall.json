@@ -1,0 +1,20 @@
+{
+ "The firewall you installed routes the office out and blocks port 8080": "חומת האש שהתקנת מנתבת את המשרד החוצה וחוסמת את פורט 8080",
+ "fw01 is the OPNsense or pfSense CE firewall you installed by hand. winlab runs\nnothing inside it, so the grade is read from both sides of it: pc01 on the LAN\nmust lease its address from the firewall and reach the Internet host only\nthrough it (the LAN switch has no other way out), inet01 must see pc01 arrive\nfrom the firewall's WAN address, the GUI must stay closed to the Internet, and\nyour first rule must block TCP 8080, a port inet01 really answers on.": "fw01 הוא חומת האש OPNsense או pfSense CE שהתקנת ידנית. winlab אינו מריץ דבר בתוכה, ולכן הציון נקרא משני צדדיה: pc01 ב-LAN חייב לקבל את הכתובת שלו מחומת האש ולהגיע למארח האינטרנט רק דרכה (למתג ה-LAN אין יציאה אחרת), inet01 חייב לראות את pc01 מגיע מכתובת ה-WAN של חומת האש, ממשק ה-GUI חייב להישאר סגור לאינטרנט, והכלל הראשון שלך חייב לחסום TCP 8080, פורט ש-inet01 באמת עונה בו.",
+ "Install the firewall on fw01, WAN on em0 (the ISP), LAN on em1": "התקן את חומת האש ב-fw01, WAN ב-em0 (ספק האינטרנט), LAN ב-em1",
+ "Let pc01 lease 192.168.1.x from the firewall and finish the setup wizard from its browser": "תן ל-pc01 לקבל כתובת 192.168.1.x מחומת האש וסיים את אשף ההגדרה מהדפדפן שלו",
+ "Open http://198.51.100.10/ from pc01 through the firewall": "פתח את http://198.51.100.10/ מ-pc01 דרך חומת האש",
+ "On LAN, block TCP to port 8080 above the default allow rule; port 80 keeps working": "ב-LAN, חסום TCP לפורט 8080 מעל כלל ההיתר של ברירת המחדל; פורט 80 ממשיך לעבוד",
+ "pc01 leased its address from the firewall on the LAN": "pc01 קיבל את הכתובת שלו מחומת האש ב-LAN",
+ "The firewall serves DHCP on LAN once em1 is assigned as LAN; ipconfig /renew on pc01, and check the cable on fw01's port 2": "חומת האש מגישה DHCP ב-LAN לאחר ש-em1 הוקצה כ-LAN; ipconfig /renew ב-pc01, ובדוק את הכבל בפורט 2 של fw01",
+ "pc01 reaches the Internet host on port 80, through the firewall": "pc01 מגיע למארח האינטרנט בפורט 80, דרך חומת האש",
+ "The LAN switch has no other way out: WAN must be em0 with a lease from the ISP segment, and LAN's default allow rule must still be there": "למתג ה-LAN אין יציאה אחרת: ה-WAN חייב להיות em0 עם חכירה ממקטע ספק האינטרנט, וכלל ההיתר של ברירת המחדל ב-LAN חייב עדיין להיות קיים",
+ "the Internet host saw pc01 arrive from the firewall's WAN address (NAT)": "מארח האינטרנט ראה את pc01 מגיע מכתובת ה-WAN של חומת האש (NAT)",
+ "Open http://198.51.100.10/ from pc01 once; with outbound NAT on (automatic is the default) the source is the WAN lease": "פתח את http://198.51.100.10/ מ-pc01 פעם אחת; כש-NAT יוצא מופעל (אוטומטי הוא ברירת המחדל) המקור הוא חכירת ה-WAN",
+ "the firewall's web GUI is closed to the Internet": "ממשק ה-web GUI של חומת האש סגור לאינטרנט",
+ "Nothing may pass in on WAN to the GUI: remove any WAN rule that allows 443, and leave the GUI listening on LAN": "שום דבר לא רשאי להיכנס דרך WAN אל ה-GUI: הסר כל כלל WAN שמתיר 443, והשאר את ה-GUI מאזין ב-LAN",
+ "TCP 8080 to the Internet host is blocked from the LAN": "TCP 8080 אל מארח האינטרנט חסום מה-LAN",
+ "Firewall, Rules, LAN: Block, TCP, source LAN net, destination port 8080, above the default allow rule; then Apply": "Firewall, Rules, LAN: Block, TCP, מקור LAN net, פורט יעד 8080, מעל כלל ההיתר של ברירת המחדל; ואז Apply",
+ "inet01 still answers on 8080, so the block is the firewall's": "inet01 עדיין עונה בפורט 8080, כך שהחסימה היא של חומת האש",
+ "inet01's test service starts with the lab; power it off and on from the Workbench if it is not listening": "שירות הבדיקה של inet01 עולה עם המעבדה; כבה והדלק אותו משולחן רשת אם הוא אינו מאזין"
+}

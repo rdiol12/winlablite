@@ -1,0 +1,68 @@
+{
+ "title": "SSH למתג: מפתחות, משתמשים מקומיים וקווי ה-vty",
+ "summary": "תן למתג של corp כתובת ניהול, מפתח RSA ומנהל מקומי, אפשר רק SSH בקווי ה-vty שלו, והתחבר מ-pc01 עם ssh במקום כבל הקונסולה.",
+ "why": "כבל הקונסולה הוא הדרך להגדיר מתג בפעם הראשונה; אף אחד לא הולך לחדר התקשורת בשביל כל שינוי אחרי זה. מתגים מנוהלים דרך הרשת, ו-telnet, הדרך הישנה, שולח את הסיסמה וכל פקודה בטקסט גלוי שכל אחד ב-LAN יכול לקרוא. SSH מצפין את ההפעלה ומוכיח שהמתג הוא המתג (מפתח המארח שלו).\n\nב-IOS, SSH דורש חמישה דברים: hostname שונה מזה של היצרן ו-ip domain-name (יחד הם נותנים שם לזוג המפתחות), זוג מפתחות RSA (crypto key generate rsa; הגודל חשוב: SSH גרסה 2 צריך לפחות 768 סיביות ולקוחות של היום רוצים 2048), משתמש מקומי עם סוד (username), וקווי ה-vty (המסופים הווירטואליים של המתג, line vty 0 4) שמוגדרים להשתמש בהם: login local, transport input ssh. ip ssh version 2 מכבה את הפרוטוקול הישן. והמתג צריך כתובת שאפשר להגיע אליו בה: interface vlan 1 ו-ip default-gateway.\n\nבמעבדה הזו שרת ה-SSH של המתג הוא Dropbear בנתב, בתוך כתובת הניהול של המתג עצמו, וההפעלה שהוא פותח היא אותה קונסולה שאתה מקליד בה עם הכבל. עם login local לקוח ה-ssh שלך שואל את הסיסמה, כמו עם מתג אמיתי, והיא נבדקת מול רשימת המשתמשים של המתג עצמו (הסוד של המשתמש, כפי שהקלדת אותו בקונסולה).",
+ "concepts": [
+  "Telnet שולח את הסיסמה בגלוי; SSH מצפין את כל ההפעלה ומאמת את השרת עם מפתח המארח שלו",
+  "זוג המפתחות נקרא hostname.domain: crypto key generate rsa מסרב עד ששניהם מוגדרים",
+  "גודל מפתח: 768 סיביות הוא המינימום של SSH גרסה 2, 2048 הוא מה שצריך להשתמש בו; show ip ssh אומר 1.99 (שתי הגרסאות) עד ip ssh version 2",
+  "line vty 0 4 הם חמש הכניסות דרך הרשת; login local בודק את רשימת המשתמשים, transport input ssh מסרב ל-telnet",
+  "username admin privilege 15 נוחת ישר במצב מורשה (#); משתמש ברמה 1 צריך את ה-enable secret, ובלעדיו קו vty עונה % No password set",
+  "החיבור הראשון מבקש ממך לאשר את טביעת האצבע של מפתח המארח; show ip ssh מדפיס את זו שיש להשוות אליה. מפתח שהשתנה בהמשך הוא אזהרה לעצור, לא להמשיך ללחוץ",
+  "המפתחות חיים עם התצורה: אם נוצרו אבל לא נכתבו, הם נעלמים אחרי טעינה מחדש"
+ ],
+ "steps": [
+  "תן למתג כתובת. בקונסולה של המתג של corp (לחיצה כפולה עליו בשולחן רשת, או כבל הקונסולה): enable, configure terminal, interface vlan 1, ip address 10.10.10.2 255.255.255.0, no shutdown, exit, ip default-gateway 10.10.10.1. מ-pc01, ping 10.10.10.2 עונה.",
+  "נסה ליצור מפתח מיד: crypto key generate rsa modulus 2048. המתג מסרב: % Please define a hostname other than Switch. hostname CORP-SW1, ושוב: % Please define a domain-name first. ip domain-name corp.lab.",
+  "עכשיו המפתח: crypto key generate rsa (בלי הגודל, הוא שואל: How many bits in the modulus [512]: ענה 2048). The name for the keys will be: CORP-SW1.corp.lab, ו-%SSH-5-ENABLED: SSH 1.99 has been enabled. do show ip ssh, ו-do show crypto key mypubkey rsa כדי לראות את החצי הציבורי.",
+  "כבה את גרסה 1: ip ssh version 2. ואז משתמש וסוד מורשה: username admin privilege 15 secret ואחריו סיסמה משלך; ו-enable secret עם סיסמה אחרת (show running-config מציג את שתיהן כגיבובים מסוג 9, אף פעם לא את המילים).",
+  "קווי ה-vty: line vty 0 4, login local, transport input ssh, end. ואז copy running-config startup-config: זוג המפתחות נשמר איתה, וזוג שלא נשמר נעלם אחרי טעינה מחדש.",
+  "התחבר מ-pc01: פתח PowerShell והרץ ssh admin@10.10.10.2 (לקוח OpenSSH הוא חלק מ-Windows 11). בפעם הראשונה הוא מציג את טביעת האצבע של מפתח המארח של המתג: השווה אותה לזו ש-show ip ssh מדפיס, וענה yes. ואז ssh שואל admin@10.10.10.2's password:, ואתה נוחת ב-CORP-SW1#.",
+  "זה אותו מתג: show running-config | include hostname, ו-show ssh (ההפעלה שלך, גרסה 2.0). בצע שינוי דרך SSH (interface fa0/1, description pc01) וראה אותו גם בקונסולה. exit מסיים את ההפעלה.",
+  "ראה את כללי ה-vty נוגסים: בקונסולה, line vty 0 4, transport input telnet. ssh מ-pc01 נסגר עכשיו מיד: הקו לא מקבל SSH. החזר את transport input ssh. ואז נסה username admin privilege 1 (אותו סוד): הכניסה שלך ב-SSH נוחתת ב-CORP-SW1>, ו-enable בלי enable secret היה עונה % No password set.",
+  "עשה אותו דבר בנתב אם תרצה: כבר יש לו כתובות בכל VLAN (10.10.10.1 כאן): hostname, ip domain-name, crypto key generate rsa modulus 2048, username, line vty 0 4 login local transport input ssh; ואז ssh admin@10.10.10.1 מ-pc01."
+ ],
+ "pitfalls": [
+  "crypto key generate rsa עם 512 הסיביות של ברירת המחדל: SSH גרסה 2 צריך 768, ולקוחות ssh עדכניים מסרבים למפתחות מתחת ל-1024. השתמש ב-2048.",
+  "שכחת copy running-config startup-config: אחרי טעינה מחדש המפתחות נעלמו ו-SSH כבוי שוב.",
+  "login בקווי ה-vty בלי סיסמת קו: % Password required, but none set. login local רוצה username; בלעדיו אף אחד לא נכנס.",
+  "transport input all משאיר את telnet מופעל: במתג אמיתי כל אחד ב-LAN יכול לקרוא סיסמת telnet. השתמש ב-ssh בלבד.",
+  "Catalyst אמיתי עם IOS ישן מציע רק אלגוריתמים ישנים של החלפת מפתחות והצפנה, ולקוח ssh עדכני צריך -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa כדי לדבר איתו. שרת ה-SSH של המעבדה חדש יותר ולא צריך אותם.",
+  "המעבדה הזו לא מריצה שרת telnet: transport input telnet נשמר ומוצג, אבל רק SSH מאזין."
+ ],
+ "verify": [
+  "שרתי ה-SSH בנתב: איזה התקן, באיזו כתובת, וקווי ה-vty שלו"
+ ],
+ "quiz": [
+  {
+   "q": "crypto key generate rsa עונה % Please define a domain-name first. למה המתג צריך אחד?",
+   "answer": "זוג המפתחות נקרא hostname.domain-name, אז שניהם חייבים להיות מוגדרים קודם",
+   "wrong": [
+    "SSH מחפש את המתג ב-DNS",
+    "בקר התחום חותם על המפתח",
+    "שם התחום הוא סיסמת ה-SSH"
+   ],
+   "why": "IOS נותן לזוג המפתחות לשימוש כללי את השם המלא של ההתקן."
+  },
+  {
+   "q": "מה עושים login local ו-transport input ssh תחת line vty 0 4?",
+   "answer": "כניסות דרך הרשת מבקשות משתמש מרשימת המשתמשים של המתג, ורק SSH רשאי להיכנס",
+   "wrong": [
+    "הקונסולה מבקשת משתמש",
+    "מפתחות SSH מחליפים סיסמאות",
+    "Telnet מוצפן"
+   ],
+   "why": "login local בודק את רשימת המשתמשים המקומית; transport input אומר אילו פרוטוקולים קווי ה-vty מקבלים."
+  },
+  {
+   "q": "יצרת את מפתח ה-RSA ונכנסת דרך SSH, ואז טענת מחדש את המתג בלי לשמור. מה קורה?",
+   "answer": "SSH כבוי שוב: זוג המפתחות מעולם לא נכתב עם התצורה",
+   "wrong": [
+    "כלום: מפתחות תמיד נשמרים",
+    "המתג יוצר מפתח חדש באתחול",
+    "SSH חוזר ל-telnet"
+   ],
+   "why": "המפתחות נשמרים ב-NVRAM עם התצורה; write memory (copy running-config startup-config) שומר אותם."
+  }
+ ]
+}

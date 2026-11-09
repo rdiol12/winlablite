@@ -1,0 +1,15 @@
+{
+ "Not enough memory to start the machines": "Memoria insuficiente para iniciar las máquinas",
+ "Common problems": "Problemas comunes",
+ "memory": "memoria",
+ "ram": "ram",
+ "not enough memory": "memoria insuficiente",
+ "won't start": "no arranca",
+ "refuses": "se niega",
+ "low-memory": "poca memoria",
+ "lean": "ligero",
+ "thrash": "saturación",
+ "slow": "lento",
+ "What to do when winlab says the machines do not fit.": "Qué hacer cuando winlab dice que las máquinas no caben.",
+ "Before anything boots, winlab compares what the machines need with the memory free on this PC right now. If they do not fit, it trims the servers for that run, and if they still do not fit it says so instead of letting the PC grind to a halt.\n\n- **Start only what the lesson needs.** Use Start these machines in the Lab guide (or `winlab learn start <lesson>`), not the whole lab.\n- **Turn machines off** that the current lesson does not use, in Machines.\n- **Close other programs** on this PC, especially browsers with many tabs. They take memory the machines could use.\n- **Use the Low-memory profile** (the switch in the Start menu, or Settings for this lab). It turns off what an isolated machine gets nothing from, so a server works in 1.5 GB. It takes effect the next time a machine is set up.\n\nAn 8 GB PC runs every one- and two-machine lesson. See System requirements for more.": "Antes de que nada arranque, winlab compara lo que necesitan las máquinas con la memoria libre en este PC en ese momento. Si no caben, recorta los servidores para esa ejecución y, si aun así no caben, lo dice en lugar de dejar que el PC se arrastre hasta detenerse.\n\n- **Inicia solo lo que necesita la lección.** Usa Iniciar estas máquinas en la Guía del laboratorio (o `winlab learn start <lesson>`), no todo el laboratorio.\n- **Apaga las máquinas** que la lección actual no usa, en Máquinas.\n- **Cierra otros programas** en este PC, sobre todo navegadores con muchas pestañas. Ocupan memoria que podrían usar las máquinas.\n- **Usa el Perfil de poca memoria** (el interruptor del menú Inicio, o la Configuración de este laboratorio). Desactiva lo que no aporta nada a una máquina aislada, de modo que un servidor funciona con 1,5 GB. Surte efecto la próxima vez que se prepare una máquina.\n\nUn PC de 8 GB ejecuta todas las lecciones de una y dos máquinas. Consulta Requisitos del sistema para más información."
+}

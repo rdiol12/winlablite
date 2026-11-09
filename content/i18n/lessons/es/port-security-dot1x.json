@@ -1,0 +1,75 @@
+{
+ "title": "Seguridad de puerto y 802.1X: quién puede conectarse a un puerto del switch",
+ "summary": "Bloquea un puerto de escritorio al PC que corresponde allí, observa cómo el portátil de un visitante lo pone en err-disabled, y luego haz que el puerto pregunte a NPS quién se está conectando.",
+ "why": "Un puerto de switch acepta tramas de quien esté conectado a él. Cualquiera que encuentre una toma de pared libre, o desconecte un PC de escritorio y conecte un portátil, está en tu red con una dirección de tu servidor DHCP, junto a tu controlador de dominio. Dos cosas cierran esa puerta, y las redes reales usan ambas.\n\nLa seguridad de puerto es la lista propia del switch: un puerto permite las direcciones que conoce (escritas a mano, o aprendidas de las primeras tramas y conservadas: sticky), hasta un máximo, y cualquier otra es una infracción. Shutdown, el modo predeterminado, pone el puerto en err-disabled: la luz de enlace se apaga, el PC que hay detrás también pierde la red, y el puerto sigue caído hasta que alguien lo mira. Detiene al portátil ocasional, pero una dirección es fácil de copiar.\n\n802.1X pregunta quién está ahí. Hasta que un servidor RADIUS (NPS o FreeRADIUS) diga que sí, el puerto no deja pasar nada salvo EAPOL, las tramas que llevan la conversación. El switch es el autenticador: hace de intermediario entre la máquina (el suplicante, Wired AutoConfig en Windows) y el servidor, que comprueba un usuario o un equipo contra Active Directory y tus directivas.\n\nEn este laboratorio ambos son reales en el router, donde el cable de cada máquina es un puerto de su bridge: la seguridad de puerto es la familia bridge de nftables (el kernel aprende las direcciones en un conjunto dimensionado al máximo y cuenta lo que descarta), y 802.1X es el controlador cableado de hostapd en el puerto, que habla RADIUS con el servidor que construyes. Nada en el servidor ni en el PC está configurado por ti.",
+ "concepts": [
+  "Direcciones seguras: configuradas (escritas a mano), sticky (aprendidas y luego conservadas en la configuración en ejecución), dinámicas (aprendidas y olvidadas cuando cae el enlace); máximo 1 por defecto",
+  "Modos de infracción: shutdown (pone el puerto en err-disabled, el predeterminado), restrict (descarta, cuenta, registra), protect (descarta en silencio)",
+  "err-disabled: el switch apagó el puerto por sí mismo; shutdown y luego no shutdown lo recupera, o errdisable recovery cause psecure-violation con un temporizador",
+  "Roles de 802.1X: suplicante (la máquina), autenticador (el puerto del switch), servidor de autenticación (RADIUS: NPS o FreeRADIUS)",
+  "EAPOL lleva EAP entre la máquina y el switch; el switch lo envuelve en RADIUS hacia el servidor; PEAP con MS-CHAP v2 es el método habitual en Windows y necesita un certificado en el servidor",
+  "El cliente RADIUS es el switch, que el servidor conoce por la dirección de la que vienen sus solicitudes y una clave compartida; una clave incorrecta no recibe ninguna respuesta, ni siquiera un rechazo"
+ ],
+ "steps": [
+  "Abre el Banco de red y enciende el router, dc01 y pc01. Abre el panel frontal del switch de corp (clic derecho sobre él) y anota el número de puerto de pc01 (Fa0/N). Las máquinas están numeradas de izquierda a derecha en el lienzo.",
+  "Bloquea el puerto de pc01 a pc01: abre la consola del switch y luego enable, configure terminal, interface fa0/N (el de pc01), switchport port-security, switchport port-security mac-address sticky. Aparece un pequeño candado en ese puerto en el lienzo. Deja pc01 en marcha un rato (habla desde el arranque) y luego show port-security interface fa0/N y show running-config: la dirección de pc01 es ahora una línea sticky en la configuración.",
+  "Haz de visitante: clic derecho en el cable de pc01 y elige Conectar el portátil de un visitante en este escritorio (un portátil en un pequeño switch de escritorio que comparte la toma de pared). En un segundo el candado se vuelve rojo y pc01 muestra Network cable unplugged. En la consola: show interfaces status (err-disabled), show port-security (una infracción contada), show port-security interface fa0/N (la última dirección de origen es la del portátil), show logging (PSECURE_VIOLATION con la dirección del portátil).",
+  "Recupera el puerto de la forma correcta: primero quita el portátil del visitante (su menú en el lienzo), luego interface fa0/N, shutdown, no shutdown. Prueba una vez al revés: con el portátil aún conectado, el puerto vuelve directamente a err-disabled.",
+  "Prueba los modos más suaves: switchport port-security violation restrict y conecta de nuevo el portátil. pc01 sigue funcionando y la cuenta en show port-security sube. protect descarta igual de silencioso y no cuenta nada. Quita el portátil y vuelve a poner violation shutdown (no switchport port-security violation).",
+  "Deja que los puertos se recuperen solos si quieres: errdisable recovery cause psecure-violation y errdisable recovery interval 60 en configure terminal; show errdisable recovery muestra el temporizador y los puertos en espera.",
+  "Construye el servidor RADIUS en dc01: Install-WindowsFeature NPAS -IncludeManagementTools y luego netsh nps add registeredserver (o en nps.msc, Register server in Active Directory). PEAP necesita un certificado en NPS: uno de tu CA si construiste AD CS, o para el laboratorio New-SelfSignedCertificate -DnsName dc01.corp.lab -CertStoreLocation Cert:\\LocalMachine\\My. La lección radius-with-nps profundiza en las directivas.",
+  "Da a conocer el switch a NPS. Las solicitudes salen del router desde su dirección en la red de dc01 (show radius server-group all en el switch dice cuál, aquí 10.10.10.1): New-NpsRadiusClient -Name corp-switch -Address 10.10.10.1 -SharedSecret <una clave que elijas>. En nps.msc, Policies > Network Policies > New: condición NAS Port Type = Ethernet y Windows Groups = CORP\\Domain Computers (y Domain Users), acceso concedido, autenticación Microsoft: Protected EAP (PEAP) con tu certificado.",
+  "O, en una máquina Linux en lugar de NPS: conecta la memoria del paquete freeradius (antes winlab packs fetch freeradius en este PC), apt install freeradius, añade el switch a /etc/freeradius/3.0/clients.conf con la misma clave, un usuario a mods-config/files/authorize, y ejecuta freeradius -X para ver cada solicitud.",
+  "Apunta el switch a él: configure terminal, aaa new-model, aaa authentication dot1x default group radius, radius server NPS, address ipv4 10.10.10.10 auth-port 1812 acct-port 1813, key <la misma clave>, exit, dot1x system-auth-control. Luego en el puerto de pc01: interface fa0/N, authentication port-control auto, dot1x pae authenticator. El candado se vuelve ámbar: pc01 no está autorizado y el puerto solo deja pasar EAPOL.",
+  "Convierte pc01 en suplicante: en pc01, Services: Wired AutoConfig, inicio Automatic, Start (sc.exe config dot3svc start= auto y luego net start dot3svc). En las propiedades de la tarjeta de red aparece una nueva pestaña Authentication: marca Enable IEEE 802.1X authentication, elige Microsoft: Protected EAP (PEAP) y en Additional settings elige User or computer authentication. Confía en el certificado del servidor (o, solo para este laboratorio, desmarca Verify the server's identity).",
+  "Míralo funcionar: show authentication sessions en el switch (Auth, con la dirección de pc01), show authentication sessions interface fa0/N (el nombre de usuario que vio NPS: host/pc01.corp.lab para el equipo), show logging (DOT1X-5-SUCCESS). En dc01, el registro Security tiene el evento 6272 (acceso concedido). El candado se vuelve verde. En pc01, netsh lan show interfaces.",
+  "Mira una clave incorrecta: en el switch, radius server NPS, key something-else. La siguiente autenticación de pc01 nunca termina: show authentication sessions sigue en Running, show radius server-group all cuenta tiempos de espera agotados y ninguna respuesta, y el registro System de dc01 tiene el evento 18 de NPS (el Message-Authenticator no es válido). Vuelve a poner la clave correcta.",
+  "Practica: haz clic en el switch y en Seguridad de puerto y 802.1X elige Esconder un dispositivo no autorizado o Romper la clave RADIUS. Encuéntralo con el lienzo y la consola, arréglalo y pulsa Comprobar mi arreglo."
+ ],
+ "pitfalls": [
+  "Activar la seguridad de puerto con el PC apagado: la primera dirección que ve el puerto es la que conserva. Si el portátil de un visitante llegó primero, clear port-security sticky interface fa0/N y deja que hable el PC.",
+  "no switchport port-security en un puerto err-disabled no lo recupera: shutdown y luego no shutdown.",
+  "Un cliente RADIUS registrado con la dirección de administración del switch cuando sus solicitudes vienen de otra nunca coincide: NPS registra un cliente desconocido y no responde nada. Usa la dirección de la que vienen las solicitudes.",
+  "Una clave compartida incorrecta parece un servidor caído, no un rechazo: el servidor no puede verificar la solicitud, la descarta y solo lo dice en su propio registro.",
+  "PEAP sin certificado en NPS falla en el lado del servidor: evento 6273 con el motivo 'the client could not be authenticated' o sin directiva coincidente; revisa los métodos de autenticación de la directiva.",
+  "En este laboratorio 802.1X corre en el router, así que las peticiones RADIUS del switch salen de la dirección del router en la red del servidor, incluso después de darle al switch una dirección de administración propia (interface vlan 1, ip address). Registra esa dirección del router en NPS."
+ ],
+ "verify": [
+  "las reglas de puerto en el router: direcciones permitidas, contadores de infracciones, lo que 802.1X dejó entrar",
+  "las sesiones de hostapd en los puertos que usan 802.1X",
+  "NPS: el switch como cliente RADIUS",
+  "pc01: Wired AutoConfig y su estado 802.1X"
+ ],
+ "quiz": [
+  {
+   "q": "Un puerto tiene switchport port-security con los valores predeterminados. Aparece en él una segunda dirección. ¿Qué pasa?",
+   "answer": "El puerto pasa a err-disabled: shutdown es el modo de infracción predeterminado y el máximo es 1",
+   "wrong": [
+    "La segunda dirección se descarta y se cuenta",
+    "La primera dirección se sustituye por la segunda",
+    "Nada hasta que un administrador lo apruebe"
+   ],
+   "why": "Máximo 1, infracción shutdown: el switch apaga el puerto por sí mismo, luz de enlace apagada, hasta shutdown / no shutdown o un temporizador de recuperación."
+  },
+  {
+   "q": "En 802.1X, ¿qué dispositivo es el cliente RADIUS?",
+   "answer": "El switch (el autenticador)",
+   "wrong": [
+    "El PC (el suplicante)",
+    "El controlador de dominio",
+    "El servidor NPS"
+   ],
+   "why": "La máquina habla EAPOL con el switch; el switch es lo que NPS conoce, por su dirección y la clave compartida."
+  },
+  {
+   "q": "La clave compartida del switch no coincide con la de NPS. ¿Qué ve el PC?",
+   "answer": "La autenticación nunca termina: NPS descarta las solicitudes que no puede verificar y no responde nada",
+   "wrong": [
+    "Un Access-Reject inmediato",
+    "Se le deja entrar sin autenticación",
+    "El puerto del switch pasa a err-disabled"
+   ],
+   "why": "Sin la clave correcta NPS no puede comprobar el Message-Authenticator, así que descarta la solicitud y registra el evento 18; el switch solo ve tiempos de espera agotados."
+  }
+ ]
+}

@@ -1,0 +1,76 @@
+{
+ "title": "חומת אש מבוססת אזורים בנתב: שרתים ומשתמשים באזורים משלהם",
+ "summary": "פצל את המשרד ל-LAN של שרתים ול-LAN של משתמשים בנתב, שים כל אחת באזור אבטחה, ותן למשתמשים להגיע רק לשירותים שחבר דומיין צריך, כשתעבורת החזרה נעקבת במצב.",
+ "why": "רשימת גישה על ממשק נתב היא רשימה של חבילות שהוא מעביר. היא לא יודעת\nכלום על שיחות: כדי להכניס את התשובות אתה כותב רשימה שנייה לכיוון השני,\nושומר על השתיים מתואמות ביד. בנתב עם יותר משתי רשתות זה הופך למבוך שאף\nאחד לא מעז לגעת בו.\n\nה-zone-based policy firewall (ZBF) של Cisco חושב במקום זאת באזורים. כל\nממשק מוכנס לאזור (SERVERS, USERS, ה-DMZ), ותעבורה בין שני אזורים נזרקת\nאלא אם zone-pair, בכיוון אחד, נושא מדיניות שמתירה אותה. תעבורה בתוך אזור\nאחד עוברת; ממשק באזור לעולם לא מדבר עם ממשק שאינו באף אזור. המדיניות בנויה\nמאותם שלושה חלקים כמו QoS: class-map אומר איזו תעבורה, policy-map אומר מה\nלעשות עם כל מחלקה (inspect, pass או drop), וה-zone-pair מחיל אותה. Inspect\nהוא העיקר: הוא זוכר את השיחה, כך שהתשובה של השרת חוזרת בלי כלל משלה, ושום\nדבר שהשרת מתחיל בעצמו לא עובר.\n\nבמעבדה הזו הנתב הוא נתב Linux אמיתי (VM של Alpine) והקונסולה הופכת את מה\nשאתה מקליד לכללי nftables שלו: האזורים הופכים לקבוצות ממשקים, inspect מסמן\nאת החיבור במעקב החיבורים של הליבה (conntrack), ותעבורת החזרה של חיבורים\nמסומנים היא מה שחוזר. show policy-map type inspect zone-pair sessions קורא\nאת החיבורים האלה מהנתב. שום דבר לא מוכן בשבילך: את ה-LAN השנייה, האזורים\nוהמדיניות אתה בונה בעצמך.",
+ "concepts": [
+  "אזורים: ממשקים באותו אזור מדברים בחופשיות; בין שני אזורים הכול נזרק עד ש-zone-pair מתיר; ממשק עם אזור לעולם לא מדבר עם ממשק בלי אזור",
+  "אזור self הוא הנתב עצמו (הכתובות שלו): תעבורה אליו וממנו חופשית עד ש-zone-pair מציין את self, ואז רק מה שהמדיניות הזו מתירה",
+  "ל-zone-pair יש כיוון: source USERS destination SERVERS שופט רק את מה שמשתמשים מתחילים; התשובות לתעבורה שנבדקה חוזרות בעצמן",
+  "class-map type inspect match-any (כל שורת match אחת) או match-all (כל שורות ה-match): match protocol <name> או match access-group <list>",
+  "policy-map type inspect: inspect (עם מצב, תעבורת חזרה מותרת), pass (כיוון אחד, בלי מצב: התשובה צריכה pass משלה), drop (ברירת המחדל של class-default), drop log",
+  "ב-IOS שמות הפרוטוקולים מגיעים ממנוע הבדיקה; כאן match protocol הוא לפי פורט מוכר (http 80, dns 53, microsoft-ds 445): לכל דבר אחר השתמש ברשימת גישה",
+  "חבר דומיין Windows צריך מבקר התחום שלו DNS (53), Kerberos (88), LDAP (389), SMB (445), את ממפה נקודות הקצה של RPC (135) ואת פורטי ה-RPC הדינמיים (49152 עד 65535), החלפת סיסמה של Kerberos (464), הקטלוג הגלובלי (3268) וזמן (123)"
+ ],
+ "steps": [
+  "סיים קודם את השיעורים הראשונים של המעבדה: dc01 הוא בקר התחום עם DNS ו-DHCP, fs01 ו-pc01 הם חברי דומיין. פתח את שולחן רשת והדלק את הנתב, dc01, fs01 ו-pc01.",
+  "בנה את LAN המשתמשים. בשולחן רשת הוסף מתג וגרור את הקישור העולה שלו (Gi0/1) לפורט פנוי של הנתב, ואז גרור את הכבל של pc01 מהמתג של corp למתג החדש. בקונסולה של הנתב: enable; show ip interface brief אומר לך באיזה פורט נמצא המתג החדש (GigabitEthernet0/0/1 אם זה השני).",
+  "תן לו כתובת וחלק חכרות מהנתב: configure terminal, interface g0/0/1, ip address 10.10.20.1 255.255.255.0, no shutdown, exit, ip dhcp excluded-address 10.10.20.1 10.10.20.49, ip dhcp pool USERS, network 10.10.20.0 255.255.255.0, default-router 10.10.20.1, dns-server 10.10.10.10, domain-name corp.lab, end.",
+  "ב-pc01: ipconfig /release, ipconfig /renew, ואז ipconfig /all: כתובת ב-10.10.20.0/24, שער 10.10.20.1, DNS 10.10.10.10. היכנס עם חשבון דומיין ופתח את \\\\fs01\\c$ כמנהל: הכול עובד כי עוד שום דבר לא מסנן.",
+  "האזורים: configure terminal, zone security SERVERS, description dc01 and fs01, exit, zone security USERS, exit. אל תכניס אליהם ממשקים עדיין: ברגע שממשק אחד באזור והשני לא, הם מפסיקים לדבר.",
+  "הרשימה של מה שחבר דומיין צריך, כרשימת גישה מורחבת: ip access-list extended DOMAIN-SVCS, ואז permit udp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq 88, permit udp any host 10.10.10.10 eq 88, permit tcp any host 10.10.10.10 eq 389, permit udp any host 10.10.10.10 eq 389, permit tcp any host 10.10.10.10 eq 135, permit tcp any host 10.10.10.10 range 49152 65535, permit tcp any host 10.10.10.10 eq 3268, permit tcp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq ntp, permit tcp any 10.10.10.0 0.0.0.255 eq 445, exit.",
+  "המחלקות: class-map type inspect match-any DOMAIN, match access-group name DOMAIN-SVCS, exit. class-map type inspect match-any PING, match protocol icmp, exit.",
+  "המדיניות: policy-map type inspect USERS-TO-SERVERS, class type inspect DOMAIN, inspect, class type inspect PING, inspect, class class-default, drop log, exit, exit.",
+  "ה-zone-pair, בכיוון אחד בלבד: zone-pair security U2S source USERS destination SERVERS, service-policy type inspect USERS-TO-SERVERS, exit. אין זוג בכיוון השני: השרתים רשאים לענות, לעולם לא להתחיל.",
+  "עכשיו הממשקים: interface g0/0/0, zone-member security SERVERS, interface g0/0/1, zone-member security USERS, end. show zone security מציג את שני האזורים עם החברים שלהם; show zone-pair security מציג את U2S ואת המדיניות שלו.",
+  "בדוק מ-pc01: Test-NetConnection fs01 -Port 445 (True), gpupdate /force (שתי המדיניות מתעדכנות), ping dc01 (עונה). צא והיכנס שוב: הכניסה לדומיין עובדת דרך חומת האש.",
+  "קרא את המצב בנתב: show policy-map type inspect zone-pair sessions. כל חיבור שנבדק הוא שורה: הכתובת והפורט של pc01 אל אלה של dc01 ב-88, 389, 445. הרץ שוב אחרי דקה: אלה שהסתיימו נעלמו, הפתוחים נשארים.",
+  "נסה את הכיוון השני: ב-dc01, Test-Connection pc01 -Count 2 נכשל, ו-Test-NetConnection pc01 -Port 445 נכשל. show policy-map type inspect zone-pair עדיין מציג רק את U2S: שום דבר לא מתיר SERVERS אל USERS, אז הנתב זורק את זה, ומונה הזריקות באימות של winlab למטה (no-zone-pair SERVERS USERS) עולה.",
+  "נסה משהו שהמדיניות לא מציינת: ב-pc01, Test-NetConnection 10.10.10.10 -Port 80 נכשל; class-default drop log זרק אותו. שנה פעם אחת את drop log ל-pass log (policy-map type inspect USERS-TO-SERVERS, class class-default, pass log): ה-SYN יוצא עכשיו, אבל שום תשובה לא חוזרת, כי pass לא שומר מצב ואין זוג לתשובה. החזר את drop log.",
+  "שמור: write memory. show running-config מציג את ה-class-maps, ה-policy-map, האזורים, ה-zone-pair ואת zone-member security בכל ממשק."
+ ],
+ "pitfalls": [
+  "הכנסת ממשק אחד לאזור לפני השני מנתקת את שתי הרשתות מיד: צור קודם את האזורים ואת המדיניות, והוסף את החברים בסוף.",
+  "pass אינו inspect: הוא מתיר כיוון אחד ולא שומר מצב, ולכן התשובות צריכות pass משלהן ב-zone-pair בכיוון השני. השתמש ב-inspect לכל דבר שיש לו תשובה.",
+  "zone-pair בלי service-policy זורק הכול בכיוון שלו; המדיניות חייבת להתקיים לפני ש-service-policy type inspect מציין אותה.",
+  "חבר דומיין Windows משתמש בפורטי RPC דינמיים (49152 עד 65535) מול ה-DC שלו; השמט אותם ומדיניות קבוצתית והכניסה נכשלות בדרכים שנראות כמו בעיות DNS.",
+  "ה-DHCP pool בנתב הוא אזור self: הוא ממשיך לעבוד כשהאזורים במקום כי שום zone-pair לא מציין את self. הוסף זוג מ-USERS אל self ו-DHCP יצטרך מחלקה משלו (udp 67).",
+  "match protocol כאן הוא לפי פורט מוכר, לא בדיקה עמוקה: שרת אינטרנט בפורט 8080 אינו http לנתב הזה. ציין את הפורט עם רשימת גישה במקום."
+ ],
+ "verify": [
+  "כללי חומת האש בנתב: קבוצות אזורים, שרשראות zone-pair והמונים שלהן",
+  "חיבורים שנבדקו במעקב החיבורים של הנתב (מסומנים על ידי inspect)",
+  "pc01 מגיע ל-fs01 ב-SMB דרך חומת האש"
+ ],
+ "quiz": [
+  {
+   "q": "GigabitEthernet0/0/0 באזור SERVERS ו-GigabitEthernet0/1/0 לא באף אזור. מה עובר ביניהם?",
+   "answer": "שום דבר: ממשק עם אזור וממשק בלי אזור לעולם לא מדברים",
+   "wrong": [
+    "הכול, עד ש-zone-pair מציין אותם",
+    "רק מה שרשימת גישה בממשק בלי האזור מתירה",
+    "רק תעבורת חזרה"
+   ],
+   "why": "ברירת המחדל של ZBF: בתוך אזור אחד הכול עובר, בין אזורים רק מה ש-zone-pair מתיר, וחבר לעולם לא מדבר עם מי שאינו חבר."
+  },
+  {
+   "q": "ה-zone-pair מ-USERS אל SERVERS בודק SMB. מה מאפשר לתשובה של fs01 לחזור ל-pc01?",
+   "answer": "הבדיקה: היא עוקבת אחרי החיבור ומעבירה את תעבורת החזרה שלו",
+   "wrong": [
+    "zone-pair שני מ-SERVERS אל USERS שבודק SMB",
+    "class-default pass",
+    "שום דבר, התשובה נזרקת"
+   ],
+   "why": "inspect הוא עם מצב. רק מה ש-fs01 מתחיל בעצמו צריך זוג בכיוון השני."
+  },
+  {
+   "q": "מחלקה ב-policy-map של ZBF משתמשת ב-pass במקום ב-inspect. מה נשבר?",
+   "answer": "התשובות: pass לא שומר מצב, ולכן הן נזרקות אלא אם זוג בכיוון השני מעביר גם אותן",
+   "wrong": [
+    "שום דבר, pass ו-inspect זהים",
+    "החבילה הראשונה נזרקת",
+    "הרישום ביומן מפסיק"
+   ],
+   "why": "pass הוא היתר חד-כיווני וחסר מצב, כמו רשומה ברשימת גישה."
+  }
+ ]
+}

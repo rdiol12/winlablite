@@ -27,9 +27,21 @@ mistake: a Catalyst's EtherChannel misconfiguration guard err-disables the
 ``on`` side (channel-misconfig), and so does winlab, until shutdown / no
 shutdown on the port-channel after the modes are fixed.
 
-PAgP is Cisco's own protocol and the router's Linux bonding does not speak
-it: winlab applies PAgP's rules to decide whether a channel forms, and a
-PAgP channel that forms runs LACP on the wire. The consoles say so.
+PAgP is Cisco's own protocol and Linux bonding speaks only LACP, so PAgP is
+spoken by winlab-pagpd (winlab/pagpd.py), winlab's own small PAgP speaker,
+on the router: real PAgP frames (01:00:0c:cc:cc:cc, SNAP 0x0104, the layout
+Wireshark decodes) on every desirable or auto port, desirable ports asking,
+auto ports answering. Those ports start as ordinary ports of the switch's
+bridge; the speaker moves a port into the channel's bond (balance-xor, a
+non-LACP mode) only once PAgP agrees with the far end, and back out when it
+stops agreeing, so auto with auto never forms because neither end asks.
+``show pagp neighbor`` and ``show etherchannel summary`` read the speaker's
+state (/run/winlab-pagp.json) while the router runs; offline they show what
+PAgP's rules predict (compute()). The fabric's nftables drops PAgP frames
+at the bridges so a PDU never floods onto another cable. The speaker runs
+on Python 3 from the lab's own Alpine package volume
+(alpineovl.APPLIANCE_PACKAGES), like winlab-hsrpd; it was tested against
+itself only, never against a Cisco switch, and the consoles say so.
 
 Settings live with the switch's others ([devices."sw:<id>"]):
 ``chgrp:<port>`` = "<group> <mode>", ``po:<n>`` (the interface exists),
@@ -54,9 +66,15 @@ LB_DEFAULT = "src-mac"
 LB_WORDS = {"src-mac": "Source MAC address", "dst-mac": "Destination MAC address",
             "src-dst-mac": "Source XOR Destination MAC address", "src-ip": "Source IP address",
             "dst-ip": "Destination IP address", "src-dst-ip": "Source XOR Destination IP address"}
-PAGP_NOTE = ("% PAgP is Cisco's own protocol and the lab router's Linux bonding does not speak it: winlab "
-             "applies PAgP's rules (desirable asks, auto only answers), and a PAgP channel that forms runs "
-             "LACP on the wire here.")
+PAGP_NOTE = ("% PAgP here is winlab-pagpd, winlab's own PAgP speaker on the lab router (Linux bonding speaks "
+             "only LACP): real PAgP frames on the cables, desirable asks, auto only answers, and the ports bundle "
+             "(a Linux bond, balance-xor) once both ends agree. Tested against itself, not against a Cisco switch.")
+SPEAKER = "/usr/local/sbin/winlab-pagpd"
+SPEAKER_CONF = "/etc/winlab-pagp.json"
+SPEAKER_STATE = "/run/winlab-pagp.json"
+SPEAKER_PID = "/run/winlab-pagpd.pid"
+SPEAKER_LOG = "/var/log/winlab-pagp.log"
+PAGP_TABLE = "winlab_pagp"
 LIVE_CMD = "for f in /proc/net/bonding/stp*; do [ -e $f ] && echo \"#bond ${f##*/}\" && cat $f; done; true"
 
 
@@ -312,19 +330,30 @@ def render_switch(lab, sw: str, i: int, res, br: str, native: int, vids: list[in
     st = compute(lab)
     pre, post, bonded = [], [], {}
     for n, ports in groups(lab, sw).items():
+        bond, mode = bond_name(i, n), mode_of(lab, sw, n)
+        pol = LB[lb(lab, sw)]
+        if PROTO.get(mode) == "PAgP":
+            # The members stay ports of the bridge; winlab-pagpd moves them into the bond once PAgP agrees.
+            if not pagp_members(lab, st, sw, n):
+                continue
+            pre += [f"ip link add {bond} type bond mode balance-xor miimon 100 xmit_hash_policy {pol} || true"
+                    f"   # {sw} Po{n}: PAgP {mode}; winlab-pagpd bundles the members when PAgP agrees",
+                    f"ip link set dev {bond} alias {sw}-Po{n} || true"]
+            ps = res.ports.get(stp.End(sw, ports[0]))
+            post += [f"ip link set {bond} master {br}", f"bridge vlan add dev {bond} vid {native} pvid untagged"]
+            post += [f"bridge vlan add dev {bond} vid {v}" for v in vids]
+            post += [f"bridge link set dev {bond} cost {PO_COST} priority "
+                     f"{(ps.pid[0] if ps else stp.PORT_PRIORITY) // 4} 2>/dev/null || true", f"ip link set {bond} up"]
+            continue
         mine = [p for p in ports if st.flags.get((sw, p)) == "P" and (sw, p) in st.far]
         if not mine:
             continue
-        bond, mode = bond_name(i, n), mode_of(lab, sw, n)
-        pol = LB[lb(lab, sw)]
         if mode == "on":
             pre.append(f"ip link add {bond} type bond mode balance-xor miimon 100 xmit_hash_policy {pol} || true"
                        f"   # {sw} Po{n}: mode on, no negotiation")
         else:
             mac = stp.bridge_mac(lab, sw)
             passive = " lacp_active off" if mode in ("passive",) else ""
-            pre += ([f"# {sw} Po{n} is PAgP on its console: the bundle runs LACP on the wire (Linux has no PAgP)"]
-                    if PROTO[mode] == "PAgP" else [])
             pre.append(f"ip link add {bond} type bond mode 802.3ad miimon 100 lacp_rate fast xmit_hash_policy {pol} "
                        f"ad_actor_system {mac}{passive} 2>/dev/null || ip link add {bond} type bond mode 802.3ad "
                        f"miimon 100 lacp_rate fast || true   # {sw} Po{n}: LACP {mode}")
@@ -341,6 +370,101 @@ def render_switch(lab, sw: str, i: int, res, br: str, native: int, vids: list[in
         post += [f"bridge link set dev {bond} cost {cost} priority {pri} 2>/dev/null || true",
                  f"ip link set {bond} up"]
     return pre, bonded, post
+
+
+def pagp_members(lab, st: State, sw: str, n: int) -> list[str]:
+    """A PAgP group's ports winlab-pagpd speaks on: cabled to another switch
+    and not down (shut, err-disabled)."""
+    return [p for p in groups(lab, sw).get(n, []) if (sw, p) in st.far and st.flags.get((sw, p)) != "D"]
+
+
+def pagp_conf(plan) -> list[dict]:
+    """winlab-pagpd's ports: per desirable or auto port, its veth, the bond
+    it joins, and how it goes back into its switch's bridge."""
+    from . import stp
+    lab = plan.lab
+    st = compute(lab)
+    idx = {s: i for i, s in enumerate(devcli.switches(lab), 1)}
+    out = []
+    groups_ = stp.trees(lab)
+    native = stp.native_vid(plan) if groups_ else 0
+    for _, members in groups_:
+        vids = sorted({plan.segment_of(nw.id).vid for s in members for nw in devcli.vlans_of(lab, s)})
+        for sw in members:
+            for n in groups(lab, sw):
+                if PROTO.get(mode_of(lab, sw, n)) != "PAgP":
+                    continue
+                for p in pagp_members(lab, st, sw, n):
+                    if st.far[(sw, p)][0] not in members:
+                        continue
+                    e = stp.End(sw, p)
+                    out.append({"dev": f"stp{idx[sw]}g{stp.gi_no(p)}", "switch": sw, "port": p,
+                                "mode": member_of(lab, sw, p)[1], "group": n,
+                                "device_id": stp.bridge_mac(lab, sw),
+                                "device_name": devcli.hostname(lab, f"sw:{sw}")[:64],
+                                "port_name": devcli.short_if(p), "ifindex": stp.port_id(lab, e)[1],
+                                "bond": bond_name(idx[sw], n), "bridge": f"stp{idx[sw]}", "native": native,
+                                "vids": vids, "cost": stp.port_cost(lab, e),
+                                "priority": stp.port_priority(lab, e) // 4})
+    return out
+
+
+def speaker_source() -> bytes:
+    from pathlib import Path
+    from . import pagpd
+    return Path(pagpd.__file__).read_bytes()
+
+
+def speaker_hash() -> str:
+    import hashlib
+    return hashlib.sha256(speaker_source()).hexdigest()
+
+
+def _speaker_lines() -> list[str]:
+    import base64
+    import gzip
+    blob = base64.b64encode(gzip.compress(speaker_source(), mtime=0)).decode()
+    wrapped = "\n".join(blob[i:i + 76] for i in range(0, len(blob), 76))
+    return [f"mkdir -p {SPEAKER.rsplit('/', 1)[0]}",
+            f"base64 -d > {SPEAKER}.gz <<'WLPAGPD'\n{wrapped}\nWLPAGPD",
+            f"gunzip -c {SPEAKER}.gz > {SPEAKER} && chmod 755 {SPEAKER}; rm -f {SPEAKER}.gz"]
+
+
+# nftables on the router: PAgP frames stop at every bridge (the speaker reads
+# them on the veth first, with a raw socket). @ll,112,64 is the LLC/SNAP
+# header after the 14-octet Ethernet header: AA-AA-03, OUI 00-00-0C, PID 0x0104.
+PAGP_NFT = (f"table bridge {PAGP_TABLE} {{\n chain forward {{\n"
+            "  type filter hook forward priority -200; policy accept;\n"
+            "  ether daddr 01:00:0c:cc:cc:cc @ll,112,64 0xaaaa0300000c0104 drop\n }\n}")
+
+
+def pagp_lines(plan, reset: bool = False) -> list[str]:
+    """The router's PAgP: nftables keeping PAgP frames off the bridges, the
+    speaker installed (Python 3 from the lab's package volume), its file
+    written, and the speaker started or told to read it again; stopped when
+    no port speaks PAgP (on a rebuild). Nothing at all for a lab with no
+    desirable or auto port, so such a lab's script is as it was."""
+    import json
+    from . import ioshsrp
+    ports = pagp_conf(plan)
+    stop = [f"p=$(cat {SPEAKER_PID} 2>/dev/null); [ -n \"$p\" ] && kill \"$p\" 2>/dev/null; "
+            f"rm -f {SPEAKER_PID} {SPEAKER_CONF}",
+            f"nft delete table bridge {PAGP_TABLE} 2>/dev/null; true"]
+    if not ports:
+        return (["# PAgP: no desirable or auto port"] + stop) if reset else []
+    conf = json.dumps({"ports": ports}, indent=1, sort_keys=True)
+    out = ["# PAgP: winlab's own speaker, winlab-pagpd (winlab/pagpd.py), on the desirable and auto ports",
+           f"nft delete table bridge {PAGP_TABLE} 2>/dev/null",
+           f"nft -f - <<'WLPAGPNFT' || true\n{PAGP_NFT}\nWLPAGPNFT",
+           ioshsrp.INSTALL,
+           f"if [ \"$(sha256sum {SPEAKER} 2>/dev/null | cut -c1-64)\" != {speaker_hash()} ]; then"]
+    out += _speaker_lines() + ["fi"]
+    out += [f"cat > {SPEAKER_CONF} <<'WLPAGP'\n{conf}\nWLPAGP",
+            f"p=$(cat {SPEAKER_PID} 2>/dev/null)",
+            f"if [ -n \"$p\" ] && kill -0 \"$p\" 2>/dev/null; then kill -HUP \"$p\"; "
+            f"else setsid python3 {SPEAKER} -c {SPEAKER_CONF} -l {SPEAKER_LOG} </dev/null >/dev/null 2>&1 & "
+            f"echo $! > {SPEAKER_PID}; fi"]
+    return out
 
 
 def member_lines(dev: str, bond: str, rate: str) -> list[str]:
@@ -682,7 +806,41 @@ def _flags(con) -> tuple[State, dict]:
     data = _live(con)
     if data:
         flags.update({k: v for k, v in live_flags(con.lab, data).items() if flags.get(k) == "P"})
+    flags.update({k: pagp_flag(v) for k, v in _pagp_live(con).items()})
     return st, flags
+
+
+def pagp_flag(entry: dict) -> str:
+    """A port's flag from winlab-pagpd's state: P bundled (in the bond), w
+    agreed but not yet in the bond, I stand-alone, s suspended, D down."""
+    state = entry.get("state", "D")
+    if state == "P":
+        return "P" if entry.get("bundled") else "w"
+    return state if state in ("I", "s", "D") else "D"
+
+
+def parse_pagp(text: str) -> dict:
+    """winlab-pagpd's state file: {(switch, port): its entry}."""
+    import json
+    try:
+        data = json.loads(text or "")
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {(p.get("switch", ""), p.get("port", "")): p for p in data.get("ports", []) if isinstance(p, dict)}
+
+
+def _pagp_live(con) -> dict:
+    """The speaker's state for this switch's ports, while the router runs."""
+    lab, sw = con.lab, _sw(con)
+    if not con.powered() or not any(PROTO.get(mode_of(lab, sw, n)) == "PAgP" for n in groups(lab, sw)):
+        return {}
+    try:
+        got = parse_pagp(con._on_router(f"cat {SPEAKER_STATE} 2>/dev/null", timeout=15))
+    except devcli.CliError:
+        return {}
+    return {k: v for k, v in got.items() if k[0] == sw}
 
 
 def show_summary(con) -> str:
@@ -730,7 +888,8 @@ def show_detail(con) -> str:
         for p in members:
             f = flags.get((sw, p), "D")
             far = st.far.get((sw, p))
-            state = {"P": "Up Mstr Assoc In-Bndl", "I": "Up Indep", "s": "Up Susp", "D": "Down"}[f]
+            state = {"P": "Up Mstr Assoc In-Bndl", "I": "Up Indep", "s": "Up Susp", "D": "Down",
+                     "w": "Up Waiting"}.get(f, "Down")
             out += [f"Port: {devcli.short_if(p)}", "------------", "",
                     f"Port state    = {state}",
                     f"Channel group = {n}           Mode = {member_of(lab, sw, p)[1].capitalize()}",
@@ -801,6 +960,7 @@ def show_sysid(con) -> str:
 def show_pagp(con) -> str:
     lab, sw = con.lab, _sw(con)
     st, flags = _flags(con)
+    live = _pagp_live(con)
     out = ["Flags:  S - Device is sending Slow hello.  C - Device is in Consistent state.",
            "        A - Device is in Auto mode.        P - Device learns on physical port.", ""]
     for n in channels(lab, sw):
@@ -810,14 +970,31 @@ def show_pagp(con) -> str:
                 "          Partner              Partner          Partner         Partner Group",
                 "Port      Name                 Device ID        Port       Age  Flags   Cap."]
         for p in groups(lab, sw).get(n, []):
+            if live:
+                nb = (live.get((sw, p)) or {}).get("neighbor")
+                if not nb:
+                    continue
+                f = int(nb.get("flags", 0))
+                from . import pagpd
+                fl = ("S" if f & pagpd.F_SLOW else "") + ("C" if f & pagpd.F_CONSISTENT else "") + \
+                     ("A" if f & pagpd.F_AUTO else "") + "P"
+                out.append(f"{devcli.short_if(p):<10}{str(nb.get('name', ''))[:20]:<21}"
+                           f"{devcli.dotted_mac(str(nb.get('device_id', ''))):<17}{str(nb.get('port', ''))[:10]:<11}"
+                           f"{str(int(float(nb.get('age', 0)))) + 's':<5}{fl:<8}{format(int(nb.get('group_cap', 0)), 'X')}")
+                continue
             far = st.far.get((sw, p))
             if not far or PROTO.get(member_of(lab, *far)[1]) != "PAgP" or flags.get((sw, p)) == "D":
                 continue
-            fl = "SC" + ("A" if member_of(lab, *far)[1] == "auto" else "")
+            fm = member_of(lab, *far)[1]
+            if fm == "auto" and member_of(lab, sw, p)[1] == "auto":
+                continue      # neither end asks: an auto port never hears from an auto port
+            fl = "SC" + ("A" if fm == "auto" else "") + "P"
             out.append(f"{devcli.short_if(p):<10}{devcli.hostname(lab, 'sw:' + far[0])[:20]:<21}"
                        f"{devcli.dotted_mac(_bridge_mac(lab, far[0])):<17}{devcli.short_if(far[1]):<11}"
-                       f"{'1s':<5}{fl:<8}{'10001'}")
+                       f"{'1s':<5}{fl:<8}{format(member_of(lab, *far)[0], 'X')}")
         out.append("")
+    out.append("! read from winlab-pagpd on the lab router" if live else
+               "! the router is off: what PAgP's rules predict (winlab-pagpd speaks it when the router runs)")
     out.append(PAGP_NOTE)
     return "\n".join(out)
 

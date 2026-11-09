@@ -1,0 +1,58 @@
+{
+ "title": "El disco que se llenó",
+ "summary": "Los inicios de sesión son lentos, los servicios no pueden escribir y el servidor avisa de poco espacio en disco.",
+ "why": "Un volumen del sistema lleno rompe las cosas en órdenes extraños: los perfiles no cargan,\nlos registros de eventos se detienen, los servicios que escriben archivos temporales fallan, las actualizaciones fallan. El método\nes siempre el mismo: cuánto queda libre, qué creció, cuándo y por qué. Elimina solo\nlo que entiendas; un archivo que vuelve a aparecer significa que un proceso sigue escribiéndolo.",
+ "concepts": [
+  "Get-PSDrive y Get-Volume: espacio libre por volumen",
+  "Encontrar archivos grandes frente a carpetas grandes: Get-ChildItem -Recurse ordenado por Length; las herramientas tipo TreeSize hacen lo mismo",
+  "Sospechosos habituales: registros, cachés de actualizaciones, volcados de memoria, perfiles antiguos, una copia de seguridad escrita en el disco equivocado",
+  "Prevención: cuotas y umbrales de FSRM, separar los volúmenes de datos de los del sistema"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 disk-full). No leas todavía las pistas.",
+  "Reproduce el síntoma tal como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que has descartado.",
+  "Corrige la causa, no el síntoma. Después pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Busca en los registros la evidencia que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ],
+ "pitfalls": [
+  "Eliminar archivos de C:\\Windows para hacer sitio rompe Windows; el crecimiento casi siempre está en otra parte.",
+  "Un volumen que se llena repetidamente a la misma hora tiene una tarea programada detrás; mira qué se ejecuta a esa hora."
+ ],
+ "verify": [
+  "espacio libre",
+  "los archivos más grandes de C:"
+ ],
+ "quiz": [
+  {
+   "q": "¿De dónde no viene casi nunca el crecimiento del disco?",
+   "answer": "Del propio C:\\Windows: eliminar ahí rompe Windows",
+   "wrong": [
+    "De los registros",
+    "De los volcados de memoria",
+    "De los perfiles antiguos"
+   ],
+   "why": "Mira los registros, las cachés, los volcados, los perfiles y las copias mal dirigidas."
+  },
+  {
+   "q": "Un volumen se llena a la misma hora cada día. ¿Qué hay detrás?",
+   "answer": "Una tarea programada",
+   "wrong": [
+    "Un virus, siempre",
+    "Un disco defectuoso",
+    "Windows Search"
+   ],
+   "why": "Mira qué se ejecuta a esa hora."
+  },
+  {
+   "q": "¿Qué cmdlet muestra el espacio libre por volumen?",
+   "answer": "Get-Volume",
+   "wrong": [
+    "Get-Disk",
+    "Get-Partition",
+    "Get-PhysicalDisk"
+   ],
+   "why": "Get-PSDrive también sirve."
+  }
+ ]
+}

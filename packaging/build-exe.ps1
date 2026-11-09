@@ -13,7 +13,7 @@
 #   dist\winlab.exe                      the product
 #   dist\winlab-<version>-setup.exe      the installer customers run (needs
 #                                        Inno Setup 6.3+, free, on the build machine)
-#   dist\winlab-<version>-win64.zip      portable: exe + README, LICENSING, CURRICULUM
+#   dist\winlab-<version>-win64.zip      portable: exe + README, LICENSING, CURRICULUM, EULA (+ translations)
 #
 # What is and is not inside the exe (see LICENSING.md):
 #   in   CPython (PSF), winlab (yours), content pack (yours), PyInstaller's
@@ -50,12 +50,19 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-# The trial's source has no protect.py: it has no licensing code to protect.
-if (-not (Test-Path (Join-Path $PSScriptRoot 'protect.py'))) { $NoProtect = $true }
+# Windows PowerShell 5.1 turns any stderr line from a native program into a
+# terminating error under 'Stop', so a mere warning (PyInstaller's "running as
+# admin" notice, pip's update notice) would end the build. Native tools run
+# through this with 'Continue'; their exit codes are checked by hand.
+function Invoke-Native([scriptblock]$Command) {
+    $saved = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Command } finally { $ErrorActionPreference = $saved }
+}
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$version = & $Python -c "import winlab; print(winlab.__version__)"
+$version = Invoke-Native { & $Python -c "import winlab; print(winlab.__version__)" }
 if ($LASTEXITCODE -ne 0) { throw 'cannot import winlab; run from a checkout with Python 3.11+' }
 Write-Host "winlab exe build  version $version  edition $Edition" -ForegroundColor Cyan
 $prefix = if ($Edition -eq 'core') { 'winlab-core' } else { 'winlab' }
@@ -63,12 +70,11 @@ Write-Host "  repo: $root"
 
 # 1. PyInstaller, installed into the build environment only (never shipped
 #    as a module; its bootloader is what wraps the exe).
-# find_spec prints nothing: a probe that fails on stderr would end the build
-# under $ErrorActionPreference = 'Stop' in Windows PowerShell.
-& $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)"
+# find_spec prints nothing, so the probe never trips over stderr.
+Invoke-Native { & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('PyInstaller') else 1)" }
 if ($LASTEXITCODE -ne 0) {
     Write-Host '  installing PyInstaller into the build environment...'
-    & $Python -m pip install --upgrade pyinstaller
+    Invoke-Native { & $Python -m pip install --upgrade pyinstaller }
     if ($LASTEXITCODE -ne 0) { throw 'pip install pyinstaller failed' }
 }
 
@@ -78,7 +84,7 @@ if ($LASTEXITCODE -ne 0) {
 $icoDir = Join-Path $root 'build'
 New-Item -ItemType Directory -Force -Path $icoDir | Out-Null
 $ico = Join-Path $icoDir 'winlab.ico'
-& $Python -m winlab icon $ico
+Invoke-Native { & $Python -m winlab icon $ico }
 if ($LASTEXITCODE -ne 0) { throw 'winlab icon failed' }
 
 # 2b. The paid labs ship encrypted: the release workflow runs
@@ -92,6 +98,13 @@ if ($Edition -eq 'core') {
     $contentDir = Join-Path $root 'build\content-core'
     & $Python -c "import sys; from pathlib import Path; from winlab import edition; print('  content: core', edition.stage(Path(sys.argv[1]), Path(sys.argv[2])))" (Join-Path $root 'content') $contentDir
     if ($LASTEXITCODE -ne 0) { throw 'staging the core content failed' }
+    # The trial's labs, lessons, answers and their translations go into one
+    # encrypted pack; its key is written as winlab\licensing\trialkey.py,
+    # compiled below with the rest of the package and deleted after the build.
+    $out = Invoke-Native { & $Python (Join-Path $PSScriptRoot 'trialpack.py') $contentDir }
+    if ($LASTEXITCODE -ne 0) { throw 'encrypting the trial content failed (packaging\trialpack.py)' }
+    $out | ForEach-Object { Write-Host "  $_" }
+    if ($NoProtect) { Write-Host '  NOTE: -NoProtect leaves the pack key as bytecode; never for a release' -ForegroundColor Yellow }
     $editionFile = Join-Path $root 'build\edition.txt'
     [IO.File]::WriteAllText($editionFile, 'core')
     $editionData = @('--add-data', "$editionFile;.")
@@ -108,21 +121,21 @@ $hidden = @()
 if (-not $NoProtect) {
     # find_spec prints nothing: a traceback on stderr is a terminating error
     # under $ErrorActionPreference = 'Stop', so `import Cython` cannot probe.
-    & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('Cython') else 1)"
+    Invoke-Native { & $Python -c "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('Cython') else 1)" }
     if ($LASTEXITCODE -ne 0) {
         Write-Host '  installing Cython into the build environment...'
-        & $Python -m pip install 'cython==3.1.2' setuptools
+        Invoke-Native { & $Python -m pip install 'cython==3.1.2' setuptools }
         if ($LASTEXITCODE -ne 0) { throw 'pip install cython failed' }
     }
     $pkgPath = Join-Path $root 'build\protected'
-    $out = & $Python (Join-Path $PSScriptRoot 'protect.py') $pkgPath
+    $out = Invoke-Native { & $Python (Join-Path $PSScriptRoot 'protect.py') $pkgPath }
     if ($LASTEXITCODE -ne 0) { throw 'compiling the protected modules failed (packaging\protect.py)' }
     foreach ($line in $out) {
         if ($line -like 'hidden-import: *') { $hidden += @('--hidden-import', $line.Substring(15)) }
         else { Write-Host "  $line" }
     }
 } else {
-    Write-Host '  protect: skipped (-NoProtect); licensing code ships as bytecode' -ForegroundColor Yellow
+    Write-Host '  protect: skipped (-NoProtect); the code ships as bytecode' -ForegroundColor Yellow
 }
 
 # 3. Build. --add-data ships the content pack and the dashboard page inside
@@ -143,17 +156,19 @@ $piArgs = @(
     '--exclude-module', 'winlab.licensing.server',
     (Join-Path $PSScriptRoot 'winlab_entry.py')
 ) + $hidden + $editionData
-& $Python -m PyInstaller @piArgs
+Invoke-Native { & $Python -m PyInstaller @piArgs }
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
 
 if (-not $NoProtect) {
     # Proof that PyInstaller packed the compiled copy: no protected module may
     # appear as Python source in its tables of contents.
     $leaks = Get-ChildItem (Join-Path $root 'build\pyinstaller') -Recurse -Filter '*.toc' |
-        Select-String -SimpleMatch -Pattern 'licensing\client.py', 'winlab\content.py', 'winlab\packs.py', 'licensing\packkeys.py'
+        Select-String -SimpleMatch -Pattern 'licensing\client.py', 'licensing\trialkey.py', 'winlab\content.py', 'winlab\packs.py', 'winlab\webui.py', 'winlab\edition.py'
     if ($leaks) { throw "a protected module was packed as bytecode: $($leaks[0].Line.Trim())" }
-    Write-Host '  protect: licensing and decryption modules are native code in the exe' -ForegroundColor Green
+    Write-Host '  protect: the whole winlab package is native code in the exe' -ForegroundColor Green
 }
+# The pack key lives only inside the exe.
+Remove-Item (Join-Path $root 'winlab\licensing\trialkey.py') -Force -ErrorAction SilentlyContinue
 
 $exe = Join-Path $root 'dist\winlab.exe'
 if (-not (Test-Path $exe)) { throw "expected $exe" }
@@ -198,7 +213,7 @@ if (-not $SkipInstaller) {
             # $q is Inno's quote and $f the file it signs.
             $isccArgs += @('/DSIGN', ('/Swinlabsign=powershell.exe -NoProfile -ExecutionPolicy Bypass -File $q' + $signScript + '$q $f'))
         }
-        & $iscc @isccArgs (Join-Path $PSScriptRoot 'winlab.iss')
+        Invoke-Native { & $iscc @isccArgs (Join-Path $PSScriptRoot 'winlab.iss') }
         if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
         $setup = Join-Path $root "dist\$prefix-$version-setup.exe"
         if (-not (Test-Path $setup)) { throw "expected $setup" }
@@ -211,7 +226,8 @@ if ($pfxTemp) { Remove-Item $pfxTemp -Force -ErrorAction SilentlyContinue; Remov
 if (-not $SkipZip) {
     $zip = Join-Path $root "dist\$prefix-$version-win64.zip"
     Remove-Item $zip -ErrorAction SilentlyContinue
-    Compress-Archive -Path $exe, "$root\README.md", "$root\LICENSING.md", "$root\CURRICULUM.md" -DestinationPath $zip
+    $docs = @("$root\README.md", "$root\LICENSING.md", "$root\CURRICULUM.md") + @(Get-ChildItem "$root\EULA*.txt" | ForEach-Object FullName)
+    Compress-Archive -Path (@($exe) + $docs) -DestinationPath $zip
     Write-Host "  zip  : $zip" -ForegroundColor Green
 }
 

@@ -1,0 +1,52 @@
+[exercise]
+id = "first-look-at-dc01"
+title = "First look: sign in to dc01 and ask it about itself"
+lab = "ad-ds-basics"
+reset_nodes = []
+nodes = ["dc01"]
+brief = """
+Before any Windows topic, get to a machine and ask it questions. Start dc01,
+sign in on its own screen as Administrator, open PowerShell (not the ISE)
+and ask Windows what it is and whether its gateway answers. winlab grades
+what dc01 itself remembers: who is signed in at its screen, and what its
+PowerShell history holds.
+"""
+tasks = [
+  "Start dc01 and sign in on its screen as Administrator, with the lab password from the key in the taskbar",
+  "In PowerShell on dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion",
+  "In the same window: ipconfig, then Test-NetConnection 10.10.10.1 (the lab router, dc01's default gateway)",
+]
+
+[[check]]
+name = "Administrator is signed in on dc01's screen"
+node = "dc01"
+script = '''
+$users = @(Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction SilentlyContinue |
+  ForEach-Object { (Invoke-CimMethod -InputObject $_ -MethodName GetOwner).User })
+[bool]($users -contains 'Administrator')
+'''
+expect = "True"
+weight = 1
+hint = "Double-click dc01 in Machines, send Ctrl+Alt+Del from the window's menu and sign in as Administrator; the desktop must be up (explorer running)"
+
+[[check]]
+name = "PowerShell on dc01 was asked what the machine is"
+node = "dc01"
+script = '''
+$h = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -ErrorAction SilentlyContinue)
+[bool](@($h | Select-String -Pattern 'Get-ComputerInfo' -SimpleMatch).Count)
+'''
+expect = "True"
+weight = 2
+hint = "Run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion in a PowerShell window on dc01 (the ISE keeps no history file)"
+
+[[check]]
+name = "dc01's gateway was tested from inside dc01"
+node = "dc01"
+script = '''
+$h = @(Get-ChildItem 'C:\Users\*\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt' -ErrorAction SilentlyContinue)
+[bool](@($h | Select-String -Pattern '(Test-NetConnection|ping)\s+(-ComputerName\s+)?10\.10\.10\.1(\s|$)').Count)
+'''
+expect = "True"
+weight = 1
+hint = "In PowerShell on dc01: Test-NetConnection 10.10.10.1 (or ping 10.10.10.1); PingSucceeded True means the lab router answers"

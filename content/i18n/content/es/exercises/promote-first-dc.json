@@ -1,0 +1,16 @@
+{
+ "Promote the first domain controller": "Promueve el primer controlador de dominio",
+ "dc01 is a fresh Windows Server with a static address but no roles. Turn it into\nthe forest root domain controller for corp.lab, running DNS. Everything else in\nthe lab depends on this, so it is exercise one.": "dc01 es un Windows Server recién instalado con una dirección estática pero sin roles. Conviértelo en el controlador de dominio raíz del bosque para corp.lab, con DNS. Todo lo demás en el laboratorio depende de esto, así que es el ejercicio uno.",
+ "On dc01, install the AD-Domain-Services role": "En dc01, instala el rol AD-Domain-Services",
+ "Promote dc01 to a new forest named corp.lab (NetBIOS CORP)": "Promueve dc01 a un bosque nuevo llamado corp.lab (NetBIOS CORP)",
+ "Let it install DNS during promotion": "Deja que instale DNS durante la promoción",
+ "After the reboot, confirm the domain and the DNS service are up": "Tras el reinicio, confirma que el dominio y el servicio DNS están activos",
+ "AD DS role installed": "Rol AD DS instalado",
+ "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools": "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools",
+ "forest corp.lab exists": "el bosque corp.lab existe",
+ "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP": "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP",
+ "this host is a domain controller": "este equipo es un controlador de dominio",
+ "DNS service running": "Servicio DNS en ejecución",
+ "DNS is installed automatically if you pass -InstallDns to Install-ADDSForest": "DNS se instala automáticamente si pasas -InstallDns a Install-ADDSForest",
+ "forward lookup zone for corp.lab": "zona de búsqueda directa para corp.lab"
+}

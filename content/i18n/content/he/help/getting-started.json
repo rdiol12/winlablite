@@ -1,0 +1,13 @@
+{
+ "Getting started": "תחילת העבודה",
+ "Start here": "התחל כאן",
+ "first": "ראשון",
+ "start": "התחלה",
+ "quick start": "התחלה מהירה",
+ "setup": "התקנה",
+ "begin": "להתחיל",
+ "new": "חדש",
+ "how": "איך",
+ "From a new install to your first graded lesson.": "מהתקנה חדשה ועד השיעור הראשון שלך שמקבל ציון.",
+ "winlab gives you a network of real Windows and Linux machines on this PC. You do the work inside them, the way you would at a desk, and winlab grades it.\n\n- **Setup**, once: open Setup from the desktop. It checks this PC, then downloads and prepares everything a lab needs except Windows itself. You download the free evaluation ISO from Microsoft and import it there. Preparing a Windows base then runs on its own for about 45 minutes.\n- **Turn the machines on** with the power button in the Start menu, or one at a time in Machines. They boot like real PCs.\n- **Open a machine's screen** by double-clicking it in Machines. The Administrator password is behind the key in the taskbar.\n- **Follow the Lab guide.** Each lesson says why and what to do. You do it inside the machines, then press Check my work. winlab never sets anything up for you.\n- **Practise fixing things** in Troubleshooting, or take on a scenario day.\n- **Take a checkpoint** in Machines before you try something risky, and go back to it if it goes wrong.\n\nThe same steps work from a command prompt:\n\n```\nwinlab setup\nwinlab lab up ad-ds-basics\nwinlab gui ad-ds-basics\n```": "winlab נותן לך רשת של מכונות Windows ו-Linux אמיתיות במחשב הזה. אתה עושה את העבודה בתוכן, כמו שהיית עושה ליד שולחן, ו-winlab נותן לה ציון.\n\n- **התקנה**, פעם אחת: פתח את התקנה משולחן העבודה. היא בודקת את המחשב הזה, ואז מורידה ומכינה את כל מה שמעבדה צריכה חוץ מ-Windows עצמו. אתה מוריד את ה-ISO החינמי להערכה מ-Microsoft ומייבא אותו שם. הכנת בסיס Windows רצה אחר כך מעצמה כ-45 דקות.\n- **הפעל את המכונות** עם כפתור ההפעלה בתפריט התחל, או אחת אחת במכונות. הן עולות כמו מחשבים אמיתיים.\n- **פתח את המסך של מכונה** בלחיצה כפולה עליה במכונות. הסיסמה של Administrator נמצאת מאחורי המפתח בשורת המשימות.\n- **עקוב אחרי מדריך המעבדה.** כל שיעור אומר למה ומה לעשות. אתה עושה זאת בתוך המכונות, ואז לוחץ בדוק את העבודה שלי. winlab לעולם לא מגדיר שום דבר בשבילך.\n- **תרגל תיקון דברים** בפתרון בעיות, או התמודד עם יום תרחיש.\n- **צור נקודת ביקורת** במכונות לפני שאתה מנסה משהו מסוכן, וחזור אליה אם משהו משתבש.\n\nאותם שלבים עובדים משורת הפקודה:\n\n```\nwinlab setup\nwinlab lab up ad-ds-basics\nwinlab gui ad-ds-basics\n```"
+}

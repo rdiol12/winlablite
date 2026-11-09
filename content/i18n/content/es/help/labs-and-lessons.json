@@ -1,0 +1,16 @@
+{
+ "Labs and lessons": "Laboratorios y lecciones",
+ "Using winlab": "Uso de winlab",
+ "lab": "laboratorio",
+ "lesson": "lección",
+ "exercise": "ejercicio",
+ "check my work": "comprobar mi trabajo",
+ "grade": "calificar",
+ "guide": "guía",
+ "module": "módulo",
+ "progress": "progreso",
+ "foundation": "base",
+ "quiz": "cuestionario",
+ "How labs, lessons and Check my work fit together.": "Cómo encajan los laboratorios, las lecciones y Comprobar mi trabajo.",
+ "A **lab** is a whole network: its machines, its switches and the lab router. The Start menu lists the labs. Switching the desktop to another lab leaves running machines running.\n\nA **lesson** is one job inside a lab. Open the Lab guide to see the lessons in order. Each one says why it matters, what to do, which machines it needs and how much memory they take.\n\n- **Start these machines** boots only the machines the lesson uses, plus the domain controller they depend on.\n- Every lab has a **foundation** lesson first: its machines are fresh installs, and you give them addresses, build the domain and join the members yourself.\n- **Check my work** runs small checks inside the machines and says which parts pass. It never changes anything.\n- Lessons end with a few recall questions, and your progress is kept on this PC.\n\nFrom a command prompt: `winlab learn list`, `winlab learn show <lesson>`, `winlab learn start <lesson>` and `winlab exercise grade <exercise>`.": "Un **laboratorio** es una red completa: sus máquinas, sus switches y el router del laboratorio. El menú Inicio lista los laboratorios. Cambiar el escritorio a otro laboratorio deja en marcha las máquinas que estén en ejecución.\n\nUna **lección** es una tarea dentro de un laboratorio. Abre la Guía del laboratorio para ver las lecciones en orden. Cada una explica por qué importa, qué hacer, qué máquinas necesita y cuánta memoria ocupan.\n\n- **Iniciar estas máquinas** arranca solo las máquinas que usa la lección, más el controlador de dominio del que dependen.\n- Todo laboratorio tiene primero una lección **foundation** (base): sus máquinas son instalaciones nuevas, y tú mismo les das direcciones, construyes el dominio y unes los miembros.\n- **Comprobar mi trabajo** ejecuta pequeñas comprobaciones dentro de las máquinas e indica qué partes se superan. Nunca cambia nada.\n- Las lecciones terminan con unas preguntas de repaso, y tu progreso se guarda en este PC.\n\nDesde un símbolo del sistema: `winlab learn list`, `winlab learn show <lesson>`, `winlab learn start <lesson>` y `winlab exercise grade <exercise>`."
+}

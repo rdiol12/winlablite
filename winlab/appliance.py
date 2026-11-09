@@ -64,6 +64,13 @@ DEVICES = {
                  "disks": [], "image": "debian12",
                  "text": "a plain Debian 12 server for the IT department's own tools: GLPI, DokuWiki and "
                          "Vaultwarden, installed by you from their packs and managed from a lab PC's browser"},
+    # Network operations (winlab/netops.py): a plain Debian 12 server on which
+    # the student runs LibreNMS (with MariaDB), Oxidized and Uptime Kuma; 3 GB
+    # for the four of them and Docker.
+    "netops": {"title": "Network operations server", "prefix": "nms", "role": "net-ops", "memory_mb": 3072,
+               "disks": [], "image": "debian12",
+               "text": "a plain Debian 12 server for the network team's tools: LibreNMS, Oxidized and Uptime "
+                       "Kuma, installed by you from their packs and managed from a lab PC's browser"},
     "adminpc": {"title": "Admin workstation", "prefix": "admin", "role": "admin-desktop", "memory_mb": 1536,
                 "disks": [],
                 "text": "a small Linux desktop with Firefox ESR on its screen: a browser on the lab network "
@@ -218,10 +225,11 @@ PRINTER_OPS = {
     "online": (set(), {"offline"}),               # the Online button
     "offline": ({"offline"}, set()),
     "toner-low": ({"toner-low"}, set()),
-    "toner-new": (set(), {"toner-low"}),          # a new cartridge, with the door open
+    "toner-empty": ({"toner-low", "toner-empty"}, set()),   # the cartridge runs out: the engine stops
+    "toner-new": (set(), {"toner-low", "toner-empty"}),     # a new cartridge, with the door open
     "cancel": ({"cancel"}, set()),                # the Cancel button: the job waiting in the engine
 }
-_FLAGS = ("nopaper", "jam", "door-open", "offline", "toner-low", "busy")
+_FLAGS = ("nopaper", "jam", "door-open", "offline", "toner-low", "toner-empty", "busy")
 
 
 def printer_panel(lab_name: str, node_id: str, factory=GuestChannel) -> dict:
@@ -251,10 +259,12 @@ def panel_state(text: str) -> dict:
         elif k == "tray" and v.strip().isdigit():
             pages = int(v)
     state_ = ("door-open" if "door-open" in flags else "jam" if "jam" in flags else
-              "paper-out" if "nopaper" in flags else "offline" if "offline" in flags else
+              "paper-out" if "nopaper" in flags else "toner-empty" if "toner-empty" in flags else
+              "offline" if "offline" in flags else
               "printing" if "busy" in flags or jobs else "ready")
     return {"state": state_, "door": "door-open" in flags, "paper": "nopaper" not in flags,
-            "toner_low": "toner-low" in flags, "online": "offline" not in flags,
+            "toner_low": "toner-low" in flags, "toner_empty": "toner-empty" in flags,
+            "online": "offline" not in flags,
             "waiting": "busy" in flags, "jobs": jobs, "pages": pages}
 
 

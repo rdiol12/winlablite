@@ -49,6 +49,15 @@ try {
     Write-Output "setup-agent: network apply failed: $($_.Exception.Message)"
 }
 
+# The console host behind the desktop's Command Prompt and PowerShell
+# windows (winlab-term.ps1, on COM3).
+try {
+    & (Join-Path $Root 'setup-term.ps1') 2>&1 | Out-Null
+    Write-Output 'setup-agent: console host installed'
+} catch {
+    Write-Output "setup-agent: console host install failed: $($_.Exception.Message)"
+}
+
 try {
     Start-ScheduledTask -TaskName $TaskName
     Write-Output 'setup-agent: task started'

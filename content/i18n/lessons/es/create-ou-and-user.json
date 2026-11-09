@@ -1,0 +1,63 @@
+{
+ "title": "Crea una OU, un usuario y un grupo global",
+ "summary": "Dale a un departamento un hogar en el directorio y el grupo a través del cual fluyen los permisos.",
+ "why": "Los contenedores predeterminados (CN=Users, CN=Computers) no son unidades organizativas: no puedes vincularles Group Policy ni delegarlos, así que todo lo que se deja ahí es un callejón sin salida. Una estructura de OU es la forma en que un directorio sigue siendo manejable con mil usuarios: la directiva y la delegación siguen al árbol. Diséñala según cómo se administran las cosas, no según el organigrama.\n\nLos grupos son donde viven los permisos. El patrón que escala es AGDLP: pon las cuentas (Accounts) en grupos globales (Global) por función, pon los grupos globales en grupos locales de dominio (Domain Local) por recurso y concede los permisos (Permissions) al grupo local de dominio. Así una nueva incorporación recibe una sola pertenencia a grupo y hereda todos los permisos que necesita esa función, y una auditoría responde \"quién puede leer Finance\" leyendo un solo grupo.",
+ "concepts": [
+  "OU frente a contenedor: ambos contienen objetos; solo una OU admite vínculos de GPO y delegación",
+  "Grupo global: miembros de su propio dominio, utilizable en cualquier parte del bosque; el grupo de función",
+  "Grupo local de dominio: miembros de cualquier lugar, utilizable solo en su dominio; el grupo de recurso",
+  "Grupo universal: pertenencia en todo el bosque, replicada a los catálogos globales; úsalo con moderación",
+  "Seguridad frente a distribución: solo un grupo de seguridad puede aparecer en una ACL",
+  "AGDLP: cuentas en grupos globales, globales en locales de dominio, y el local de dominio recibe el permiso"
+ ],
+ "steps": [
+  "En dc01, crea la OU: New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'.",
+  "Crea el usuario: New-ADUser -Name 'John Doe' -GivenName John -Surname Doe -SamAccountName jdoe -UserPrincipalName jdoe@corp.lab -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true.",
+  "Crea el grupo de función: New-ADGroup -Name G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'.",
+  "Añade el miembro: Add-ADGroupMember -Identity G-Sales -Members jdoe.",
+  "Mira lo que has construido: Get-ADUser jdoe -Properties MemberOf | Select-Object DistinguishedName, Enabled, MemberOf.",
+  "Abre dsa.msc (Active Directory Users and Computers) en dc01 y encuentra los mismos objetos en el árbol."
+ ],
+ "pitfalls": [
+  "Una OU está protegida contra la eliminación accidental de forma predeterminada; es una ventaja, desactiva la marca solo cuando lo pretendas.",
+  "Conceder permisos NTFS directamente a un grupo global funciona hasta el segundo recurso; la capa local de dominio es lo que lo mantiene ordenado.",
+  "Un usuario creado deshabilitado sigue deshabilitado hasta que le pongas una contraseña que cumpla la directiva; comprueba Enabled de forma explícita."
+ ],
+ "verify": [
+  "la OU existe",
+  "jdoe está habilitado y en Sales",
+  "ámbito y miembros de G-Sales"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué puede hacer una OU que un simple contenedor como CN=Users no puede?",
+   "answer": "Admitir vínculos de Group Policy y delegación",
+   "wrong": [
+    "Contener objetos de usuario",
+    "Replicarse a otros DC",
+    "Tener un nombre"
+   ],
+   "why": "Solo las OU pueden ser destino de un vínculo de GPO o de permisos delegados."
+  },
+  {
+   "q": "En AGDLP, ¿qué grupo recibe el permiso sobre el recurso?",
+   "answer": "El grupo local de dominio",
+   "wrong": [
+    "El grupo global",
+    "La cuenta de usuario",
+    "El grupo universal"
+   ],
+   "why": "Las cuentas van a grupos globales, estos a locales de dominio, y el grupo local de dominio recibe el permiso."
+  },
+  {
+   "q": "¿Qué tipo de grupo puede aparecer en una lista de control de acceso?",
+   "answer": "Un grupo de seguridad",
+   "wrong": [
+    "Un grupo de distribución",
+    "Cualquier grupo, ambos tipos sirven",
+    "Solo los grupos universales"
+   ],
+   "why": "Los grupos de distribución son para correo y no se les pueden conceder permisos."
+  }
+ ]
+}

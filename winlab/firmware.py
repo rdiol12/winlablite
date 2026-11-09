@@ -204,6 +204,12 @@ def _uefi_default(node) -> bool:
         return False
     if getattr(node, "kind", "") == CUSTOM:
         from .images import HAND_INSTALL, ImageError, custom_image, templates
+        from .netos import is_router
+        if is_router(node):
+            return False  # the vendors' virtual routers boot with the legacy BIOS (winlab/netos.py)
+        from . import android
+        if android.is_hand_android(node):
+            return android.uefi(node)  # Android-x86 installs its GRUB on an MBR disk (winlab/android.py)
         if node.image in HAND_INSTALL:
             return True
         tpl = templates().get(node.image)

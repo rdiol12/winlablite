@@ -1,0 +1,14 @@
+{
+ "Map a network drive with Group Policy": "عيّن محرك أقراص شبكة باستخدام نهج المجموعة",
+ "Sales wants the company share as drive S: on every logon. Do it once, centrally,\nwith a Group Policy Preference, not with a logon script on each PC. Drive maps\nare a *user* setting, so the GPO links to the OU that holds the users. Builds\non create-ou-and-user (OU=Sales, jdoe) and on the file role's Company share on\nfs01.": "يريد قسم المبيعات مشاركة الشركة كمحرك الأقراص S: عند كل تسجيل دخول. نفّذ ذلك مرة واحدة، مركزيًا،\nباستخدام تفضيل نهج المجموعة، لا بسكربت تسجيل دخول على كل حاسوب. تعيينات محركات الأقراص\nإعداد خاص بـ *المستخدم*، لذا ترتبط الـ GPO بالـ OU التي تحتوي المستخدمين. يُبنى\nعلى create-ou-and-user (OU=Sales، jdoe) وعلى المشاركة Company الخاصة بدور الملفات على\nfs01.",
+ "Create a GPO named 'Map S Drive'": "أنشئ GPO باسم 'Map S Drive'",
+ "In User Configuration > Preferences > Drive Maps, map S: to \\\\fs01\\Company (action Update, reconnect on)": "في User Configuration > Preferences > Drive Maps، عيّن S: إلى \\\\fs01\\Company (الإجراء Update، مع تفعيل إعادة الاتصال)",
+ "Link the GPO to OU=Sales": "اربط الـ GPO بـ OU=Sales",
+ "Log on to pc01 as jdoe and confirm S: appears (gpupdate /force if needed)": "سجّل الدخول إلى pc01 بصفة jdoe وتأكد من ظهور S: (gpupdate /force إذا لزم الأمر)",
+ "GPO is linked to OU=Sales": "الـ GPO مرتبطة بـ OU=Sales",
+ "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'": "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'",
+ "S: maps to the fs01 Company share": "S: معيّن إلى المشاركة Company على fs01",
+ "The path is the share's UNC path, \\\\fs01\\Company; the drive letter is S": "المسار هو مسار UNC للمشاركة، \\\\fs01\\Company؛ وحرف محرك الأقراص هو S",
+ "jdoe can reach the share": "يستطيع jdoe الوصول إلى المشاركة",
+ "A mapped drive to a share the user cannot open fails silently at logon": "المحرك المعيّن إلى مشاركة لا يستطيع المستخدم فتحها يفشل بصمت عند تسجيل الدخول"
+}

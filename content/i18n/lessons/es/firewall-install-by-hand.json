@@ -1,0 +1,68 @@
+{
+ "title": "Instala un firewall a mano: OPNsense o pfSense CE, interfaces, primeras reglas",
+ "summary": "Pon un firewall BSD real en un PC vacío de dos puertos desde su propio instalador, asigna WAN y LAN en su consola, termínalo desde el navegador de un PC del laboratorio, y después escribe la primera regla y compara OPNsense con pfSense CE.",
+ "why": "El firewall de una oficina pequeña es muy a menudo un PC normal con dos tarjetas de red y OPNsense o pfSense instalado. Ambos son FreeBSD con el filtro de paquetes pf y una GUI web; quien instala uno se encuentra los mismos tres momentos: el instalador, la asignación de interfaces en la consola (qué tarjeta es Internet y cuál es la oficina) y el primer inicio de sesión en la GUI web desde un PC de dentro. Si pones las tarjetas al revés, la oficina no tiene salida y la GUI queda de cara a Internet.\n\nfw01 es un PC normal: un disco SATA vacío de 16 GB, dos tarjetas Intel e1000 que FreeBSD llama em0 y em1 (puerto 1 y puerto 2 en su panel frontal), una pantalla VGA y una consola serie (COM1, su ventana Terminal), y el instalador en su unidad de DVD. El instalador de OPNsense se descargó del mirror del proyecto y se comprobó con su SHA-256; pfSense CE solo lo entrega Netgate tras una cuenta de su tienda, así que para él importas la ISO que descargaste tú mismo. El switch de la LAN no está cableado al router del laboratorio: hasta que fw01 funcione, pc01 está solo. El segmento del ISP es Internet: el router del laboratorio concede por DHCP una dirección a la WAN del firewall e inet01 responde allí HTTP en los puertos 80 y 8080.",
+ "concepts": [
+  "Asignación de interfaces: el instalador nombra las tarjetas por controlador (em0, em1); tú decides cuál es WAN y cuál LAN, y todas las reglas predeterminadas se derivan de esa elección",
+  "De fábrica ambos sirven la LAN 192.168.1.1/24 con un servidor DHCP, toman la WAN por DHCP, permiten todo lo que sale de la LAN y no permiten nada entrante en WAN",
+  "NAT saliente: lo que sale por WAN lleva la dirección WAN; inet01 nunca ve 192.168.1.x",
+  "Las reglas son por interfaz, se leen de arriba abajo, gana la primera coincidencia: un bloqueo para un puerto tiene que estar por encima de la regla de permitir predeterminada de la LAN",
+  "La GUI web solo escucha en la LAN; pfSense añade una regla antibloqueo para que una mala regla de LAN no te deje fuera de ella",
+  "OPNsense (BSD 2-Clause, Deciso) se bifurcó de pfSense en 2015: versiones principales dos veces al año, un sistema en vivo en el instalador, una GUI y API MVC; pfSense CE (Apache 2.0, Netgate) convive con el comercial pfSense Plus"
+ ],
+ "steps": [
+  "Pon el instalador en este PC: Instalación, Instaladores de firewall. Descarga OPNsense de su mirror; para pfSense CE descarga la ISO AMD64 de Netgate (pide una cuenta) e impórtala con Browse… (el .iso.gz vale). Para pfSense pon la imagen de fw01 en pfsense-ce, o arrastra un Firewall desde la estantería del Banco de red y elige pfSense CE.",
+  "En el Banco de red, mira los puertos de fw01: el puerto 1 es em0, cableado al switch isp; el puerto 2 es em1, cableado al switch lan. Ese es el orden que mostrará el instalador.",
+  "OPNsense: enciende fw01 y abre su pantalla. UEFI no encuentra nada en el disco vacío y arranca el instalador en un sistema en vivo. En el prompt de inicio de sesión entra como installer (su contraseña es el nombre del producto en minúsculas, como dice la documentación de OPNsense), mantén el mapa de teclado, elige Install (UFS), el disco de 16 GB ada0, pon una contraseña de root, luego Complete Install y reinicia: a partir de ahora arranca el disco.",
+  "pfSense CE: la BIOS arranca su instalador. Acepta el aviso de copyright, Install pfSense, mantén el mapa de teclado, Auto (UFS) en todo el disco y Reboot cuando termine. En el primer arranque pregunta por las VLAN (n), luego la interfaz WAN (em0) y la interfaz LAN (em1), y muestra el menú de la consola.",
+  "El menú de consola de OPNsense: 1) Assign interfaces, sin LAGG ni VLAN, WAN em0, LAN em1, confirma. Lee el mensaje: WAN tiene una concesión 198.51.100.x del router del laboratorio, LAN es 192.168.1.1/24. El menú, o la ventana Terminal en COM1, es adonde vuelves cuando la GUI desaparece.",
+  "Inicia pc01 e inicia sesión. ipconfig muestra una concesión 192.168.1.x y 192.168.1.1 como puerta de enlace: el servidor DHCP del firewall. Abre Edge en https://192.168.1.1, acepta el certificado autofirmado (es el propio del firewall) e inicia sesión: root y la contraseña que pusiste en OPNsense; en pfSense admin, con la contraseña predeterminada que da su documentación.",
+  "Ejecuta el asistente de configuración: hostname fw01, dominio corp.lab, deja DNS vacío (el laboratorio no tiene resolutor), tu zona horaria. En la página WAN mantén DHCP y desmarca Block bogon networks: la Internet del laboratorio es espacio TEST-NET, que está en la lista bogon. Mantén LAN 192.168.1.1/24, cambia la contraseña de admin en pfSense y recarga.",
+  "Desde pc01 prueba Internet: Test-NetConnection 198.51.100.10 -Port 80 tiene éxito, y (Invoke-WebRequest http://198.51.100.10/ -UseBasicParsing).Content dice desde qué dirección llegaste: la concesión WAN del firewall, no 192.168.1.x. Eso es el NAT saliente.",
+  "Escribe la primera regla: Firewall, Rules, LAN. Añade una regla por encima de la de permitir predeterminada: Block, protocolo TCP, origen LAN net, destino any, puerto de destino 8080, marca Log, descripción 'no 8080 from the office'. Save y Apply. Test-NetConnection 198.51.100.10 -Port 8080 ahora falla, -Port 80 sigue funcionando.",
+  "Míralo funcionar: Firewall, Log Files, Live View en OPNsense (Status, System Logs, Firewall en pfSense) muestra tu regla descartando el intento al 8080. En el shell de la consola, pfctl -sr | grep 8080 muestra la regla tal como la tiene pf.",
+  "Compara los dos (instala el otro como segundo firewall desde la estantería, cableado igual, si tienes tiempo): el instalador (un sistema en vivo en el que inicias sesión, o un instalador guiado por menús), dónde se hace la asignación de interfaces, las reglas LAN predeterminadas (la regla antibloqueo de pfSense), los menús y el modelo de versiones. Después pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "em0 y em1 intercambiadas: la LAN del lado del ISP significa que pc01 no recibe concesión y la GUI queda de cara a Internet; usa de nuevo 1) Assign interfaces, haciendo coincidir los puertos del Banco de red.",
+  "Una regla de bloqueo por debajo de la de permitir predeterminada de la LAN nunca coincide: gana la primera coincidencia, así que arrástrala hacia arriba.",
+  "Block bogon networks activado: las respuestas a conexiones que abriste siguen pasando, pero todo lo que inicia el lado de Internet, y algunas pruebas del laboratorio, se descarta, porque 198.51.100.0/24 es espacio de documentación.",
+  "La descarga de Netgate Installer necesita los servidores de Netgate durante la instalación; el laboratorio no tiene internet, así que se detiene. Usa la ISO sin conexión pfSense-CE-<version>-RELEASE-amd64.iso si la tienes, u OPNsense.",
+  "Un firewall que vuelve a arrancar el instalador tras la instalación aún tiene el DVD primero en su orden de arranque: vuelve a poner el disco primero en su panel del Banco de red."
+ ],
+ "verify": [
+  "el firewall desde la LAN"
+ ],
+ "quiz": [
+  {
+   "q": "El instalador de fw01 lista em0 y em1. En el Banco de red, el puerto 1 está cableado al switch del ISP. ¿Qué tarjeta es WAN?",
+   "answer": "em0",
+   "wrong": [
+    "em1",
+    "La que obtenga antes una concesión DHCP",
+    "Ambas: el firewall las une en puente"
+   ],
+   "why": "FreeBSD numera las tarjetas en el orden del bus, el puerto 1 primero; el cable del puerto 1 va al ISP, así que em0 es WAN."
+  },
+  {
+   "q": "pc01 abre http://198.51.100.10/. ¿Qué dirección de origen ve inet01?",
+   "answer": "La dirección WAN del firewall",
+   "wrong": [
+    "La dirección 192.168.1.x de pc01",
+    "La dirección del router del laboratorio",
+    "192.168.1.1"
+   ],
+   "why": "El NAT saliente automático reescribe todo lo que sale por WAN con la dirección WAN."
+  },
+  {
+   "q": "Una regla de bloqueo para TCP 8080 está por debajo de la regla de permitir todo predeterminada de la LAN. ¿Qué pasa con la conexión de pc01 al puerto 8080?",
+   "answer": "Pasa: la regla de permitir coincide primero",
+   "wrong": [
+    "Se bloquea: las reglas de bloqueo siempre ganan",
+    "Se bloquea y se registra",
+    "Se rechaza con un reset"
+   ],
+   "why": "Las reglas pf en OPNsense y pfSense son reglas quick: decide la primera coincidencia, así que el bloqueo tiene que estar por encima."
+  }
+ ]
+}

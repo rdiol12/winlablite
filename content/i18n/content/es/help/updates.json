@@ -1,0 +1,15 @@
+{
+ "Updates: winlab, and Windows inside the lab": "Actualizaciones: winlab, y Windows dentro del laboratorio",
+ "Common problems": "Problemas comunes",
+ "update": "actualización",
+ "updates": "actualizaciones",
+ "new version": "nueva versión",
+ "upgrade": "actualizar",
+ "windows update": "windows update",
+ "patch": "parche",
+ "wsus": "wsus",
+ "msu": "msu",
+ "check for updates": "buscar actualizaciones",
+ "How to get a newer winlab, and why Windows Update does not work inside a lab.": "Cómo obtener un winlab más reciente, y por qué Windows Update no funciona dentro de un laboratorio.",
+ "**A newer winlab.** winlab never checks on its own. Press Check for updates in the About section of this window, or run `winlab update`. Only winlab's version number is sent. Your labs, machines and progress stay where they are when you install a newer version.\n\n**Windows Update inside a machine fails.** That is expected: the lab has no internet. A lab is patched the way a disconnected network is:\n\n1. On this PC, download the update packages (.msu) from the Microsoft Update Catalog.\n2. Save them in the images\\updates folder, or leave them in Downloads.\n3. On the media shelf, Updates lists them; write them to a patch stick or burn them to a disc and give it to the machine.\n4. Inside the machine, install them yourself with wusa, or run WSUS on a lab server. The patching lab teaches both.": "**Un winlab más reciente.** winlab nunca comprueba por su cuenta. Pulsa Buscar actualizaciones en la sección Acerca de de esta ventana, o ejecuta `winlab update`. Solo se envía el número de versión de winlab. Tus laboratorios, máquinas y progreso se quedan donde están cuando instalas una versión más reciente.\n\n**Windows Update falla dentro de una máquina.** Es lo esperado: el laboratorio no tiene internet. Un laboratorio se actualiza como una red desconectada:\n\n1. En este PC, descarga los paquetes de actualización (.msu) del Microsoft Update Catalog.\n2. Guárdalos en la carpeta images\\updates, o déjalos en Descargas.\n3. En la estantería de medios, Actualizaciones los enumera; escríbelos en una memoria de parches o grábalos en un disco y dáselo a la máquina.\n4. Dentro de la máquina, instálalos tú mismo con wusa, o ejecuta WSUS en un servidor del laboratorio. El laboratorio patching enseña ambas cosas."
+}

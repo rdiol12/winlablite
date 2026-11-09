@@ -1,0 +1,51 @@
+[solution]
+exercise = "who-is-hammering"
+notes = "The staff must work on fs01 (onboard-new-starters: accounts, department folders, home folders, first passwords typed in Office > Staff list). The workday runs busy with the clock at the end-of-day saves; the note's job line says what the Office window's feed showed (here: the end-of-day copies)."
+after = ["onboard-new-starters"]
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+New-Item C:\PerfLogs -ItemType Directory -Force | Out-Null
+logman create counter FileServerLoad -c "\SMB Server Shares(*)\Data Bytes/sec" "\SMB Server Sessions(*)\Data Bytes/sec" "\PhysicalDisk(*)\Disk Bytes/sec" -si 00:00:15 -o C:\PerfLogs\FileServerLoad
+logman start FileServerLoad
+'''
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workday level busy --lab ad-ds-basics
+workday start --lab ad-ds-basics
+workday tick --lab ad-ds-basics
+'''
+wait = 600
+timeout = 1200
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+$sess = @()
+1..12 | ForEach-Object { $sess += Get-SmbSession; Start-Sleep 10 }
+$big = Get-ChildItem -Path D:\Shares -Recurse -File | Where-Object Length -ge 4MB | Sort-Object Length -Descending | Select-Object -First 1
+$owner = ([string](Get-Acl -LiteralPath $big.FullName).Owner) -replace '^.*\\', ''
+$s = $sess | Where-Object { ($_.ClientUserName -replace '^.*\\', '') -eq $owner } | Select-Object -First 1
+$pc = ''
+if ($s) {
+  $pc = $s.ClientComputerName -replace '^\\\\', ''
+  if ($pc -match '^\d+\.\d+\.\d+\.\d+$') { $pc = ((Resolve-DnsName $pc -ErrorAction SilentlyContinue).NameHost -split '\.')[0] }
+}
+if (-not $pc) { $pc = 'pc01' }
+New-Item C:\winlab -ItemType Directory -Force | Out-Null
+@(
+  "account $owner",
+  "pc $pc",
+  "file $($big.FullName)",
+  "job end-of-day copies of big files into the share ($([math]::Round($big.Length / 1MB)) MB)"
+) | Set-Content C:\winlab\hammering.txt
+Get-Content C:\winlab\hammering.txt
+logman stop FileServerLoad
+'''
+timeout = 600

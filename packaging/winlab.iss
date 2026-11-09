@@ -12,10 +12,17 @@
 ;   * asks where winlab keeps the machines (tens of GB; the default is the
 ;     drive with room) and writes that folder into winlab-home.txt next to
 ;     the exe (winlab/paths.py reads it)
-;   * an optional product key page (first install only; /KEY=... on the
-;     command line for a silent install): the key goes into product-key.txt
-;     in that data folder and winlab activates from it once, on first start
-;     (winlab/licensing/client.py, activate_pending)
+;   * an optional product key page (/KEY=... on the command line for a
+;     silent install): a typed key is checked against its check character
+;     (the same sum winlab/licensing/keys.py uses), an empty one asks first;
+;     the key goes into product-key.txt in that data folder and winlab
+;     activates from it once, on first start (licensing/client.py)
+;   * over an existing winlab it asks: Upgrade (the default: same program
+;     folder, data folder, settings and key, no other page) or New
+;     installation (choose the folder and key again; winlab.local.toml is
+;     set aside as winlab.local.toml.old; machines and downloads are kept).
+;     /CLEAN=1 picks New installation on a silent install. A third choice,
+;     Uninstall winlab, runs the installed uninstaller and closes setup
 ;   * Start menu entry, optional desktop icon, optional PATH entry
 ;   * /RELAUNCH=1 (what winlab's own updater passes with /VERYSILENT) starts
 ;     winlab again when the update is installed
@@ -102,6 +109,7 @@ Source: "{#DistDir}\winlab.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\LICENSING.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\CURRICULUM.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#RepoDir}\EULA*.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
 Name: "{autoprograms}\winlab"; Filename: "{app}\winlab.exe"; Comment: "Your Windows Server lab"
@@ -124,11 +132,72 @@ Type: files; Name: "{app}\winlab-home.txt"
 const
   HomePointer = 'winlab-home.txt';
   DriveFixed = 3;
+  KeyAlphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{627501DE-27F2-4756-BB58-417EE187FE58}_is1';
 
 var
+  ModePage: TInputOptionWizardPage;
   DataDirPage: TInputDirWizardPage;
   KeyPage: TInputQueryWizardPage;
   UninstallDataDir: String;
+  QuitQuietly: Boolean;
+
+{ winlab is already on this PC (it left its data folder behind). }
+function AlreadyInstalled(): Boolean;
+begin
+  Result := GetPreviousData('DataDir', '') <> '';
+end;
+
+{ Upgrade in place unless the user chose a new installation. }
+function IsUpgrade(): Boolean;
+begin
+  Result := False;
+  if not AlreadyInstalled() then
+    Exit;
+  if WizardSilent() then
+    Result := ExpandConstant('{param:CLEAN|0}') <> '1'
+  else
+    Result := ModePage.Values[0];
+end;
+
+{ The key as winlab/licensing/keys.py normalize() reads it: no dashes or
+  spaces, upper case, no WLAB prefix, I/L as 1, O as 0, U as V. }
+function NormalKey(Raw: String): String;
+begin
+  Result := Uppercase(Trim(Raw));
+  StringChangeEx(Result, '-', '', True);
+  StringChangeEx(Result, ' ', '', True);
+  if Copy(Result, 1, 4) = 'WLAB' then
+    Result := Copy(Result, 5, Length(Result) - 4);
+  StringChangeEx(Result, 'I', '1', True);
+  StringChangeEx(Result, 'L', '1', True);
+  StringChangeEx(Result, 'O', '0', True);
+  StringChangeEx(Result, 'U', 'V', True);
+end;
+
+{ Twenty characters and the check character keys.py puts last, so a typo
+  is caught here and not on the first start. }
+function KeyLooksRight(Raw: String): Boolean;
+var
+  S: String;
+  I, P, Total: Integer;
+begin
+  Result := False;
+  S := NormalKey(Raw);
+  if Length(S) <> 21 then
+    Exit;
+  Total := 0;
+  for I := 1 to 20 do
+  begin
+    P := Pos(Copy(S, I, 1), KeyAlphabet);
+    if P = 0 then
+      Exit;
+    Total := (Total + (P - 1) * I) mod 32;
+  end;
+  if Pos(Copy(S, 21, 1), KeyAlphabet) = 0 then
+    Exit;
+  Result := Copy(KeyAlphabet, Total + 1, 1) = Copy(S, 21, 1);
+end;
 
 function RelaunchAfterUpdate(): Boolean;
 begin
@@ -191,7 +260,17 @@ end;
 
 procedure InitializeWizard();
 begin
-  DataDirPage := CreateInputDirPage(wpSelectDir,
+  ModePage := CreateInputOptionPage(wpInfoBefore,
+    'winlab is already installed',
+    'Upgrade it where it is, install it again from the start, or remove it?',
+    'Choose how to install this version:',
+    True, False);
+  ModePage.Add('Upgrade (recommended): keep your settings, your product key and the folder with your machines');
+  ModePage.Add('New installation: choose the folder and product key again and start with default settings ' +
+    '(your machines and downloads stay where they are)');
+  ModePage.Add('Uninstall winlab: remove the installed winlab (it asks whether to keep your machines and downloads)');
+  ModePage.Values[0] := True;
+  DataDirPage := CreateInputDirPage(ModePage.ID,
     'Where should winlab keep your machines?',
     'Lab machines, the Windows bases and downloads go here.',
     'winlab needs about 40 GB in this folder (25 GB if you only use Windows Server). ' +
@@ -208,11 +287,52 @@ begin
   KeyPage.Add('Product key (WLAB-XXXXX-XXXXX-XXXXX-XXXXX-X):', False);
 end;
 
+{ The installed winlab's uninstaller, per user or for all users. }
+function InstalledUninstaller(): String;
+begin
+  Result := '';
+  if not RegQueryStringValue(HKEY_CURRENT_USER, UninstallKey, 'UninstallString', Result) then
+    if not RegQueryStringValue(HKEY_LOCAL_MACHINE, UninstallKey, 'UninstallString', Result) then
+      Result := '';
+  Result := RemoveQuotes(Result);
+end;
+
+{ Uninstall winlab from the installer: its own uninstaller does the work
+  (stops the labs, asks about the data), then setup closes. }
+procedure RunUninstall();
+var
+  Exe: String;
+  Code: Integer;
+begin
+  Exe := InstalledUninstaller();
+  if (Exe = '') or not FileExists(Exe) then
+  begin
+    MsgBox('winlab''s uninstaller was not found. Remove winlab from Settings > Apps instead.', mbError, MB_OK);
+    Exit;
+  end;
+  if not Exec(Exe, '', '', SW_SHOW, ewWaitUntilTerminated, Code) then
+  begin
+    MsgBox('The uninstaller did not start: ' + SysErrorMessage(Code), mbError, MB_OK);
+    Exit;
+  end;
+  QuitQuietly := True;
+  WizardForm.Close;
+end;
+
+procedure CancelButtonClick(CurPageID: Integer; var Cancel, Confirm: Boolean);
+begin
+  if QuitQuietly then
+    Confirm := False;
+end;
+
 function ProductKey(): String;
 begin
   Result := Trim(ExpandConstant('{param:KEY}'));
   if (Result = '') and (KeyPage <> nil) then
     Result := Trim(KeyPage.Values[0]);
+  { A silent install with a mistyped /KEY= starts as the free first lab. }
+  if (Result <> '') and not KeyLooksRight(Result) then
+    Result := '';
 end;
 
 procedure RegisterPreviousData(PreviousDataKey: Integer);
@@ -222,8 +342,10 @@ end;
 
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
-  { An upgrade keeps the folder it had. }
-  Result := ((PageID = DataDirPage.ID) or (PageID = KeyPage.ID)) and (GetPreviousData('DataDir', '') <> '');
+  { The choice is only there over an existing winlab; an upgrade keeps the
+    folder and the key it had. }
+  Result := ((PageID = ModePage.ID) and not AlreadyInstalled())
+    or (((PageID = DataDirPage.ID) or (PageID = KeyPage.ID)) and IsUpgrade());
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -232,6 +354,28 @@ var
   FreeB: Int64;
 begin
   Result := True;
+  if (CurPageID = ModePage.ID) and ModePage.Values[2] then
+  begin
+    RunUninstall();
+    Result := False;
+    Exit;
+  end;
+  if CurPageID = KeyPage.ID then
+  begin
+    if Trim(KeyPage.Values[0]) = '' then
+      Result := MsgBox('You did not type a product key.' + #13#10#13#10 +
+        'winlab installs and starts with the free first lab; you can type your key later in winlab ' +
+        '(Start > Activate winlab).' + #13#10#13#10 + 'Continue without a product key?',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES
+    else if not KeyLooksRight(KeyPage.Values[0]) then
+    begin
+      MsgBox('This product key is not right: a letter or digit is mistyped or missing.' + #13#10#13#10 +
+        'A key looks like WLAB-XXXXX-XXXXX-XXXXX-XXXXX-X. Check it against your purchase email, ' +
+        'or leave the box empty to start with the free first lab.', mbError, MB_OK);
+      Result := False;
+    end;
+    Exit;
+  end;
   if CurPageID <> DataDirPage.ID then
     Exit;
   Dir := ChosenDataDir();
@@ -321,6 +465,13 @@ begin
     Exit;
   Dir := ChosenDataDir();
   ForceDirectories(Dir);
+  { A new installation over an old one starts with default settings; the
+    old ones are kept beside it, not deleted. }
+  if AlreadyInstalled() and not IsUpgrade() and FileExists(Dir + '\winlab.local.toml') then
+  begin
+    DeleteFile(Dir + '\winlab.local.toml.old');
+    RenameFile(Dir + '\winlab.local.toml', Dir + '\winlab.local.toml.old');
+  end;
   WritePointer(Dir);
   SetArrayLength(Key, 1);
   Key[0] := ProductKey();

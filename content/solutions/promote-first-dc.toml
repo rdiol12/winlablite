@@ -1,0 +1,27 @@
+[solution]
+exercise = "promote-first-dc"
+notes = "The DSRM password is the lab password, which the self-test fills in for {{winlab:lab-secret}}."
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Install-WindowsFeature AD-Domain-Services -IncludeManagementTools
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+$dsrm = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force
+Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword $dsrm -Force -NoRebootOnCompletion
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Restart-Computer -Force
+'''
+reboot = true
+wait = 120

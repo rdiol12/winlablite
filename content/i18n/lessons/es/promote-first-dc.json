@@ -1,0 +1,91 @@
+{
+ "title": "Promueve el primer controlador de dominio",
+ "summary": "Convierte un servidor normal en el controlador de dominio raíz del bosque con DNS.",
+ "why": "Active Directory es la base de datos en la que confían todos los demás servicios de Windows: quién es un\nusuario, qué equipo puede entrar, qué directiva se aplica. El primer controlador de dominio\ncrea el bosque, el dominio y el esquema, y debe ejecutar DNS, porque los clientes\nencuentran los controladores de dominio mediante registros de servicio DNS, no mediante difusiones ni una\nlista que alguien escribió. Un dominio con el DNS mal configurado falla de maneras que parecen\ncualquier cosa menos DNS.\n\nLa promoción es un solo comando, pero las decisiones que fija duran toda la vida del\nbosque: el nombre DNS, el nombre NetBIOS, el nivel funcional, dónde viven la base de datos\ny SYSVOL. Entiende cada una antes de pulsar Enter; nadie cambia el nombre de un bosque.",
+ "concepts": [
+  "Bosque, dominio, árbol: el bosque es el límite de seguridad; un dominio es una unidad de replicación y administración dentro de él",
+  "Nivel funcional: qué características de Windows Server puede usar el dominio; lo fija el DC más antiguo que pienses conservar",
+  "Registros SRV: _ldap._tcp.dc._msdcs.<domain> es cómo un cliente descubre un DC; la promoción los registra en DNS",
+  "Contraseña de DSRM: la contraseña del Administrator local que se usa cuando el directorio está sin conexión para repararlo",
+  "Roles FSMO: cinco roles de maestro único que tiene el primer DC (esquema, nomenclatura, RID, emulador de PDC, infraestructura)",
+  "Test-ADDSForestInstallation ejecuta todas las comprobaciones previas de Install-ADDSForest sin cambiar nada"
+ ],
+ "steps": [
+  "Arranca dc01 solo (las demás máquinas lo necesitan primero) e inicia sesión como el Administrator local. En PowerShell: Get-NetIPConfiguration. Deberías ver IPv4Address 10.10.10.10 e IPv4DefaultGateway 10.10.10.1; Get-NetIPInterface -AddressFamily IPv4 muestra Dhcp Disabled en el adaptador Ethernet. Una dirección DHCP aquí significa parar y corregirla primero.",
+  "Apunta el DNS al propio servidor: Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses 127.0.0.1 (usa el alias que muestra Get-NetAdapter). Get-DnsClientServerAddress -AddressFamily IPv4 lista ahora 127.0.0.1. Todavía no responde nada ahí; lo hará el servidor DNS que instalas en un momento.",
+  "Comprueba el nombre antes de que quede fijado: $env:COMPUTERNAME debería decir DC01. Si no, Rename-Computer -NewName dc01 -Restart ahora: renombrar un controlador de dominio más tarde es un procedimiento aparte.",
+  "Instala el rol y sus herramientas: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools. Deberías ver Success True y Restart Needed No; Get-WindowsFeature AD-Domain-Services muestra [X]. El servidor aún no es un DC: el rol son solo los binarios.",
+  "Ensaya primero: Test-ADDSForestInstallation -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString). Escribe una contraseña DSRM propia. Espera Status Success con dos advertencias: el valor criptográfico por defecto para Windows NT 4.0, y que no se puede crear una delegación DNS (corp.lab no tiene zona padre desde la que delegar, lo normal en un bosque de laboratorio).",
+  "Promueve: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. Configura DNS, crea la base de datos y SYSVOL, y se reinicia solo. El primer arranque como DC es lento (Applying computer settings): espéralo.",
+  "Inicia sesión como CORP\\Administrator (la contraseña del Administrator local pasó a ser la del dominio). Get-ADDomain | Format-List DNSRoot, NetBIOSName, DomainMode, PDCEmulator, y luego Get-ADForest | Format-List Name, ForestMode, SchemaMaster. Deberías ver corp.lab, CORP y dc01.corp.lab en todos los roles. Anota los niveles funcionales: deciden el Windows Server más antiguo que podrá ser DC aquí.",
+  "Mira el DNS: Get-DnsServerZone lista corp.lab y _msdcs.corp.lab con IsDsIntegrated True (las zonas viven en AD y se replican con él). Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab responde dc01.corp.lab en el puerto 389: así encontrará el DC cada cliente. Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv lista el resto.",
+  "Comprueba lo que hace de un DC un DC: Get-SmbShare muestra NETLOGON y SYSVOL (un DC solo se anuncia cuando SYSVOL está compartido), Get-Service NTDS, DNS, Netlogon, Kdc todos Running, y netdom query fsmo nombra a DC01 para los cinco roles.",
+  "Ejecuta dcdiag /q: sin salida significa que pasaron todas las pruebas. Si imprime algo, lee primero el nombre de la prueba (Advertising, FrsEvent, DFSREvent, SystemLog) y corrígelo antes de seguir; una advertencia en el registro System en los primeros minutos tras la promoción se puede repetir con dcdiag /test:systemlog. Luego pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "Promover un DC cuyo DNS apunta a un resolutor externo deja los registros SRV sin registrar; apunta primero el DNS al propio DC.",
+  "Un DC con una dirección DHCP es una bomba de relojería: la dirección cambia y todos los clientes pierden el dominio.",
+  "La contraseña de DSRM no es la contraseña del Administrator del dominio. Anótala en algún sitio donde la encuentres en caso de desastre.",
+  "Un nombre de una sola etiqueta (corp en vez de corp.lab) o un dominio público que no es tuyo (corp.com) es un bosque con el que vivirás para siempre: usa un nombre bajo un dominio que controles, o uno reservado como .lab en un laboratorio.",
+  "Renombrar el servidor después de la promoción ya no es Rename-Computer: ponle el nombre antes de Install-ADDSForest.",
+  "Si faltan SYSVOL y NETLOGON tras el reinicio, el DC nunca terminó su primera replicación de SYSVOL y no se anuncia: lee el registro de eventos DFS Replication antes que nada."
+ ],
+ "verify": [
+  "el dominio raíz del bosque",
+  "este host es un DC",
+  "zona DNS del dominio",
+  "quién tiene los roles FSMO"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué tipo de registro DNS piden los clientes para encontrar un controlador de dominio?",
+   "answer": "Registros SRV como _ldap._tcp.dc._msdcs.<domain>",
+   "wrong": [
+    "El registro MX del dominio",
+    "Un registro PTR del DC",
+    "El registro SOA"
+   ],
+   "why": "La promoción registra los registros SRV; los clientes localizan los DC a través de ellos."
+  },
+  {
+   "q": "¿Para qué se usa la contraseña de DSRM?",
+   "answer": "Para iniciar sesión localmente cuando el directorio está sin conexión para repararlo",
+   "wrong": [
+    "Es la contraseña del Administrator del dominio",
+    "Para unir equipos al dominio",
+    "Para cifrar SYSVOL"
+   ],
+   "why": "Directory Services Restore Mode tiene su propia contraseña de Administrator local."
+  },
+  {
+   "q": "¿Por qué un DC nunca debe obtener su dirección por DHCP?",
+   "answer": "Si la dirección cambia, los clientes pierden el dominio porque los registros DNS y SRV apuntan a la antigua",
+   "wrong": [
+    "DHCP no puede entregar direcciones de servidor",
+    "AD se niega a instalarse en máquinas con DHCP en todas las versiones",
+    "Hace más lenta la replicación"
+   ],
+   "why": "A un DC se le encuentra por su dirección; debe ser estática."
+  },
+  {
+   "q": "Test-ADDSForestInstallation avisa de que no se puede crear una delegación para este servidor DNS. ¿Qué haces?",
+   "answer": "Nada: la zona de un bosque nuevo no tiene zona padre desde la que delegar",
+   "wrong": [
+    "Parar e instalar DNS a mano primero",
+    "Apuntar el DNS del servidor a un resolutor de Internet",
+    "Usar -DomainNetbiosName en su lugar"
+   ],
+   "why": "La advertencia solo importa cuando existe una zona padre que debería delegar en la nueva."
+  },
+  {
+   "q": "Tras la promoción, ¿qué dos recursos compartidos debe tener un controlador de dominio antes de que los clientes puedan usarlo?",
+   "answer": "SYSVOL y NETLOGON",
+   "wrong": [
+    "ADMIN$ y C$",
+    "IPC$ y print$",
+    "NTDS y DNS"
+   ],
+   "why": "Un DC solo se anuncia cuando SYSVOL está compartido; NETLOGON guarda los scripts de inicio de sesión."
+  }
+ ]
+}

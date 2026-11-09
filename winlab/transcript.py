@@ -59,6 +59,22 @@ def collect(data: dict | None = None) -> dict:
                   "incidents": int(c.get("incidents") or 0), "uptime": c.get("uptime", 100.0),
                   "finished": bool(c.get("finished"))}
                  for c in data.get("companies", []) if int(c.get("days") or 0) > 0]
+    drills = [{"date": _date(float(b.get("started") or 0)), "topic": str(b.get("topic") or ""),
+               "level": str(b.get("level") or ""), "verdict": str(b.get("verdict") or ""),
+               "percent": int(b.get("percent") or 0), "minutes": b.get("minutes", 0),
+               "fixed": int(b.get("faults_fixed") or 0), "faults": int(b.get("faults") or 0),
+               "causes": int(b.get("causes_right") or 0)}
+              for b in data.get("breakfix", []) if not b.get("gave_up")]
+    interviews = [{"date": _date(float(i.get("started") or 0)), "role": str(i.get("role_title") or i.get("role") or ""),
+                   "level": str(i.get("level") or ""), "verdict": str(i.get("verdict") or ""),
+                   "percent": int(i.get("percent") or 0), "rounds": dict(i.get("rounds") or {})}
+                  for i in data.get("interviews", [])]
+    irs = [{"date": _date(float(b.get("started") or 0)), "title": str(b.get("title") or b.get("drill") or ""),
+            "node": str(b.get("node") or ""), "verdict": str(b.get("verdict") or ""),
+            "percent": int(b.get("percent") or 0), "minutes": b.get("minutes", 0),
+            "detected": bool(b.get("detected")), "iocs": int(b.get("iocs") or 0),
+            "found": int(b.get("iocs_found") or 0), "technique": bool(b.get("technique_right"))}
+           for b in data.get("incidents", []) if not b.get("gave_up")]
     readiness = []
     titles = {l.id: l.title for l in all_lessons}
     for ex in exams.list_available():
@@ -69,9 +85,21 @@ def collect(data: dict | None = None) -> dict:
     return {"student": str(data.get("student") or ""), "lessons_done": done, "lessons_total": len(all_lessons),
             "graded": sum(1 for m in modules for r in m["done"] if r["how"] == "graded"),
             "modules": modules, "problems": problems, "shifts": shifts, "helpdesk": helpdesk,
-            "companies": companies, "exams": readiness,
+            "companies": companies, "breakfix": drills, "interviews": interviews, "incidents": irs, "exams": readiness, "game": _game(data),
             "hours": round(sum(l.minutes for l in all_lessons
                                if (data["lessons"].get(l.id) or {}).get("status") == progress.STATUS_DONE) / 60, 1)}
+
+
+def _game(data: dict) -> dict | None:
+    """The helpdesk ticket game (winlab/ticketgame.py): rank, points, best grade per level, badges."""
+    from . import ticketgame
+    c = ticketgame.career(data)
+    if not c["shifts"]:
+        return None
+    return {"rank": ticketgame.rank(c["xp"])["title"], "xp": c["xp"], "shifts": len(c["shifts"]),
+            "best": [(lv["title"], c["best"][k].get("grade", ""), int(c["best"][k].get("score") or 0))
+                     for k, lv in ticketgame.LEVELS.items() if c["best"].get(k)],
+            "badges": [ticketgame.BADGES[b][0] for b in c["badges"] if b in ticketgame.BADGES]}
 
 
 def _code(name: str, facts: dict) -> str:
@@ -107,12 +135,31 @@ def render_text(facts: dict | None = None) -> str:
         out += [f"  {h['date']:<12} {h['handled']}/{h['tickets']} handled, SLA met {h['sla']}%, "
                 f"first-time fix {h['ftf']}%, {h['mttr']} min to resolve, {h['breaches']} breaches"
                 for h in f["helpdesk"]]
+    if f.get("game"):
+        g = f["game"]
+        out += ["", f"Ticket game: {g['rank']}, {g['xp']} points over {g['shifts']} shift{'s' if g['shifts'] != 1 else ''}"]
+        out += [f"  {t:<22} best grade {gr}, {sc} points" for t, gr, sc in g["best"]]
+        if g["badges"]:
+            out.append("  badges: " + ", ".join(g["badges"]))
     if f.get("companies"):
         out += ["", "Company runs"]
         out += [f"  {c['date']:<12} {c['name']} ({c['lab']}): {c['days']} days run, SLA met {c['sla']}%, "
                 f"{c['incidents']} incident{'s' if c['incidents'] != 1 else ''}, {c['resolved']}/{c['tickets']} tickets"
                 f"{'' if c['finished'] else ', still running'}"
                 for c in f["companies"]]
+    if f.get("breakfix"):
+        out += ["", "Break and fix"]
+        out += [f"  {b['date']:<12} {b['topic']}, {b['level']}: {b['verdict']} ({b['percent']}%), "
+                f"{b['fixed']}/{b['faults']} fixed, {b['causes']} root cause{'s' if b['causes'] != 1 else ''} named, "
+                f"{b['minutes']} min" for b in f["breakfix"]]
+    if f.get("interviews"):
+        out += ["", "Job interviews"]
+        out += [f"  {i['date']:<12} {i['role']}, {i['level']}: {i['verdict']} ({i['percent']}%)" for i in f["interviews"]]
+    if f.get("incidents"):
+        out += ["", "Security incident drills"]
+        out += [f"  {b['date']:<12} {b['node']}: {b['verdict']} ({b['percent']}%), "
+                f"{'seen by the SIEM' if b['detected'] else 'not seen by the SIEM'}, "
+                f"{b['found']}/{b['iocs']} indicators reported, {b['minutes']} min" for b in f["incidents"]]
     for e in f["exams"]:
         out += ["", f"{e['title']}: {e['overall']}% ready"]
     return "\n".join(out)
@@ -144,12 +191,36 @@ def render(name: str = "") -> str:
                 f"<tr><td>{esc(h['date'])}</td><td>{h['handled']} of {h['tickets']}</td><td>{h['sla']}%</td>"
                 f"<td>{h['ftf']}%</td><td>{h['mttr']} min</td><td>{h['breaches']}</td></tr>"
                 for h in f["helpdesk"][-10:]) + "</table>") if f.get("helpdesk") else ""
+    g = f.get("game")
+    game = (f"<h2>Ticket game</h2><p>{esc(g['rank'])}: {g['xp']} points over {g['shifts']} helpdesk shifts of real problems, "
+            "each fix checked on the machine.</p><table><tr><th>Level</th><th>Best grade</th><th>Points</th></tr>"
+            + "".join(f"<tr><td>{esc(t)}</td><td>{esc(gr)}</td><td>{sc}</td></tr>" for t, gr, sc in g["best"]) + "</table>"
+            + (f"<p>Badges: {esc(', '.join(g['badges']))}</p>" if g["badges"] else "")) if g else ""
     runs = ("<h2>Company runs</h2><table><tr><th>Started</th><th>Company</th><th>Days run</th><th>Tickets resolved</th>"
             "<th>SLA met</th><th>Incidents</th><th>Uptime</th></tr>" + "".join(
                 f"<tr><td>{esc(c['date'])}</td><td>{esc(c['name'])} <small>({esc(c['lab'])})</small></td>"
                 f"<td>{c['days']}{'' if c['finished'] else ' (running)'}</td><td>{c['resolved']} of {c['tickets']}</td>"
                 f"<td>{c['sla']}%</td><td>{c['incidents']}</td><td>{c['uptime']}%</td></tr>"
                 for c in f["companies"][-10:]) + "</table>") if f.get("companies") else ""
+    drills = ("<h2>Break and fix</h2><table><tr><th>Date</th><th>Topic</th><th>Level</th><th>Fixed</th>"
+              "<th>Root cause</th><th>Time</th><th>Result</th></tr>" + "".join(
+                  f"<tr><td>{esc(b['date'])}</td><td>{esc(b['topic'])}</td><td>{esc(b['level'])}</td>"
+                  f"<td>{b['fixed']} of {b['faults']}</td><td>{b['causes']} of {b['faults']} named</td>"
+                  f"<td>{b['minutes']} min</td><td>{esc(b['verdict'])} ({b['percent']}%)</td></tr>"
+                  for b in f["breakfix"][-10:]) + "</table>") if f.get("breakfix") else ""
+    _rt = (("screening", "Screening"), ("technical", "Technical"), ("situation", "Situations"), ("practical", "Practical"))
+    ivs = ("<h2>Job interviews</h2><table><tr><th>Date</th><th>Role</th><th>Level</th>"
+           + "".join(f"<th>{t}</th>" for _, t in _rt) + "<th>Result</th></tr>" + "".join(
+               f"<tr><td>{esc(i['date'])}</td><td>{esc(i['role'])}</td><td>{esc(i['level'])}</td>"
+               + "".join(f"<td>{int(i['rounds'].get(k) or 0)}%</td>" for k, _ in _rt)
+               + f"<td>{esc(i['verdict'])} ({i['percent']}%)</td></tr>"
+               for i in f["interviews"][-10:]) + "</table>") if f.get("interviews") else ""
+    irs = ("<h2>Security incident drills</h2><table><tr><th>Date</th><th>Machine</th><th>Seen by the SIEM</th>"
+           "<th>Indicators reported</th><th>Technique</th><th>Time</th><th>Result</th></tr>" + "".join(
+               f"<tr><td>{esc(b['date'])}</td><td>{esc(b['node'])}</td><td>{'yes' if b['detected'] else 'no'}</td>"
+               f"<td>{b['found']} of {b['iocs']}</td><td>{'named' if b['technique'] else 'missed'}</td>"
+               f"<td>{b['minutes']} min</td><td>{esc(b['verdict'])} ({b['percent']}%)</td></tr>"
+               for b in f["incidents"][-10:]) + "</table>") if f.get("incidents") else ""
     exm = "".join(
         f"<h2>{esc(e['title'])}: {e['overall']}% ready</h2><table><tr><th>Skill area</th><th>Lessons done</th></tr>"
         + "".join(f"<tr><td>{esc(t)}</td><td><span class='bar'><i style='width:{p}%'></i></span> {p}%</td></tr>"
@@ -198,6 +269,6 @@ td{{border-bottom:1px solid #eef0f4;padding:4px 6px;vertical-align:top}}
   </div>
   {empty}
   {('<h2>Lessons passed</h2>' + mods) if mods else ''}
-  {probs}{shifts}{desk}{runs}{exm}
+  {probs}{shifts}{drills}{ivs}{irs}{desk}{game}{runs}{exm}
   <div class="foot"><span>{time.strftime('%d %B %Y')}</span><span>reference {_code(name, f)}</span><span>winlab {__version__}</span></div>
 </div></body></html>"""

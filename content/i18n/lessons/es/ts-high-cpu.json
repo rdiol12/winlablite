@@ -1,0 +1,58 @@
+{
+ "title": "El servidor que de repente va lento",
+ "summary": "Todo en un servidor va a paso de tortuga; la CPU está clavada al 100 por ciento.",
+ "why": "Lento es una medida, no una sensación. Get-Counter le pone un número, y Get-Process ordenado por CPU nombra el proceso. Antes de matarlo, averigua qué lo inició y con qué línea de comandos, porque en producción la pregunta no es \"¿cómo lo detengo?\" sino \"¿volverá, y debería?\". Un proceso desbocado es síntoma de un error, un bucle, un escaneo o un atacante; el proceso padre te dice cuál.",
+ "concepts": [
+  "Get-Counter: tiempo de procesador, longitud de la cola, los números detrás de la sensación",
+  "Get-Process ordenado por CPU; la columna CPU son segundos acumulados, así que compara dos veces",
+  "Win32_Process: línea de comandos e id del proceso padre de cualquier proceso",
+  "Stop-Process frente a arreglar la causa: lo segundo es el trabajo"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 high-cpu). No leas todavía las pistas.",
+  "Reproduce el síntoma tal como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Arregla la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la evidencia que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Matar el powershell.exe equivocado puede matar el agente que winlab usa para hablar con la máquina; comprueba antes la línea de comandos.",
+  "Un proceso al 100 por ciento de un núcleo en un servidor de cuatro núcleos muestra un 25 por ciento en total; lee por proceso, no solo el total."
+ ],
+ "verify": [
+  "la CPU ahora",
+  "los procesos principales por tiempo de CPU"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué es la columna CPU de Get-Process?",
+   "answer": "Segundos de CPU acumulados, así que compara dos muestras",
+   "wrong": [
+    "El porcentaje en este momento",
+    "La memoria en MB",
+    "El número de hilos"
+   ],
+   "why": "La diferencia entre muestras es la carga."
+  },
+  {
+   "q": "¿Qué clase da la línea de comandos y el padre de un proceso?",
+   "answer": "Win32_Process",
+   "wrong": [
+    "Win32_Service",
+    "Win32_ComputerSystem",
+    "Win32_Thread"
+   ],
+   "why": "Compruébalo antes de matar nada."
+  },
+  {
+   "q": "Un proceso usa un núcleo completo en un servidor de cuatro núcleos. ¿Qué muestra el total?",
+   "answer": "Alrededor del 25 por ciento",
+   "wrong": [
+    "100 por ciento",
+    "4 por ciento",
+    "400 por ciento"
+   ],
+   "why": "Lee los números por proceso."
+  }
+ ]
+}

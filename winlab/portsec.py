@@ -54,7 +54,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-from . import devcli, dot1x, paths, state
+from . import devcli, dot1x, l2sec, paths, snooping, state
 
 TABLE = "winlab_port"
 RUN = "/run/winlab-port"
@@ -62,7 +62,9 @@ VIOLATIONS = ("shutdown", "restrict", "protect")
 MAX_ADDRS = 132           # a 2950's secure addresses on one port
 RECOVERY = 300            # errdisable recovery interval, seconds
 CAUSE = "psecure-violation"
-CONF_FIELDS = ("psec", "psec-max", "psec-sticky", "psec-mac", "psec-stuck", "psec-viol", "dx-ctl", "dx-pae")
+CONF_FIELDS = (("psec", "psec-max", "psec-sticky", "psec-mac", "psec-stuck", "psec-viol", "dx-ctl", "dx-pae")
+               + snooping.FIELDS + l2sec.FIELDS)
+CAUSES = (CAUSE, snooping.RL_CAUSE, l2sec.CAUSE)   # what err-disables a port here, and recovers on the timer
 LOG_KEEP = 200
 _MAC = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 _IF = re.compile(r"^[A-Za-z0-9]{1,12}$")
@@ -103,6 +105,7 @@ class Port:
     violation: str = "shutdown"
     err: str = ""             # the address that err-disabled it
     err_at: float = 0
+    cause: str = CAUSE        # what err-disabled it (DHCP snooping's rate limit too, winlab/snooping.py)
     visitors: list[str] = field(default_factory=list)
     dx: str = ""              # 802.1X: "auto", "closed" or ""
 
@@ -156,6 +159,8 @@ def _port(lab, sw: str, no: int, link) -> Port:
             p.err_at = float(err[1])
         except ValueError:
             pass
+    if len(err) > 2 and err[2] in CAUSES:
+        p.cause = err[2]
     return p
 
 
@@ -255,14 +260,14 @@ def settle(lab, plan, running: set, live: dict | None = None, now: float | None 
     for p in all_ports(lab, plan):
         own = lab.devices.setdefault(f"sw:{p.sw}", {})
         # errdisable recovery: the port tries again after the interval
-        if p.err and own.get(f"errdis-cause:{CAUSE}"):
+        if p.err and own.get(f"errdis-cause:{p.cause}"):
             iv = int(own.get("errdis-interval") or RECOVERY)
             if now - (p.err_at or now) >= iv:
                 own.pop(f"psec-err:{p.label}", None)
                 for k in ("noted", "dyn"):
                     rt.get(k, {}).pop(p.label, None)
                 said.setdefault(p.sw, []).append(
-                    f"%PM-4-ERR_RECOVER: Attempting to recover from {CAUSE} err-disable state on {p.short}")
+                    f"%PM-4-ERR_RECOVER: Attempting to recover from {p.cause} err-disable state on {p.short}")
                 links.append((p.link, True))
                 p.err = ""
         if not p.on or p.err or own.get(f"shut:{p.label}"):
@@ -298,6 +303,8 @@ def settle(lab, plan, running: set, live: dict | None = None, now: float | None 
                 break
             said.setdefault(p.sw, []).append(_violation_lines(p, mac)[0])
     if live is not None:
+        snooping.settle(lab, plan, live, rt, now, said, links)   # DHCP snooping's rate limit and drops
+        l2sec.settle(lab, plan, live, rt, now, said, links)      # storm control's shutdown, what the guards drop
         _events(lab, plan, live.get("events", []), rt, said)
     for sw, lines in said.items():
         log(lab.name, f"sw:{sw}", lines, rt, now, lab=lab)
@@ -400,13 +407,15 @@ def render(plan, reset: bool = False) -> list[str]:
     build them again while it runs (reset)."""
     lab = plan.lab
     ps = [p for p in all_ports(lab, plan) if p.iface and (p.secured or p.visitors or p.err)]
-    if not ps and not reset:
+    if not ps and not reset and not snooping.active(lab) and not l2sec.active(lab):
         return []
+    snoop = snooping.render(plan, RUN, TABLE)   # DHCP snooping and ARP inspection share the table
+    l2 = l2sec.render(plan, RUN, TABLE)   # private VLANs, storm control, RA and DHCPv6 guard, IPv6 port ACLs
     out = ["### port security and 802.1X on the switches' access ports (winlab/portsec.py, winlab/dot1x.py)",
            f"mkdir -p {RUN}",
            f"[ -f {RUN}/watch.pid ] && kill $(cat {RUN}/watch.pid) 2>/dev/null; rm -f {RUN}/*.err {RUN}/watch.pid"]
     pre, post = dot1x.render(plan, ps, RUN, TABLE)
-    out += pre
+    out += pre + snoop["pre"] + l2["pre"]
     out += [f"nft delete table bridge {TABLE} 2>/dev/null; true",
             "for n in $(ip netns list 2>/dev/null | grep -o '^wv[0-9]*'); do kill $(ip netns pids $n) 2>/dev/null; ip netns del $n; done; "
             "for i in $(ls /sys/class/net 2>/dev/null | grep '^wv'); do ip link del $i 2>/dev/null; done; true",
@@ -435,13 +444,20 @@ def render(plan, reset: bool = False) -> list[str]:
                              f"counter name viol_{i} drop")
         if p.dx:
             rules.append(f"    iifname \"{i}\" ether saddr != @dx_{i} drop")
-    if sets:
-        out += [f"nft -f - <<'WINLAB_EOF'", f"table bridge {TABLE} {{", *sets, "  chain ports {",
-                "    type filter hook prerouting priority -200; policy accept;", *rules, "  }", "}", "WINLAB_EOF"]
+    sets += snoop["sets"] + l2["sets"]
+    rules += snoop["rules"] + l2["rules"]
+    local = (["  chain local {", "    type filter hook output priority -200; policy accept;", *snoop["local"],
+              *l2["local"], "  }"] if snoop["local"] or l2["local"] else [])
+    chains = [line for chain in l2["chains"] for line in chain]
+    if sets or chains:
+        out += [f"nft -f - <<'WINLAB_EOF'", f"table bridge {TABLE} {{", *sets, *chains, "  chain ports {",
+                "    type filter hook prerouting priority -200; policy accept;", *rules, "  }", *local, "}",
+                "WINLAB_EOF"]
+        out += snoop["post"] + l2["post"]
     for p in ps:
         i = p.iface
         if p.err:
-            out.append(f"bridge link set dev {i} state 0   # {p.short} err-disabled ({CAUSE})")
+            out.append(f"bridge link set dev {i} state 0   # {p.short} err-disabled ({p.cause})")
         elif p.on and not p.dx and len(p.allowed) >= p.maximum:
             vid = plan.vid_of(p.link)
             out += [f"bridge fdb replace {m} dev {i} master static vlan {vid}" for m in p.allowed[:p.maximum]]
@@ -479,15 +495,17 @@ def live_cmd(plan) -> str:
     dx = [p.iface for p in all_ports(plan.lab, plan) if p.iface and p.dx]
     return (f"echo '#gen'; cat {RUN}/gen 2>/dev/null; echo '#nft'; nft list table bridge {TABLE} 2>/dev/null; "
             f"echo '#err'; for f in {RUN}/*.err; do [ -e \"$f\" ] && echo \"$(basename $f .err) $(cat $f)\"; done; "
-            f"echo '#events'; tail -n 60 {RUN}/events 2>/dev/null; " + dot1x.live_cmd(dx) + "echo '#end'")
+            f"echo '#events'; tail -n 60 {RUN}/events 2>/dev/null; " + snooping.live_cmd(RUN) + l2sec.live_cmd(RUN)
+            + dot1x.live_cmd(dx)
+            + "echo '#end'")
 
 
 def parse_live(text: str) -> dict:
     """live_cmd's answer: {"psec": {"gen", "allowed": {iface: [mac]}, "bad",
     "count": {iface: n}, "err": {iface: mac}}, "events": [...], "dot1x": {...}}."""
-    sec, buf = "", {"gen": [], "nft": [], "err": [], "events": [], "dx": []}
+    sec, buf = "", {"gen": [], "nft": [], "err": [], "events": [], "dx": [], "snoop": [], "rl": [], "storm": []}
     for line in (text or "").splitlines():
-        m = re.match(r"^#(gen|nft|err|events|end)$", line.strip())
+        m = re.match(r"^#(gen|nft|err|events|snoop|rl|storm|end)$", line.strip())
         if m:
             sec = m.group(1)
             continue
@@ -508,6 +526,10 @@ def parse_live(text: str) -> dict:
         if parts:
             err[parts[0]] = parts[1] if len(parts) > 1 and _MAC.match(parts[1]) else "00:00:00:00:00:00"
     out = {"events": [e.strip() for e in buf["events"] if e.strip()], "dot1x": dot1x.parse("\n".join(buf["dx"]))}
+    if buf["snoop"] or buf["rl"] or "snoop_bind" in nft:
+        out["snoop"] = snooping.parse(buf["snoop"], buf["rl"], nft)
+    if buf["storm"] or re.search(r"counter (?:storm_[bmu]|rag|ragup|d6g|pvl)_", nft):
+        out["l2"] = l2sec.parse(buf["storm"], nft)
     if nft.strip() or err:
         out["psec"] = {"gen": "".join(buf["gen"]).strip(), "allowed": allowed, "bad": bad, "count": count, "err": err}
     return out
@@ -516,7 +538,7 @@ def parse_live(text: str) -> dict:
 # ------------------------------------------------------------------ the machines' links
 def _set_link(lab, link, up: bool) -> None:
     from . import physfaults, state
-    if up and any(r["kind"] == "nic" for r in physfaults.active(lab.name, link=link.label)):
+    if up and any(physfaults.card_side(r["kind"]) for r in physfaults.active(lab.name, link=link.label)):
         return
     st = state.load(lab.name)
     ns = st.nodes.get(link.node_id) if st else None
@@ -554,6 +576,7 @@ def add_specs(con, add, U, C, I) -> None:
     add("show errdisable recovery", lambda a: show_recovery(con), "Error disable recovery", U)
     add("clear port-security <line>", lambda a: clear(con, a[0]), "Clear secure address", E)
     dot1x.add_specs(con, add, U, C, I)
+    snooping.add_specs(con, add, U, C, I)   # ip dhcp snooping, ip arp inspection
 
 
 def _sw(con) -> str:
@@ -728,15 +751,20 @@ def _cause(con, what: str, on: bool) -> str:
     if w == "bpduguard":
         raise devcli.CliError("% Only psecure-violation recovers on a timer in this switch; a BPDU guard "
                               "port comes back with shutdown, then no shutdown")
-    if w not in (CAUSE, "all"):
-        raise devcli.CliError(f"% Invalid input: errdisable recovery cause {CAUSE} | all")
-    if on:
-        _mine(con)[f"errdis-cause:{CAUSE}"] = "yes"
-    else:
-        _mine(con).pop(f"errdis-cause:{CAUSE}", None)
+    if w == "arp-inspection":
+        raise devcli.CliError("% ARP inspection has no rate limit in this switch, so nothing err-disables a port "
+                              "for arp-inspection")
+    if w not in CAUSES + ("all",):
+        raise devcli.CliError(f"% Invalid input: errdisable recovery cause {' | '.join(CAUSES)} | all")
+    for c in (CAUSES if w == "all" else (w,)):
+        if on:
+            _mine(con)[f"errdis-cause:{c}"] = "yes"
+        else:
+            _mine(con).pop(f"errdis-cause:{c}", None)
     out = done(con)
     if w == "all":
-        out = (out + "\n" if out else "") + f"% Recovery on for {CAUSE}, the only cause with a timer in this switch"
+        out = (out + "\n" if out else "") + (f"% Recovery on for {' and '.join(CAUSES)}, the causes with a timer "
+                                             f"in this switch")
     return out
 
 
@@ -838,18 +866,18 @@ def show_address(con) -> str:
 
 def show_recovery(con) -> str:
     own = _mine(con)
-    on = bool(own.get(f"errdis-cause:{CAUSE}"))
+    on = {c for c in CAUSES if own.get(f"errdis-cause:{c}")}
     iv = int(own.get("errdis-interval") or RECOVERY)
     out = ["ErrDisable Reason            Timer Status", "-----------------            --------------"]
     for cause in ("arp-inspection", "bpduguard", "dhcp-rate-limit", "link-flap", CAUSE, "security-violation"):
-        out.append(f"{cause:<29}{'Enabled' if cause == CAUSE and on else 'Disabled'}")
+        out.append(f"{cause:<29}{'Enabled' if cause in on else 'Disabled'}")
     out += ["", f"Timer interval: {iv} seconds", "", "Interfaces that will be enabled at the next timeout:", ""]
-    errs = [p for p in _sync_live(con) if p.err]
-    if errs and on:
+    errs = [p for p in _sync_live(con) if p.err and p.cause in on]
+    if errs:
         out += ["Interface       Errdisable reason       Time left(sec)",
                 "---------       -----------------       --------------"]
         now = time.time()
-        out += [f"{p.short:<16}{CAUSE:<24}{max(0, int(iv - (now - (p.err_at or now)))):>14}" for p in errs]
+        out += [f"{p.short:<16}{p.cause:<24}{max(0, int(iv - (now - (p.err_at or now)))):>14}" for p in errs]
     return "\n".join(out)
 
 
@@ -893,11 +921,12 @@ def clear(con, text: str) -> str:
 def run_lines(lab, sw: str) -> list[str]:
     own = _own(lab, sw)
     out = []
-    if own.get(f"errdis-cause:{CAUSE}"):
-        out.append(f"errdisable recovery cause {CAUSE}")
+    for c in CAUSES:
+        if own.get(f"errdis-cause:{c}"):
+            out.append(f"errdisable recovery cause {c}")
     if own.get("errdis-interval"):
         out.append(f"errdisable recovery interval {own['errdis-interval']}")
-    return (out + ["!"] if out else []) + dot1x.run_lines(lab, sw)
+    return (out + ["!"] if out else []) + dot1x.run_lines(lab, sw) + snooping.run_lines(lab, sw)
 
 
 def iface_lines(lab, sw: str, key: str) -> list[str]:
@@ -915,7 +944,7 @@ def iface_lines(lab, sw: str, key: str) -> list[str]:
     out += [f" switchport port-security mac-address {devcli.dotted_mac(m)}" for m in _macs(own.get(f"psec-mac:{key}"))]
     if own.get(f"psec:{key}"):
         out.append(" switchport port-security")
-    return out + dot1x.iface_lines(lab, sw, key)
+    return out + dot1x.iface_lines(lab, sw, key) + snooping.iface_lines(lab, sw, key)
 
 
 # ------------------------------------------------------------------ the canvas
@@ -941,9 +970,9 @@ def view(lab, plan) -> dict:
     if d:
         k = DRILLS[d["id"]]
         drill = {"id": k.id, "shown": int(d.get("hints", 0)), "of": len(k.hints),
-                 "hints": [h.format(**_words(lab, d)) for h in k.hints[:int(d.get("hints", 0))]],
-                 "symptom": k.symptom.format(**_words(lab, d)), "done": bool(d.get("done")),
-                 "title": k.title if d.get("done") else "", "fix": k.fix if d.get("done") else ""}
+                 "hints": [_pt(h).format(**_words(lab, d)) for h in k.hints[:int(d.get("hints", 0))]],
+                 "symptom": _pt(k.symptom).format(**_words(lab, d)), "done": bool(d.get("done")),
+                 "title": _pt(k.title) if d.get("done") else "", "fix": _pt(k.fix) if d.get("done") else ""}
     return {"ports": rows, "drill": drill}
 
 
@@ -1042,6 +1071,12 @@ def live(dash) -> dict:
 # ------------------------------------------------------------------ drills
 # Graded faults in the manner of winlab/stp.py: put into the user's own
 # network without a word, a hint ladder, Check my fix, Give up.
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 @dataclass(frozen=True)
 class Drill:
     id: str
@@ -1122,7 +1157,7 @@ def drill(dash, op: str, params: dict) -> dict:
     if op == "hint":
         d["hints"] = min(len(k.hints), int(d.get("hints", 0)) + 1)
         _drill_save(lab.name, d)
-        return {"ok": True, "message": k.hints[d["hints"] - 1].format(**_words(lab, d))}
+        return {"ok": True, "message": _pt(k.hints[d["hints"] - 1]).format(**_words(lab, d))}
     if op == "check":
         res = check(dash, d)
         if res["passed"]:
@@ -1140,7 +1175,7 @@ def drill(dash, op: str, params: dict) -> dict:
                     own[key] = v
             _save(dash)
             _drill_save(lab.name, None)
-            return {"ok": True, "message": f"put back: it was {k.title.lower()}{_sync(dash)}"}
+            return {"ok": True, "message": f"put back: it was {_pt(k.title).lower()}{_sync(dash)}"}
         _drill_save(lab.name, None)
         return {"ok": True, "message": ""}
     raise PortSecError(f"unknown drill step {op!r}")
@@ -1216,6 +1251,6 @@ def check(dash, d: dict) -> dict:
                      f"and a port authorizes)", same or authed))
     passed = all(ok for _, ok in rows)
     k = DRILLS[d["id"]]
-    msg = (f"fixed: it was {k.title.lower()}. The fix: {k.fix}." if passed else
+    msg = (f"fixed: it was {_pt(k.title).lower()}. The fix: {_pt(k.fix)}." if passed else
            "not yet: " + "; ".join(t for t, ok in rows if not ok))
     return {"ok": True, "passed": passed, "message": msg, "results": [{"check": t, "passed": ok} for t, ok in rows]}

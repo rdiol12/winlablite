@@ -6,8 +6,9 @@ router's, as in every other lab: the two LANs are routed, the foundation
 lesson builds the domain and DHCPv4 on dc01, and the lab router relays
 lan-b's DHCPv4 to it. IPv6 belongs to the student alone. The lab router
 forwards no IPv6 and accepts no router advertisement (netplan.py writes
-net.ipv6.conf.all.forwarding=0 and default.accept_ra=0 into every fabric),
-so the only IPv6 paths are the two Ubuntu routers the student builds, joined
+net.ipv6.conf.all.forwarding=0 and default.accept_ra=0 into every fabric,
+and only an ``ipv6`` command typed at the router's console changes that,
+winlab/iosv6.py), so the only IPv6 paths are the two Ubuntu routers the student builds, joined
 by a core segment the lab router is not cabled to. Until the student builds
 them, every machine has only its link-local fe80:: address, which is the
 honest starting point.
@@ -27,34 +28,44 @@ resolved against Ubuntu 24.04's archive (archive.ubuntu.com and
 security.ubuntu.com), every .deb checked against the SHA-256 the archive's
 index gives (winlab/debpacks.py), onto this PC. Setup offers both
 (mail.setup_steps); the machine's Settings plugs each in as a stick, from
-which the student installs with apt, offline. Nothing reaches the lab from
-outside and the lab reaches nothing outside: no NAT, no NAT64 or DNS64, no
-forwarded port, no global IPv6 prefix and no path from any router to this
+which the student installs with apt, offline. A third pack, 'nat64'
+(TAYGA and Unbound, about 8 MB, from the same archive), is for rtr01 in the
+NAT64/DNS64 lesson (ipv6-nat64-dns64): it lets an IPv6-only PC on lan-a
+reach an IPv4-only service on lan-b inside the lab, nothing more. Nothing
+reaches the lab from outside and the lab reaches nothing outside: no NAT to
+the outside, no forwarded port, no global IPv6 prefix and no path from any router to this
 PC. The lab uses a ULA prefix (fd00::/8) precisely because it never leaves
 the lab.
 
 What winlab does not do, and why:
 
-* The workbench router (winlab/devcli.py) gets no `ipv6 address`, `ipv6
-  unicast-routing` or `ipv6 nd`. The lab router is the IPv4 plumbing every
-  lab shares; if it also routed IPv6 or sent router advertisements, every
-  segment would gain a second IPv6 router that the student did not build,
-  and the RA and OSPFv3 lessons would be about which router wins. The
-  router appliance also has nothing to send RAs with: busybox has no RA
-  daemon, its dnsmasq could (enable-ra) but would need a second
-  configuration engine in devcli kept in step with the IPv4 one, and radvd
-  or FRRouting would have to be added to the appliance volume every lab
-  prepares (apkrepo.py, alpineovl.APPLIANCE_PACKAGES). Not worth
-  destabilising the console every lab uses; the IPv6 routers are the Ubuntu
-  machines.
+* The lab router (winlab/devcli.py) stays out of this lab's IPv6. Its
+  console does speak IPv6 now (winlab/iosv6.py: ``ipv6 unicast-routing``,
+  ``ipv6 address``, ``ipv6 nd``, ``ipv6 route``, OSPFv3, taught on the
+  router-protocols lab), but all of it is off until the student types
+  ``ipv6 unicast-routing`` or an ``ipv6`` line at the console: until then
+  the router forwards no IPv6 and sends no router advertisement, exactly as
+  netplan.py leaves it. Here nobody is asked to, and the lesson text does not
+  suggest it: if the lab router also routed IPv6 or advertised a prefix on
+  lan-a and lan-b, every segment would gain a second IPv6 router the
+  student did not build, and the RA and OSPFv3 lessons would be about which
+  router wins. Nothing here depends on it either way: the core segment
+  between the two Ubuntu routers is not cabled to the lab router, so the
+  IPv6 paths are the student's routers whatever its console says. (Router
+  advertisements on the lab router are FRRouting's zebra, which the console
+  installs on demand; busybox alone has no RA daemon.)
 * No DHCPv6 relay on lan-b. FRRouting has no DHCPv6 relay, so pc02 and lnx01
   take their addresses by SLAAC and their DNS server and search domain from
   the RA (RDNSS and DNSSL, RFC 8106, which Windows 10 1703 and later read).
   isc-dhcp-relay (dhcrelay -6) would do it but is deprecated upstream, and
   stateful DHCPv6 is taught on lan-a, where dc01 is on the link.
-* No IPv6 to the Internet, no NAT64/DNS64, no 6to4 or Teredo: there is no
-  Internet in the lab, and a transition mechanism that pretends there is
-  would teach the wrong thing.
+* No IPv6 to the Internet, no 6to4 or Teredo: there is no Internet in the
+  lab, and a transition mechanism that pretends there is would teach the
+  wrong thing. NAT64 and DNS64 are taught inside the lab instead, between
+  an IPv6-only client and an IPv4-only service the student puts on lnx01,
+  with a network-specific prefix from the lab's own ULA
+  (fd12:3456:789a:64::/96): the well-known prefix 64:ff9b::/96 must not
+  carry private IPv4 addresses (RFC 6052), and TAYGA refuses to.
 * No machine is configured for the student, and no role does it: the drills
   below break what the student built and refuse to run until it exists.
 """
@@ -380,3 +391,5 @@ def _faults():
 def register_faults(reg) -> None:
     for f in _faults():
         reg(f)
+    from . import iosv6  # the IPv6 static-routes drill: an Ubuntu router that stopped forwarding
+    iosv6.register_faults(reg)

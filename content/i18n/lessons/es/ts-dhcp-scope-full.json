@@ -1,0 +1,57 @@
+{
+ "title": "Los PC nuevos no reciben dirección",
+ "summary": "Las máquinas de la red funcionan; un PC reinstalado obtiene 169.254 y nada más.",
+ "why": "Un ámbito DHCP es un conjunto finito. Las concesiones largas y una oleada de dispositivos de visita (teléfonos en la red de la oficina, una conferencia, un switch que se porta mal) lo llenan, y entonces solo siguen funcionando las máquinas que ya tienen concesión, porque una renovación no necesita una dirección libre. El síntoma le cae a la única persona con un portátil nuevo. Leer las estadísticas del ámbito y la tabla de concesiones lleva un minuto.",
+ "concepts": [
+  "Concesión, renovación a mitad de plazo y concesión nueva: por qué los clientes existentes siguen funcionando",
+  "Estadísticas del ámbito: en uso, libres, porcentaje",
+  "La duración de la concesión como decisión de diseño: horas para invitados, días para oficinas",
+  "APIPA (169.254) significa que no hubo respuesta DHCP"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break dc01 dhcp-scope-full). No leas aún las pistas.",
+  "En pc01, ipconfig /release y luego ipconfig /renew, y lee lo que pasa.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Arregla la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la prueba que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Eliminar todas las concesiones libera el ámbito y durante un momento reparte direcciones que las máquinas aún usan (conflictos): quita las obsoletas.",
+  "Un ámbito más grande solo retrasa el siguiente agotamiento cuando la causa son concesiones largas para visitas cortas."
+ ],
+ "verify": [
+  "lo lleno que está el ámbito"
+ ],
+ "quiz": [
+  {
+   "q": "Un PC obtiene 169.254.x.x. ¿Qué significa?",
+   "answer": "Ningún servidor DHCP respondió",
+   "wrong": [
+    "Tiene una dirección estática",
+    "Falló el DNS",
+    "Está en la VLAN equivocada, siempre"
+   ],
+   "why": "APIPA es el recurso de reserva."
+  },
+  {
+   "q": "¿Por qué los clientes existentes siguen funcionando cuando el ámbito está lleno?",
+   "answer": "Renuevan sus concesiones existentes",
+   "wrong": [
+    "No necesitan DHCP",
+    "Usan APIPA",
+    "Tienen reservas"
+   ],
+   "why": "Solo los clientes nuevos necesitan una dirección libre."
+  },
+  {
+   "q": "¿Por qué no eliminar todas las concesiones para liberar el ámbito?",
+   "answer": "Las direcciones que siguen en uso se vuelven a repartir y causan conflictos",
+   "wrong": [
+    "Elimina el ámbito",
+    "Requiere reiniciar el DC",
+    "Es el arreglo correcto"
+   ],
+   "why": "Quita las concesiones obsoletas; corrige la duración de la concesión."
+  }
+ ]
+}

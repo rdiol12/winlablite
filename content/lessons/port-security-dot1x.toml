@@ -64,7 +64,7 @@ pitfalls = [
   "A RADIUS client registered with the switch's management address when its requests come from another one never matches: NPS logs an unknown client and answers nothing. Use the address the requests come from.",
   "A wrong shared key looks like a dead server, not a reject: the server cannot verify the request, drops it and says so only in its own log.",
   "PEAP without a certificate on NPS fails on the server side: event 6273 with reason 'the client could not be authenticated' or no matching policy; check the policy's authentication methods.",
-  "In this lab the switch has no management address of its own: RADIUS comes from the router's address on the server's network, the same box.",
+  "In this lab 802.1X runs on the router, so the switch's RADIUS requests come from the router's address on the server's network, even after you give the switch a management address of its own (interface vlan 1, ip address). Register that router address on NPS.",
 ]
 further = [
   "IEEE 802.1X-2020: port-based network access control",

@@ -1,0 +1,40 @@
+[solution]
+exercise = "spanning-tree-root"
+notes = "The two new switches (floor1, floor2) come from the shelf with winlab workbench, the Workbench's own actions: each uplink into corp, then a spare cable between them."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-add shelf=switch id=floor1 x=200 y=520
+workbench ad-ds-basics wb-add shelf=switch id=floor2 x=500 y=520
+workbench ad-ds-basics wb-cable node=switch network=floor1 to=corp
+workbench ad-ds-basics wb-cable node=switch network=floor2 to=corp
+workbench ad-ds-basics wb-stp-cable a=floor1 b=floor2
+'''
+wait = 10
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+spanning-tree vlan 1 priority 4096
+end
+copy running-config startup-config
+startup-config
+'''
+
+[[step]]
+node = "sw:floor1"
+shell = "console"
+script = '''
+enable
+configure terminal
+spanning-tree vlan 1 root secondary
+end
+copy running-config startup-config
+startup-config
+'''
+wait = 40

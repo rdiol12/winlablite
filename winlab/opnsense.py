@@ -75,7 +75,11 @@ def interfaces_of(node: Node, lab: Lab, plan: TopologyPlan) -> list[Iface]:
             name, descr = f"opt{opt}", net.id.upper().replace("-", "_")[:20]
         out.append(Iface(name=name, descr=descr, dev=dev, network=net.id, ip=nic.ip or "",
                          prefix=seg.network.prefixlen,
-                         gateway=seg.network.router_ip if net.wan else "", wan=bool(net.wan)))
+                         # A WAN segment the lab router is not cabled to (one flat
+                         # public subnet, as in the edge-firewall lab) has no
+                         # upstream router: everything on it is on-link.
+                         gateway=seg.network.router_ip if net.wan and net.routed else "",
+                         wan=bool(net.wan)))
     return out
 
 

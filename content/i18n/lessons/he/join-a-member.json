@@ -1,0 +1,61 @@
+{
+ "title": "צרף שרת חבר לתחום",
+ "summary": "הפנה את ה-DNS של שרת לבקר התחום, צרף אותו, והוכח את הערוץ המאובטח.",
+ "why": "צירוף מחשב לתחום יוצר חשבון מחשב וסוד משותף, סיסמת המכונה, שהשרת משתמש בו מאז כדי להוכיח מי הוא. אחרי הצירוף, משתמשי התחום יכולים להתחבר אליו, מדיניות קבוצתית מוחלת, ו-Kerberos עובד לכל שירות שהוא מארח. כמעט כל כישלון צירוף הוא אותה טעות: השרת שואל שרת DNS שלא יודע כלום על התחום, ולכן לא מוצא DC.\n\nהערוץ המאובטח הוא הדבר שצריך להבין. הוא מתחדש כל שלושים יום, הוא נשבר כשמכונה משוחזרת מתמונת מצב ישנה, והתסמין הוא המפורסם \"the trust relationship between this workstation and the primary domain failed\". Test-ComputerSecureChannel אומר לך בשורה אחת אם הוא תקין.",
+ "concepts": [
+  "DNS קודם: חבר חייב לתרגם את _ldap._tcp.dc._msdcs.<domain> לפני שכל דבר אחר יכול לעבוד",
+  "חשבון מחשב: אובייקט ב-AD (המכל המוגדר כברירת מחדל CN=Computers) עם סיסמה משלו",
+  "ערוץ מאובטח: החיבור המאומת שחבר שומר עם DC; Test-ComputerSecureChannel בודק אותו",
+  "הרשאות צירוף: כברירת מחדל כל משתמש מאומת רשאי לצרף עשרה מחשבים; בייצור מאצילים את זה לקבוצה"
+ ],
+ "steps": [
+  "ב-fs01, מצא את הממשק: Get-NetAdapter. אחר כך הגדר DNS ל-DC: Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10.",
+  "הוכח שהתרגום עובד לפני הצירוף: Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab.",
+  "צרף: Add-Computer -DomainName corp.lab -Credential (Get-Credential CORP\\Administrator) -Restart.",
+  "אחרי האתחול, התחבר כ-CORP\\Administrator והרץ Test-ComputerSecureChannel -Verbose.",
+  "ב-dc01, מצא את חשבון המחשב החדש: Get-ADComputer fs01 -Properties OperatingSystem, LastLogonDate.",
+  "העבר אותו מ-CN=Computers ל-OU שמדיניות תוכל להגיע אליו בהמשך: Move-ADObject (Get-ADComputer fs01).DistinguishedName -TargetPath 'OU=Servers,...' ברגע שה-OU הזה קיים."
+ ],
+ "pitfalls": [
+  "צירוף עם ה-IP של ה-DC כשם התחום עובד במקרה ונשבר אחר כך; השתמש תמיד בשם ה-DNS.",
+  "שחזור חבר מתמונת מצב ישנה מסיסמת המכונה שובר את האמון; Reset-ComputerMachinePassword או צירוף מחדש.",
+  "חבר ששוכפל מתמונה מוכנה חייב לעבור sysprep, אחרת שתי מכונות חולקות SID."
+ ],
+ "verify": [
+  "חבר בתחום",
+  "ערוץ מאובטח תקין",
+  "ה-DNS מצביע על ה-DC"
+ ],
+ "quiz": [
+  {
+   "q": "צירוף נכשל עם 'domain could not be contacted'. מה אתה בודק קודם?",
+   "answer": "שה-DNS של השרת מצביע על בקר תחום",
+   "wrong": [
+    "את אזור הזמן של השרת",
+    "את מהדורת ה-Windows",
+    "שחומת האש כבויה"
+   ],
+   "why": "חבר שלא יכול לתרגם את רשומות ה-SRV של התחום לא יכול למצוא DC."
+  },
+  {
+   "q": "איזה cmdlet אומר לך בשורה אחת אם הערוץ המאובטח של חבר תקין?",
+   "answer": "Test-ComputerSecureChannel",
+   "wrong": [
+    "Get-ADDomain",
+    "Test-NetConnection",
+    "Get-ComputerInfo"
+   ],
+   "why": "הוא מחזיר True או False עבור הערוץ ל-DC."
+  },
+  {
+   "q": "חבר ששוחזר מתמונת מצב ישנה מדווח על יחסי אמון שבורים. למה?",
+   "answer": "סיסמת המכונה שלו ישנה יותר מזו שיש עכשיו ב-AD",
+   "wrong": [
+    "תמונות מצב מוחקות את חשבון המחשב",
+    "האישור של ה-DC פג",
+    "ה-SID שלו השתנה"
+   ],
+   "why": "סיסמת המכונה מתחלפת כל 30 יום; דיסק ישן מחזיק סיסמה ישנה."
+  }
+ ]
+}

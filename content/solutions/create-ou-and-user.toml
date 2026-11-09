@@ -1,0 +1,14 @@
+[solution]
+exercise = "create-ou-and-user"
+notes = "jdoe's first password is the lab password ({{winlab:lab-secret}}) instead of Read-Host."
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'
+$pw = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force
+New-ADUser -Name 'John Doe' -GivenName John -Surname Doe -SamAccountName jdoe -UserPrincipalName jdoe@corp.lab -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword $pw -Enabled $true
+New-ADGroup -Name G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'
+Add-ADGroupMember -Identity G-Sales -Members jdoe
+'''

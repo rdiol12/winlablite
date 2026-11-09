@@ -1,0 +1,16 @@
+{
+ "The guest network in a VRF of its own: its gateway answers, the office does not": "La red de invitados en su propia VRF: su puerta de enlace responde, la oficina no",
+ "Guests and the office hang off the same router, and the router routes between\nthem. Put the guest network into a VRF named GUEST at the lab router's console,\nso the guests' routing table holds only their own network. The checks read the\nrouter's kernel (the VRF device and its table) and ping from the guest's laptop.": "Los invitados y la oficina cuelgan del mismo router, y el router enruta entre ellos. Pon la red de invitados en una VRF llamada GUEST desde la consola del router del laboratorio, para que la tabla de enrutamiento de los invitados solo contenga su propia red. Las comprobaciones leen el kernel del router (el dispositivo VRF y su tabla) y hacen ping desde el portátil del invitado.",
+ "vrf definition GUEST with rd 65000:20 and address-family ipv4": "vrf definition GUEST con rd 65000:20 y address-family ipv4",
+ "interface g0/0/0: vrf forwarding GUEST, then its address again (ip address 10.80.20.1 255.255.255.0)": "interface g0/0/0: vrf forwarding GUEST y después otra vez su dirección (ip address 10.80.20.1 255.255.255.0)",
+ "show ip route vrf GUEST lists the guest network; show ip route no longer does": "show ip route vrf GUEST muestra la red de invitados; show ip route ya no",
+ "pc-guest still reaches its gateway and no longer reaches pc-office": "pc-guest sigue llegando a su puerta de enlace y ya no llega a pc-office",
+ "the router has a VRF named GUEST": "el router tiene una VRF llamada GUEST",
+ "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 on the console; show vrf lists it": "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 en la consola; show vrf la muestra",
+ "the guest network's interface is in GUEST, with its address": "la interfaz de la red de invitados está en GUEST, con su dirección",
+ "interface g0/0/0, vrf forwarding GUEST: IOS removes the address when the VRF changes, so type ip address 10.80.20.1 255.255.255.0 again afterwards": "interface g0/0/0, vrf forwarding GUEST: IOS elimina la dirección cuando cambia la VRF, así que escribe de nuevo ip address 10.80.20.1 255.255.255.0 después",
+ "the guest network is in GUEST's table and not in the global one": "la red de invitados está en la tabla de GUEST y no en la global",
+ "show ip route vrf GUEST and show ip route on the console: the guest's C line belongs only in the first": "show ip route vrf GUEST y show ip route en la consola: la línea C de los invitados solo debe estar en la primera",
+ "pc-guest reaches its gateway and not the office": "pc-guest llega a su puerta de enlace y no a la oficina",
+ "The gateway does not answer: the interface lost its address with vrf forwarding (type it again). The office still answers: the interface is not in the VRF yet (show ip vrf).": "La puerta de enlace no responde: la interfaz perdió su dirección con vrf forwarding (escríbela de nuevo). La oficina sigue respondiendo: la interfaz todavía no está en la VRF (show ip vrf)."
+}

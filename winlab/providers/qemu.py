@@ -11,7 +11,9 @@ interfaces: the guest's IP stack still reaches nothing but the fabric.
 
 from __future__ import annotations
 
+import re
 import socket
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -69,12 +71,126 @@ _LOOPBACK_FLAGS = ("-vnc", "-qmp", "-monitor")
 
 # Free slots on the lab router for ports added while it runs.
 HOTPLUG_SLOTS = 16
+# Where the router's cards sit on its PCI bus (q35: slots 0x01-0x1e are
+# free; 0x1f is the chipset). Its management port (eth0) first, then the
+# switch ports from LINK_SLOT0, eight to a slot; the spare slots for live
+# ports after them; the way out (a virtual switch's uplink) last. The other
+# devices take the low slots by themselves.
+MGMT_SLOT = 0x07
+LINK_SLOT0 = 0x08
+LINK_SLOTS = 16
+HOTPLUG_SLOT0 = LINK_SLOT0 + LINK_SLOTS
+UPLINK_SLOT = HOTPLUG_SLOT0 + (HOTPLUG_SLOTS + 7) // 8
 
 
-def check_isolation(argv: list[str]) -> list[str]:
+def _pci_addr(slot: int, fn: int) -> str:
+    return f"addr=0x{slot:02x}.{fn}" + (",multifunction=on" if fn == 0 else "")
+
+
+def fabric_netdev_id(link) -> str:
+    """The router's end of a machine's cable."""
+    return f"p{link.nic_index}_{link.node_id}"
+
+
+# ------------------------------------------------------------------ cables
+# Each machine's network card is cabled to the router's switch over one
+# loopback TCP connection, the router's end listening and the machine's end
+# dialling in. QEMU 8.0 and later can redial a dropped connection on its own
+# (-netdev stream with reconnect), which is what a PC does when the switch
+# it is plugged into reboots: the link comes back by itself. Older QEMU only
+# has -netdev socket, which never redials; those labs keep working, and a
+# router restarted under them needs the machines restarted too. The option
+# is `reconnect` (seconds) from QEMU 8.0 and `reconnect-ms` from 9.2;
+# `reconnect` is gone in 10.2 (QEMU's docs/about/removed-features).
+LINK_STREAM_MS = "stream-ms"   # QEMU 9.2 and later
+LINK_STREAM = "stream"         # QEMU 8.0 - 9.1
+LINK_SOCKET = "socket"         # older, or a QEMU that does not say its version
+RECONNECT_MS = 1000            # how soon a machine redials its switch port
+
+link_override: str | None = None   # tests set the style here
+_link_ver: tuple[int, int] | None = None
+
+
+def qemu_link_version() -> tuple[int, int]:
+    """The (major, minor) of the QEMU winlab runs; (0, 0) when it cannot tell."""
+    global _link_ver
+    if _link_ver is None:
+        _link_ver = (0, 0)
+        try:
+            res = subprocess.run([str(paths.qemu_exe()), "-version"], capture_output=True, timeout=20)
+            m = re.search(rb"version (\d+)\.(\d+)", res.stdout or b"")
+            if m:
+                _link_ver = (int(m.group(1)), int(m.group(2)))
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return _link_ver
+
+
+def link_style(ver: tuple[int, int] | None = None) -> str:
+    """Which kind of cable this QEMU can make (see above)."""
+    if ver is None and link_override:
+        return link_override
+    ver = qemu_link_version() if ver is None else ver
+    if ver >= (9, 2):
+        return LINK_STREAM_MS
+    if ver >= (8, 0):
+        return LINK_STREAM
+    return LINK_SOCKET
+
+
+def redials(style: str | None = None) -> bool:
+    """Whether the machines' cables come back by themselves after the
+    router restarts."""
+    return (style or link_style()) != LINK_SOCKET
+
+
+def link_netdev(nid: str, port: int, listen: bool, style: str | None = None) -> str:
+    """The -netdev for one end of a cable: the router's switch port
+    (`listen`) or the machine's card, which redials where QEMU can."""
+    style = style or link_style()
+    if style == LINK_SOCKET:
+        return f"socket,id={nid},{'listen' if listen else 'connect'}=127.0.0.1:{port}"
+    out = (f"stream,id={nid},server={'on' if listen else 'off'},"
+           f"addr.type=inet,addr.host=127.0.0.1,addr.port={port}")
+    if not listen:
+        out += (f",reconnect-ms={RECONNECT_MS}" if style == LINK_STREAM_MS
+                else f",reconnect={max(1, RECONNECT_MS // 1000)}")
+    return out
+
+
+def link_qmp_args(nid: str, port: int, style: str | None = None) -> dict:
+    """netdev_add's arguments for a switch port added to the running
+    router (winlab/livenet.py): the same kind of cable as the others."""
+    style = style or link_style()
+    if style == LINK_SOCKET:
+        return dict(type="socket", id=nid, listen=f"127.0.0.1:{port}")
+    return dict(type="stream", id=nid, server=True,
+                addr={"type": "inet", "host": "127.0.0.1", "port": str(port)})
+
+
+# Exactly the cables link_netdev makes and nothing else: loopback only, and
+# no option QEMU would read as another address, a file or a forward.
+_LINK_RE = re.compile(
+    r"socket,id=[\w.-]+,(?:listen|connect)=127\.0\.0\.1:\d{1,5}"
+    r"|stream,id=[\w.-]+,server=on,addr\.type=inet,addr\.host=127\.0\.0\.1,addr\.port=\d{1,5}"
+    r"|stream,id=[\w.-]+,server=off,addr\.type=inet,addr\.host=127\.0\.0\.1,addr\.port=\d{1,5}"
+    r"(?:,reconnect=\d{1,4}|,reconnect-ms=\d{1,7})?")
+
+
+def link_ok(val: str) -> bool:
+    """The isolation guard's test for a cable: one link_netdev makes."""
+    return bool(_LINK_RE.fullmatch(val))
+
+
+def check_isolation(argv: list[str], uplink: bool = False) -> list[str]:
     """Returns every way this QEMU command line would reach outside the lab
-    (empty means isolated)."""
+    (empty means isolated). `uplink` is the lab router of a lab with an
+    internal or external virtual switch (winlab/vswitch.py): it may carry
+    exactly that one user-mode card, with no share or boot server and
+    forwards from 127.0.0.1 only."""
+    from ..vswitch import netdev_ok
     bad: list[str] = []
+    uplinks = 0
     it = iter(range(len(argv)))
     for i in it:
         flag = argv[i]
@@ -83,12 +199,16 @@ def check_isolation(argv: list[str]) -> list[str]:
             bad.append(f"{flag} {val}".strip())
         elif flag == "-netdev":
             kind = val.split(",", 1)[0]
-            if kind in _FORBIDDEN_NETDEV:
-                bad.append(f"-netdev {val}: host-connected network backend")
-            elif kind != "socket":
-                bad.append(f"-netdev {val}: only loopback socket links are allowed")
-            elif "127.0.0.1:" not in val or "hostfwd" in val:
+            if uplink and netdev_ok(val) and not uplinks:
+                uplinks += 1
+            elif link_ok(val):
+                pass
+            elif kind in ("socket", "stream"):
                 bad.append(f"-netdev {val}: socket link not on 127.0.0.1")
+            elif kind in _FORBIDDEN_NETDEV:
+                bad.append(f"-netdev {val}: host-connected network backend")
+            else:
+                bad.append(f"-netdev {val}: only loopback socket links are allowed")
         elif flag == "-device":
             kind = val.split(",", 1)[0]
             if any(kind.startswith(k) for k in _FORBIDDEN_DEVICE):
@@ -123,7 +243,10 @@ def uses_virtio(node: Node) -> bool:
         return True
     from ..linuxiso import is_hand_linux
     if is_hand_linux(node):
-        return node.wants_virtio  # a regular PC unless asked; the installer's kernel drives virtio
+        return node.wants_virtio
+    from .. import netos
+    if netos.is_router(node):
+        return netos.uses_virtio(node)  # the disk and cards the vendor's OS documents (winlab/netos.py)  # a regular PC unless asked; the installer's kernel drives virtio
     if not node.is_windows or not node.wants_virtio:
         return False
     from ..images import base_virtio
@@ -136,7 +259,17 @@ def hardware_of(node: Node) -> str:
     return "virtio" if uses_virtio(node) else "pc"
 
 
-def cpu_model(accel: str) -> str:
+# The Hyper-V enlightenments a Windows guest on KVM is given, the set
+# libvirt and Proxmox use for Windows 10+/Server 2016+: a reference clock and
+# synthetic timers in place of the emulated HPET/PIT ticks, paravirtual
+# EOI, TLB flush and IPIs, and a spin-lock hint. Without them an idle Windows
+# machine keeps a host core noticeably busy servicing timer exits. Linux
+# guests have kvm-clock and need none of this.
+HV_KVM = ("hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-time,"
+          "hv-synic,hv-stimer,hv-frequencies,hv-tlbflush,hv-ipi")
+
+
+def cpu_model(accel: str, windows: bool = False) -> str:
     # WHPX (Windows' Hyper-V platform) crashes with `-cpu host` on some
     # hosts -- passing through the physical CPU's xsave/AVX state produces
     # "failed to get xsave state" + "Unexpected VP exit code 4" and freezes
@@ -147,7 +280,26 @@ def cpu_model(accel: str) -> str:
         return "max"
     if accel == "whpx":
         return "Skylake-Client-v4,-xsave,-xsaveopt,hv-relaxed,hv-vapic,hv-time"
-    return "host"
+    return f"host,{HV_KVM}" if windows else "host"
+
+
+def quiet_timers(node) -> bool:
+    """Whether a Windows machine runs without the emulated HPET. Windows
+    polls an HPET it is given far more than any other clock, and each read is
+    an exit to QEMU, so an idle machine with one burns host CPU for nothing;
+    every mainstream Windows VM setup (Hyper-V, libvirt, Proxmox) leaves it
+    out. `hpet = true` on a node puts it back."""
+    return bool(node is not None and node.is_windows and not node.vars.get("hpet"))
+
+
+def balloon_device() -> str:
+    """The balloon, reporting the guest's free memory back where the host can
+    take it (Linux, the appliance: madvise). A Linux machine or the router
+    then gives back what it frees instead of holding its high-water mark for
+    the rest of the session. QEMU on Windows cannot discard a page, so there
+    the plain device."""
+    from ..balloon import host_can_reclaim
+    return "virtio-balloon-pci,free-page-reporting=on" if host_can_reclaim() else "virtio-balloon-pci"
 
 
 def nested_supported(accel: str) -> bool:
@@ -169,8 +321,8 @@ def nested_cpu(accel: str, linux: bool = False) -> str:
     return cpu_model(accel)
 
 
-def assert_isolated(argv: list[str]) -> None:
-    bad = check_isolation(argv)
+def assert_isolated(argv: list[str], uplink: bool = False) -> None:
+    bad = check_isolation(argv, uplink)
     if bad:
         raise RuntimeError("refusing to start a machine with a path outside the lab:\n  "
                            + "\n  ".join(bad))
@@ -188,6 +340,7 @@ class NodeRuntime:
     vnc_port: int = 0
     term_port: int = 0          # a Linux machine's ttyS0 console, for its Terminal window
     com_port: int = 0           # the console cable's USB-serial adapter, COM2 (consolecable.py)
+    wterm_port: int = 0         # a Windows machine's COM3, its console host's line (winterm.py)
     disk: Path | None = None
     data_disks: list[Path] = field(default_factory=list)
     install_iso: Path | None = None
@@ -212,6 +365,7 @@ class QemuProvider:
         self.lab = plan.lab
         self.workdir = paths.lab_dir(self.lab.name)
         self._taken: set[int] = set()
+        self._hw: dict[str, dict] = {}   # each machine's build at this power-on (winlab/pcbuild.py)
 
     # ---------------------------------------------------------------- paths
     def node_dir(self, node_id: str) -> Path:
@@ -230,8 +384,9 @@ class QemuProvider:
     def _firmware(self) -> tuple[Path, Path] | None:
         return paths.uefi_firmware()
 
-    def _cpu_model(self) -> str:
-        return cpu_model(self.accel)
+    def _cpu_model(self, name: str = "") -> str:
+        node = self.lab.nodes.get(name)
+        return cpu_model(self.accel, windows=bool(node is not None and node.is_windows))
 
     # ----------------------------------------------------------------- args
     def _base_args(self, name: str, cpus: int, memory_mb: int) -> list[str]:
@@ -240,7 +395,7 @@ class QemuProvider:
             "-name", f"winlab:{self.lab.name}:{name}",
             "-machine", "q35",
             "-accel", self.accel,
-            "-cpu", self._cpu_model(),
+            "-cpu", self._cpu_model(name),
             "-smp", str(cpus),
             "-m", str(memory_mb),
             "-rtc", self._rtc(name),
@@ -254,16 +409,23 @@ class QemuProvider:
     def _rtc(self, name: str) -> str:
         """The machine's RTC starts at lab time and stops while the lab clock
         is paused (winlab/labclock.py): local time for Windows, UTC for Linux
-        and the router, as each OS reads it."""
+        and the router, as each OS reads it. With its CMOS battery flat or
+        out it starts at the firmware's default date (winlab/pcbuild.py)."""
         from .. import timesync
         node = self.lab.nodes.get(name)
+        cmos = self._hw.get(name, {}).get("rtc")
+        if cmos:
+            return f"base={cmos},clock=vm"
         from ..linuxiso import is_hand_linux  # Linux installed by hand keeps its RTC in UTC too
         from ..bsdfw import is_hand_firewall  # and so does a BSD firewall
+        from ..netos import is_router         # and a vendor's router OS
+        from ..android import is_hand_android  # and Android, a Linux kernel underneath
         utc = name == "fabric" or (node is not None and (node.kind == LINUX or is_hand_linux(node)
-                                                        or is_hand_firewall(node)))
+                                                        or is_hand_firewall(node) or is_router(node)
+                                                        or is_hand_android(node)))
         return timesync.rtc_arg(self.lab.name, name, utc)  # plus its own skew, if it has one
 
-    def _display_args(self, node: Node, rt: NodeRuntime | None = None) -> list[str]:
+    def _display_args(self, node: Node, rt: NodeRuntime | None = None, video: str = "") -> list[str]:
         # A node can request the paravirtual display adapter (virtio-vga:
         # more resolutions, a driver to install) for teaching display and
         # driver management. It is 2D: the GL variant needs gl=on on a
@@ -271,12 +433,15 @@ class QemuProvider:
         # Real GPU passthrough is deliberately not offered: it is
         # host-specific and would break both portability and the
         # host-isolation guarantee.
-        gpu = bool(node.vars.get("gpu"))
+        gpu = bool(node.vars.get("gpu")) if not video else video == "gpu"
         adapter = "virtio-vga" if gpu else "VGA,vgamem_mb=32"
+        # No graphics card and a processor without graphics: no display
+        # device at all (winlab/pcbuild.py). Windows boots headless.
+        dev = [] if video == "none" else ["-device", adapter if gpu or self.display != DISPLAY_NONE else "VGA"]
         if self.display == DISPLAY_NONE:
-            out = ["-display", "none", "-device", adapter if gpu else "VGA"]
+            out = ["-display", "none"] + dev
         else:
-            out = ["-display", "gtk,show-tabs=on", "-device", adapter]
+            out = ["-display", "gtk,show-tabs=on"] + dev
         if rt and rt.vnc_port:
             # -vnc adds a server beside the window; loopback only, so the
             # screen is reachable by the dashboard and nothing else.
@@ -326,9 +491,12 @@ class QemuProvider:
                         f"server=on,wait=off",
         ]
         from ..bsdfw import is_hand_firewall
-        if node is not None and is_hand_firewall(node) and rt.term_port:
+        from ..netos import is_router
+        if node is not None and (is_hand_firewall(node) or is_router(node)) and rt.term_port:
             # A firewall installed by hand: its COM1 (FreeBSD's ttyu0, the
-            # serial console) is the Terminal window's; COM2 is idle.
+            # serial console) is the Terminal window's; COM2 is idle. So is
+            # a vendor router's: RouterOS, VyOS, Junos and EOS all sign in
+            # on their first serial port.
             out += ["-chardev", f"socket,id=term0,host=127.0.0.1,port={rt.term_port},"
                                 "server=on,wait=off", "-serial", "chardev:term0"]
         elif node is not None and node.kind == LINUX and not console_driven(node.image):
@@ -367,9 +535,13 @@ class QemuProvider:
                 "-device", "intel-hda,id=hda",
                 "-device", "hda-duplex,bus=hda.0,audiodev=snd0"]
 
-    def _nic_args(self, node: Node) -> list[str]:
+    def _nic_args(self, node: Node, skip: set[int] | None = None) -> list[str]:
         from ..bsdfw import NIC_MODEL, is_hand_firewall  # em(4) cards a BSD firewall installs on
-        model = "virtio-net-pci" if self._virtio(node) else NIC_MODEL if is_hand_firewall(node) else "e1000e"
+        from .. import netos  # the card each vendor's router OS documents (virtio, or e1000 for EOS)
+        from .. import android  # Android-x86's eth0: an Intel e1000 (winlab/android.py)
+        model = (netos.nic_model(node) if netos.is_router(node) else "virtio-net-pci" if self._virtio(node)
+                 else NIC_MODEL if is_hand_firewall(node)
+                 else android.NIC_MODEL if android.is_hand_android(node) else "e1000e")
         out: list[str] = []
         # Every card, cable or not: an empty port is still a card in the
         # machine, its link held down (winlab/livenet.py) until one goes in.
@@ -377,9 +549,11 @@ class QemuProvider:
         # PC: a machine with nothing else to boot tries the network (PXE),
         # and the firmware's boot menu (Esc at power-on) can pick it.
         for link in self.plan.ports_for(node.id):
+            if skip and link.nic_index in skip:
+                continue   # its card is out of the case or not seated (winlab/pcbuild.py)
             nid = f"net{link.nic_index}"
             out += [
-                "-netdev", f"socket,id={nid},connect=127.0.0.1:{link.port}",
+                "-netdev", link_netdev(nid, link.port, listen=False),
                 "-device", f"{model},netdev={nid},mac={link.mac},bootindex={NIC_BOOTINDEX + link.nic_index}",
             ]
         return out
@@ -394,10 +568,11 @@ class QemuProvider:
         # A dead system disk answers nothing at power-on; a new one fitted in
         # its place has its own serial number (winlab/sysdisk.py).
         ndir = self.node_dir(node.id)
-        if rt.disk and sysdisk.present(ndir):
+        hw = self._hw.get(node.id, {})
+        if rt.disk and sysdisk.present(ndir) and hw.get("sys", True):
             out += [
                 "-drive", f"id=sys,file={rt.disk},if=none,format=qcow2,"
-                          f"cache=writeback,discard=unmap" + sysdisk.drive_opts(),
+                          f"cache=writeback,discard=unmap,detect-zeroes=unmap" + sysdisk.drive_opts(),
             ]
             sn = sysdisk.device_opts(ndir, node.id)
             if virtio:
@@ -412,9 +587,10 @@ class QemuProvider:
         # Data disks sit in hot-swap bays (winlab/hardware.py): the named
         # nodes are what a pull swaps, and a pulled disk leaves its port empty.
         out_of_bay = hardware.pulled_in(self.node_dir(node.id), len(rt.data_disks))
+        out_of_bay |= set(hw.get("absent", ()))   # a cable unplugged or loose, an adapter not seated (pcbuild.py)
         if not virtio:
             # A regular PC's bays are SATA, SAS or NVMe, failing or not (winlab/disks.py).
-            out += disks.controller_args(node)
+            out += disks.controller_args(node) if hw.get("hba", True) else []
             bus = disks.asked_buses(node)
         for i, path in enumerate(rt.data_disks):
             if i in out_of_bay:
@@ -426,7 +602,7 @@ class QemuProvider:
                 continue
             out += [
                 "-drive", f"id=data{i},file={path},if=none,format=qcow2,cache=writeback,"
-                          f"node-name={hardware.fmt_node(i)},file.node-name={hardware.file_node(i)}",
+                          f"discard=unmap,detect-zeroes=unmap,node-name={hardware.fmt_node(i)},file.node-name={hardware.file_node(i)}",
                 "-device", f"virtio-blk-pci,drive=data{i}"
                            + (f",serial={SAN_BAY}{i + 1}" if "san" in node.roles else ""),  # a SAN knows its bays
             ]
@@ -472,7 +648,7 @@ class QemuProvider:
             slot += 1
 
         if virtio:
-            out += ["-device", "virtio-balloon-pci"]
+            out += ["-device", balloon_device()]
         return out
 
     @staticmethod
@@ -501,6 +677,12 @@ class QemuProvider:
             from ..bsdfw import is_hand_firewall, uefi
             if is_hand_firewall(node):
                 return uefi(node)  # each firewall's installer boots the way it was built to
+            from .. import android
+            if android.is_hand_android(node):
+                return android.uefi(node)  # Android-x86: the BIOS and its installer's GRUB on MBR
+            from ..netos import is_router
+            if is_router(node):
+                return False  # the vendors' virtual routers boot with the legacy BIOS
             if node.image in HAND_INSTALL:
                 return True  # Windows Setup on a modern PC: UEFI, GPT
 
@@ -543,18 +725,24 @@ class QemuProvider:
         rt.serial_port = _free_port(MGMT_BASE, self._taken)
         rt.vnc_port = _free_port(VNC_BASE, self._taken)
         from ..bsdfw import is_hand_firewall
-        if (node.kind == LINUX and not console_driven(node.image)) or is_hand_firewall(node):
+        from .. import netos
+        if (node.kind == LINUX and not console_driven(node.image)) or is_hand_firewall(node) or netos.is_router(node):
             rt.term_port = _free_port(MGMT_BASE, self._taken)
         from .. import consolecable
         if consolecable.fitted(node) and consolecable.takes_adapter(node):
             rt.com_port = _free_port(MGMT_BASE, self._taken)
+        from .. import winterm
+        if winterm.fitted(node):
+            rt.wterm_port = _free_port(MGMT_BASE, self._taken)
         rt.disk = self.disk_path(node.id)
         rt.data_disks = [
             self.data_disk_path(node.id, i) for i in range(len(node.data_disks_gb))
         ]
         if self._uses_uefi(node):
             rt.uefi_vars = self.uefi_vars_path(node.id)
-        if node.kind == CUSTOM and not is_template(node.image) and not imaging.is_netboot(node):
+        if netos.is_disk_router(node):
+            pass  # the vendor's own disk; no installer in the drive (vEOS's Aboot disc is below)
+        elif node.kind == CUSTOM and not is_template(node.image) and not imaging.is_netboot(node):
             # The user's installer stays in the drive, after the disk in boot
             # order: an empty disk falls through to it, an installed one boots.
             # A machine cloned from a template is already installed.
@@ -568,11 +756,23 @@ class QemuProvider:
         rt.attach_iso, rt.extra_discs = discs[0], discs[1:]
         rt.dvd_first = (mediashelf.boot_first(self.node_dir(node.id)) == mediashelf.BOOT_DVD
                         and mediashelf.drives(node) > 0)
+        aboot = netos.boot_disc(node.image) if netos.is_disk_router(node) else None
+        if aboot is not None and not rt.attach_iso:
+            # Arista's Aboot ISO: the boot loader older vEOS-lab releases
+            # start from, which then loads EOS from the disk.
+            rt.attach_iso, rt.dvd_first = aboot, True
 
-        base = self._base_args(node.id, node.cpus, node.memory_mb)
+        # The parts around the processor and the memory (winlab/pcbuild.py):
+        # the sticks the board reads, the display, cards and cables seated.
+        from .. import pcbuild
+        hw = pcbuild.effects(self.lab.name, node)
+        self._hw[node.id] = hw
+        base = self._base_args(node.id, node.cpus, hw.get("memory_mb") or node.memory_mb)
         from .. import nestedvirt
-        if node.nested:
-            base[base.index("-cpu") + 1] = nested_cpu(self.accel, linux=nestedvirt.is_linux(node))
+        if node.nested or netos.needs_nested(node):
+            # vJunos runs Junos in a VM of its own: the host's CPU with VT-x.
+            base[base.index("-cpu") + 1] = nested_cpu(self.accel, linux=nestedvirt.is_linux(node)
+                                                      or netos.needs_nested(node))
         elif nestedvirt.fitted(node):
             # The firmware's VT-x setting is off: the processor shows none.
             at = base.index("-cpu") + 1
@@ -580,17 +780,29 @@ class QemuProvider:
         if rt.uefi_vars and self.secure_boot(node):
             # System Management Mode, which the Secure Boot firmware needs.
             base[base.index("-machine") + 1] = "q35,smm=on"
+        if quiet_timers(node):
+            base[base.index("-machine") + 1] += ",hpet=off"
+            if self.accel == "kvm":
+                # Ticks missed while the host was busy are delivered late, not
+                # all at once (what Windows' clock expects).
+                base += ["-global", "kvm-pit.lost_tick_policy=delay"]
+        from .. import bmcfw, identity
         rt.argv = (
             base
+            + netos.smbios_args(identity.qemu_args(self.lab.name, node), node)   # its serial, asset tag and UUID (SMBIOS)
+            + bmcfw.smbios_args(self.lab.name, node)      # a server's BIOS version, as its BMC last wrote it
+            + (pcbuild.smbios_args(self.lab.name, node, hw.get("sticks")) if hw else [])  # each stick (type 17)
             + self._firmware_args(rt, node)
             + bitlocker.tpm_args(self.node_dir(node.id), node)   # a TPM 2.0 chip, when one is fitted
             + self._disk_args(rt, node)
-            + self._nic_args(node)
+            + self._nic_args(node, hw.get("skip_nics"))
             + self._usb_args(node)
             + self._audio_args(node)
             + self._mgmt_args(rt, node)
             + consolecable.qemu_args(node, rt.com_port)   # COM2, after the agent's COM1
-            + self._display_args(node, rt)
+            + winterm.qemu_args(rt.wterm_port)            # COM3, the Command Prompt and PowerShell windows' line
+            + self._display_args(node, rt, hw.get("video", ""))
+            + (["-S"] if hw.get("hold") else [])   # POST waits for F1: the machine starts paused
         )
         assert_isolated(rt.argv)
         return rt
@@ -603,23 +815,37 @@ class QemuProvider:
 
         args = self._base_args("fabric", self.plan.fabric_cpus, self.plan.fabric_memory_mb)
         args += [
-            "-device", "virtio-balloon-pci",
+            "-device", balloon_device(),
             "-device", "ich9-ahci,id=ahci",
             "-drive", f"id=sys,file={rt.disk},if=none,format=qcow2,cache=writeback",
             "-device", "ide-hd,bus=ahci.0,drive=sys,bootindex=0",
         ]
-        # The fabric listens; node links connect. It must therefore boot first.
-        for link in self.plan.ports:
-            nid = f"p{link.nic_index}_{link.node_id}"
+        # The fabric listens; node links connect (and redial, where QEMU can,
+        # when the fabric restarts under them).
+        # The switch ports are line cards of eight ports each (functions of one
+        # PCI slot), in the order the router names them, so a big lab's ports
+        # and the spare slots below all fit on the machine's one PCI bus
+        # (31 slots; one card per slot ran out at about ten ports).
+        if len(self.plan.ports) > LINK_SLOTS * 8:
+            raise RuntimeError(f"the lab router has room for {LINK_SLOTS * 8} network ports; "
+                               f"this lab has {len(self.plan.ports)}")
+        # eth0 is the router's own management port, with no cable: the
+        # router names its cards in bus order, and the switch ports are
+        # eth1, eth2... (netplan.compile_topology). Without it the first
+        # machine's cable would be eth0 and every port one name off.
+        args += ["-device", f"virtio-net-pci,id=mgmt0,{_pci_addr(MGMT_SLOT, 0)}"]
+        for i, link in enumerate(self.plan.ports):
+            nid = fabric_netdev_id(link)
             args += [
-                "-netdev", f"socket,id={nid},listen=127.0.0.1:{link.port}",
-                "-device", f"virtio-net-pci,netdev={nid}",
+                "-netdev", link_netdev(nid, link.port, listen=True),
+                "-device", f"virtio-net-pci,netdev={nid},{_pci_addr(LINK_SLOT0 + i // 8, i % 8)}",
             ]
         # Empty slots for switch ports added while the router runs: a machine
         # or a network card put into a running network gets its port here
         # (winlab/livenet.py), the way a module goes into a modular switch.
         for i in range(HOTPLUG_SLOTS):
-            args += ["-device", f"pcie-root-port,id=hp{i},chassis={i + 1},slot={i + 1}"]
+            args += ["-device", f"pcie-root-port,id=hp{i},chassis={i + 1},slot={i + 1},"
+                                f"{_pci_addr(HOTPLUG_SLOT0 + i // 8, i % 8)}"]
         # ttyS0 is the Alpine boot console (kept on stdio-less null so it does
         # not pollute the control channel); the agent speaks on ttyS1, which is
         # rt.serial_port. Two -serial args map to ttyS0 then ttyS1 in order.
@@ -636,8 +862,16 @@ class QemuProvider:
         args += ["-chardev", f"socket,id=vty,host=127.0.0.1,port={rt.com_port},server=on,wait=off",
                  "-serial", "chardev:vty"]
         args += ["-display", "none", "-device", "VGA"]
+        # The way out for internal and external virtual switches
+        # (winlab/vswitch.py): none while every switch is private.
+        from .. import vswitch
+        out = vswitch.active(self.lab)
+        if out:
+            # after the switch ports on the bus, so it does not take a port's name
+            args += [a + f",{_pci_addr(UPLINK_SLOT, 0)}" if a.startswith("virtio-net-pci,") else a
+                     for a in vswitch.qemu_args(self.lab)]
         rt.argv = args
-        assert_isolated(rt.argv)
+        assert_isolated(rt.argv, uplink=out)
         return rt
 
     def build_all(self) -> dict[str, NodeRuntime]:

@@ -28,7 +28,9 @@ MATCH_MODES = ("exact", "contains", "regex")
 # UPS's plugs): its script is the name of a registered check, which returns
 # (passed, what it found). Nothing runs in a guest for it.
 WINLAB = "winlab"
-WINLAB_MODULES = ("rack", "serverroom")   # the modules that register such checks
+WINLAB_MODULES = ("rack", "serverroom", "netauto", "drsite", "iosboot", "subnetdrill",
+                  "cabletest", "poe", "netbasics", "stp", "mst", "l2checks", "wifivendors",
+                  "capstones", "wifiplan", "buildsys", "pcbuild")   # the modules that register such checks
 _WINLAB_CHECKS: dict = {}
 
 
@@ -88,6 +90,7 @@ class Exercise:
     checks: list[Check] = field(default_factory=list)
     reset_nodes: list[str] = field(default_factory=list)
     nodes: list[str] = field(default_factory=list)  # machines it needs running
+    exam_only: bool = False   # graded only as a practice exam's lab tasks, so no lesson teaches it alone
 
     def needed_nodes(self) -> list[str]:
         """The machines `exercise start` boots: the declared list, or else
@@ -187,6 +190,7 @@ def load(ident: str) -> Exercise:
         checks=checks,
         reset_nodes=[str(n) for n in meta.get("reset_nodes", [])],
         nodes=[str(n) for n in meta.get("nodes", [])],
+        exam_only=bool(meta.get("exam_only", False)),
     )
     # Checks are written against winlab's names; grade in the student's.
     from . import naming
@@ -235,13 +239,57 @@ def _channel_for(lab_name: str, node_id: str) -> GuestChannel:
 # runs: {{winlab:planted}} is what the inherited company's handover planted
 # (winlab/inherited.py), so the answer key never sits on a machine the student
 # administers.
-_HOST_VALUES = ("{{winlab:planted}}",)
+# The {{winlab:netdocs-*}} values are the network as built (winlab/netdocs.py:
+# the plan's subnets and addresses, the rack's placement and cables at
+# grading time), which the network's documentation inside the guest must match.
+# {{winlab:rack-register}} is each racked device's serial number, asset tag and
+# U as the rack stands (winlab/rack.py), which the student's GLPI must match.
+# {{winlab:building-places}} is where each machine stands in the lab's building
+# (winlab/buildsys.py), which the student's GLPI and Prometheus must match.
+# {{winlab:grade-nonce}} is six random lowercase letters, new for each grading
+# run and the same in every check of it: a check plants test data with it
+# (a fresh HR file, an asset tag) and a later check looks for it, so a script
+# that hard-codes last run's answer, or a report from before, cannot pass.
+# {{winlab:proxmox-api}}, on a comment line, becomes Invoke-Px,
+# signed in to Proxmox VE or Proxmox Backup Server with the lab password
+# (winlab/vmbackup.py): those machines run no winlab agent.
+_HOST_VALUES = ("{{winlab:planted}}", "{{winlab:grade-nonce}}", "{{winlab:proxmox-api}}", "{{winlab:netdocs-subnets}}", "{{winlab:netdocs-gateways}}",
+                "{{winlab:netdocs-hosts}}", "{{winlab:netdocs-interfaces}}", "{{winlab:netdocs-rack}}",
+                "{{winlab:netdocs-cables}}", "{{winlab:rack-register}}", "{{winlab:dr-file-marker}}",
+                "{{winlab:dr-db-marker}}", "{{winlab:building-places}}")
+
+
+_NONCE = {"value": ""}
+
+
+def new_nonce() -> str:
+    """Starts a grading run's nonce (grade() calls it once per run)."""
+    import secrets
+    _NONCE["value"] = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(6))
+    return _NONCE["value"]
 
 
 def host_value(token: str, lab_name: str) -> str:
+    if token == "{{winlab:grade-nonce}}":
+        return _NONCE["value"] or new_nonce()
     if token == "{{winlab:planted}}":
         from . import inherited
         return inherited.planted_for_grading(lab_name)
+    if token.startswith("{{winlab:netdocs-"):
+        from . import netdocs
+        return netdocs.host_value(token, lab_name)
+    if token == "{{winlab:rack-register}}":
+        from . import rack, schema
+        return ",".join(rack.register_rows(schema.load(lab_name)))
+    if token.startswith("{{winlab:dr-"):
+        from . import drsite
+        return drsite.host_value(token, lab_name)
+    if token == "{{winlab:building-places}}":
+        from . import buildsys
+        return buildsys.places_value(lab_name)
+    if token == "{{winlab:proxmox-api}}":
+        from . import vmbackup
+        return vmbackup.proxmox_api_ps(lab_name)
     return ""
 
 
@@ -256,6 +304,7 @@ def grade(ex: Exercise, lab_name: str) -> Grade:
     """Runs every check, reusing one channel per node."""
     channels: dict[str, GuestChannel] = {}
     results: list[CheckResult] = []
+    new_nonce()
     try:
         for check in ex.checks:
             try:

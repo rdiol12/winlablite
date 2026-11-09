@@ -1,0 +1,68 @@
+{
+ "title": "EtherChannel: dos cables entre switches como un solo enlace, con LACP",
+ "summary": "Agrupa dos cables entre switches en un port-channel con LACP, lee show etherchannel summary y rómpelo de la forma clásica: on contra active.",
+ "why": "Un cable de un gigabit entre el switch del núcleo y un switch de planta es un gigabit para toda\nla planta, y un único cable que perder. Un segundo cable parece la solución, pero dos cables\nentre dos switches forman un bucle, y spanning tree bloquea uno de ellos: pagaste dos y usas\nuno.\n\nEtherChannel (el nombre de Cisco; el estándar es IEEE 802.3ad, ahora 802.1AX, agregación de\nenlaces) agrupa los cables en un enlace lógico, un port-channel. Spanning tree ve un solo\npuerto, así que nada se bloquea; cada conversación va por un miembro elegido mediante un hash\nde sus direcciones, de modo que el ancho de banda se suma entre muchas conversaciones; y un\ncable desconectado solo se lleva su parte.\n\nLos dos extremos deben acordar agruparse. LACP (el estándar) lo negocia: un puerto active\npregunta, uno passive solo responde. mode on agrupa sin preguntar nada, y precisamente por eso\nes peligroso: on en un extremo y LACP (o nada) en el otro es un error de configuración que un\nCatalyst detecta y pone en err-disable. PAgP (desirable y auto) es el protocolo más antiguo de\nCisco, solo para Cisco.\n\nEn este laboratorio los cables de los switches son pares veth entre puentes del kernel en el\nrouter. Un canal que se forma es un bond real de Linux en cada lado (802.3ad para LACP,\nbalance-xor para on), así que el LACP del kernel funciona de verdad entre ellos y spanning\ntree ve un solo puerto. Linux no tiene PAgP: winlab aplica las reglas de PAgP para decidir si\nse forma un canal, y luego el grupo usa LACP en el cable; la consola lo indica.",
+ "concepts": [
+  "Un port-channel es un enlace lógico formado por hasta ocho puertos miembro; spanning tree, la tabla MAC y la configuración del trunk ven el port-channel, no los miembros",
+  "Modos: active (LACP, pregunta), passive (LACP, solo responde), on (sin protocolo alguno), desirable y auto (PAgP, el propio de Cisco)",
+  "Qué se agrupa: active con active o passive; on con on; desirable con desirable o auto. passive con passive, y auto con auto, nunca: nadie pregunta",
+  "El balanceo de carga es por conversación, no por trama: un hash de direcciones MAC o IP (port-channel load-balance) elige el miembro, así que una copia de archivo nunca va más rápido que un cable",
+  "Los miembros deben coincidir: velocidad, dúplex, trunk o access, VLAN permitidas y nativa. Configúralos bajo interface port-channel y los miembros lo heredan",
+  "Protección ante errores de configuración de EtherChannel: un switch con mode on que oye spanning tree desde varios puertos en el otro extremo pone su port-channel en err-disable (channel-misconfig)",
+  "Indicadores en show etherchannel summary: SU en uso, SD caído; miembros P agrupado, I independiente, s suspendido, D caído"
+ ],
+ "steps": [
+  "Abre el Banco de red. El switch de corp es el que está cableado al router. Añade un switch desde la estantería y arrastra su enlace ascendente (Gi0/1) al switch de corp: ese es un cable. Luego arrastra un puerto gigabit libre del nuevo switch al switch de corp otra vez: un segundo cable entre los mismos dos switches (Gi0/2 en el nuevo switch, Gi0/3 en el de corp).",
+  "Mira primero el bucle. Haz doble clic en el nuevo switch, enable, show spanning-tree: uno de los dos cables está bloqueado (Altn BLK). Dos cables, uno en uso. show cdp neighbors muestra qué puerto local va a qué puerto del otro extremo.",
+  "Agrupa el extremo de corp. En el switch de corp: enable, configure terminal, interface range gi0/2 - 3, channel-group 1 mode active. El switch dice Creating a port-channel interface Port-channel 1. Luego haz show etherchannel summary: Po1(SD) con sus miembros (I), independientes, porque el otro extremo aún no habla LACP.",
+  "Agrupa el otro extremo: en el nuevo switch, interface range gi0/1 - 2, channel-group 1 mode passive. Un puerto passive solo responde, y los puertos active de corp están preguntando, así que el canal se forma: %LINK-3-UPDOWN: Interface Port-channel1, changed state to up. show etherchannel summary en ambos: Po1(SU), miembros (P).",
+  "Léelo desde todos los lados: show interfaces port-channel 1 (BW 2000000 Kbit/sec, Members in this channel), show lacp neighbor (el ID de sistema del socio es la dirección del otro switch; A o P indica si pregunta), show etherchannel detail y show spanning-tree: una fila, Po1, en forwarding, coste 3 en lugar de 4. Ya no se bloquea nada.",
+  "Configura el grupo, no los miembros: interface port-channel 1, description to the floor switch, switchport trunk allowed vlan 1,10. show running-config: la descripción está en Port-channel1, y la configuración del trunk llegó a ambos miembros, porque IOS la propaga.",
+  "Elige el hash: port-channel load-balance src-dst-ip en ambos switches (show etherchannel load-balance). El valor por defecto del 2960, src-mac, pone todo lo de una máquina (el router, por ejemplo) en un miembro; IP de origen y destino reparte mejor las conversaciones.",
+  "Rómpelo de la forma clásica. En el nuevo switch: interface range gi0/1 - 2, no channel-group, channel-group 1 mode on. on agrupa sin preguntar, pero el extremo de corp es LACP: el nuevo switch registra %PM-4-ERR_DISABLE: channel-misconfig (STP) error detected on Po1 y su port-channel pasa a err-disabled. show etherchannel summary muestra Po1(SD) con miembros (D), y show spanning-tree los muestra como BKN*. El switch de planta queda aislado.",
+  "Arréglalo como lo necesita un switch real: haz que los modos coincidan (no channel-group, luego channel-group 1 mode active en ambos puertos), y después apaga y enciende el grupo para quitar el err-disable: interface port-channel 1, shutdown, no shutdown. Po1(SU) otra vez.",
+  "Prueba las parejas que nunca se agrupan: passive en ambos extremos (nadie pregunta: miembros (I), y spanning tree vuelve a bloquear un cable), y desirable en un extremo contra active en el otro (PAgP contra LACP: (I)). Vuelve a poner ambos extremos en active, y copy running-config startup-config en ambos switches."
+ ],
+ "pitfalls": [
+  "mode on en un extremo y active, passive o nada en el otro: el lado on pasa a err-disable (channel-misconfig). Corrige los modos y luego shutdown / no shutdown en el port-channel.",
+  "passive con passive (o auto con auto) nunca se forma: un extremo debe preguntar.",
+  "Cambiar a mano la configuración de trunk de un miembro para que difiera de los demás lo suspende (s): configura interface port-channel en su lugar.",
+  "Esperar que una copia grande vaya el doble de rápido: una conversación siempre usa un solo miembro; el grupo ayuda a muchas conversaciones, no a una.",
+  "En este laboratorio desirable y auto de PAgP siguen las reglas de PAgP, pero el bond del router usa LACP en el cable, ya que Linux no tiene PAgP. Un 2960 real habla PAgP por sí mismo."
+ ],
+ "verify": [
+  "los bonds en el router: el modo, el hash, y el agregador y el socio de cada miembro"
+ ],
+ "quiz": [
+  {
+   "q": "Un switch tiene channel-group 1 mode passive en dos puertos, y el otro también mode passive. ¿Qué pasa?",
+   "answer": "No se forma ningún canal: ambos solo responden, así que nadie inicia LACP y los puertos quedan independientes (I)",
+   "wrong": [
+    "El canal se forma con LACP",
+    "Ambos puertos pasan a err-disable",
+    "El canal se forma sin protocolo"
+   ],
+   "why": "Al menos un extremo debe ser active (LACP) o desirable (PAgP) para preguntar."
+  },
+  {
+   "q": "mode on en un extremo, mode active en el otro. ¿Qué hace un Catalyst?",
+   "answer": "El lado on pone su port-channel en err-disable: channel-misconfig, detectado por spanning tree",
+   "wrong": [
+    "Negocian a la baja hasta on",
+    "El lado active cambia a on",
+    "Nada: on siempre funciona"
+   ],
+   "why": "on no envía LACP en absoluto; el extremo active nunca agrupa y usa cada cable por separado, y el extremo on oye spanning tree desde dos puertos, lo que detecta la protección ante errores de configuración."
+  },
+  {
+   "q": "Un port-channel de dos cables gigabit transporta una gran copia de archivo entre dos servidores. ¿A qué velocidad puede ir?",
+   "answer": "Un gigabit: una conversación se asigna por hash a un miembro",
+   "wrong": [
+    "Dos gigabits",
+    "Medio gigabit por cada cable",
+    "Depende de spanning tree"
+   ],
+   "why": "El balanceo de carga es por flujo, mediante un hash de direcciones; muchos flujos se reparten, uno solo no."
+  }
+ ]
+}

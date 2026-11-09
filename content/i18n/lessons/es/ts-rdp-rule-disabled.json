@@ -1,0 +1,57 @@
+{
+ "title": "RDP agota el tiempo, y no hay ninguna regla de bloqueo",
+ "summary": "Escritorio remoto está permitido en el servidor, está escuchando, y la conexión sigue agotando el tiempo.",
+ "why": "Windows Firewall bloquea el tráfico entrante que ninguna regla permite. Escritorio remoto funciona porque\nun grupo de reglas de permiso, Remote Desktop, deja entrar el 3389. Desactiva esas reglas y no hace falta\nañadir nada para que RDP falle: ninguna regla de bloqueo que encontrar, la casilla de System Properties\nsigue marcada, el servicio escuchando. La respuesta está en las reglas de permiso, y en si están\nhabilitadas.",
+ "concepts": [
+  "Acción entrante predeterminada: bloquear lo que ninguna regla permite",
+  "Grupos de reglas: Get-NetFirewallRule -DisplayGroup 'Remote Desktop'",
+  "Presente no es habilitada: una regla deshabilitada no hace nada",
+  "System Properties > Remote establece fDenyTSConnections y activa el grupo; un script puede desactivar el grupo a sus espaldas"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 rdp-rule-disabled). No leas todavía las pistas.",
+  "Reproduce el síntoma desde pc01, tal como lo encontraría un administrador: mstsc /v:fs01 y Test-NetConnection fs01 -Port 3389.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Corrige la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra la evidencia que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Una nueva regla de permiso para el 3389 oculta la causa; la siguiente persona sigue encontrando el grupo desactivado.",
+  "Desactivar el firewall para probar demuestra que el firewall está implicado y nada más."
+ ],
+ "verify": [
+  "las reglas de Remote Desktop"
+ ],
+ "quiz": [
+  {
+   "q": "RDP agota el tiempo, el servicio escucha y no hay ninguna regla de bloqueo. ¿Dónde miras?",
+   "answer": "Si las reglas de permiso de Remote Desktop están habilitadas",
+   "wrong": [
+    "El registro DNS",
+    "El grupo Remote Desktop Users",
+    "El certificado de RDP"
+   ],
+   "why": "El tráfico entrante sin ninguna regla de permiso habilitada se bloquea."
+  },
+  {
+   "q": "¿Qué cmdlet lista las reglas de un grupo?",
+   "answer": "Get-NetFirewallRule -DisplayGroup",
+   "wrong": [
+    "Get-NetFirewallProfile",
+    "Get-NetTCPConnection",
+    "Get-NetFirewallSetting"
+   ],
+   "why": "Luego Enable-NetFirewallRule con el mismo grupo."
+  },
+  {
+   "q": "¿Qué hace el Firewall de Windows con el tráfico entrante que ninguna regla permite?",
+   "answer": "Lo bloquea: es la acción entrante por defecto",
+   "wrong": [
+    "Lo permite si el servicio escucha",
+    "Pregunta al usuario conectado",
+    "Lo registra y lo deja pasar"
+   ],
+   "why": "Una regla de permiso deshabilitada equivale a no tener regla, así que RDP agota el tiempo sin que haya regla de bloqueo."
+  }
+ ]
+}

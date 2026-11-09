@@ -20,10 +20,10 @@ from .model import Lab, Node
 
 # ad-ds-basics teaches the foundation in its own lessons, capstone is the
 # build-it-all exam, sandbox is free play: none of them gets one.
-LABS = ("automation", "backup-recovery", "containers", "enterprise-multisite", "every-role", "failover-cluster", "hybrid-cloud", "imaging",
-        "databases", "intrusion-detection", "ipv6-dual-stack", "it-docs", "linux-by-hand", "mail", "vm-host-by-hand",
+LABS = ("automation", "azure-hybrid", "backup-recovery", "containers", "edge-firewall", "enterprise-multisite", "every-role", "failover-cluster", "hybrid-cloud", "imaging",
+        "databases", "entra-hybrid", "intrusion-detection", "ipv6-dual-stack", "it-docs", "linux-by-hand", "linux-in-the-domain", "mail", "monitoring-dashboards", "staff-lifecycle", "file-sharing", "print-support", "certificate-authority", "disaster-recovery", "vm-host-by-hand",
         "security-ops",
-        "patching", "perimeter", "remote-access", "time-and-kerberos", "web-farm", "web-proxy", "windows11-desktops")
+        "patching", "perimeter", "remote-access", "remote-support", "time-and-kerberos", "web-farm", "web-proxy", "windows11-desktops")
 # Labs with no domain whose machines are routers the student builds (they
 # install the frr pack, winlab/routing.py): their foundation is the routers'
 # ground floor instead of a forest (render_routers).
@@ -224,6 +224,12 @@ def render_routers(lab: Lab) -> tuple[str, str]:
         'wrong = ["net.ipv4.conf.all.rp_filter = 0", "ospfd=yes in /etc/frr/daemons", "A default route"]',
         'why = "Without it the kernel drops packets that are not addressed to the machine itself."',
         "",
+        "[[quiz]]",
+        'q = "You turned forwarding on with sysctl -w net.ipv4.ip_forward=1. What happens at the next reboot?"',
+        'answer = "It is off again; only a file in /etc/sysctl.d keeps it"',
+        'wrong = ["It stays on: sysctl -w writes the file", "FRRouting turns it back on by itself", "It stays on until the cards are renamed"]',
+        'why = "sysctl -w changes the running kernel only; the setting survives a reboot when a file in /etc/sysctl.d says so."',
+        "",
     ]
 
     checks = []
@@ -372,6 +378,12 @@ def render(lab: Lab) -> tuple[str, str]:
         'wrong = ["To create the scope", "To open the firewall", "To set the gateway"]',
         'why = "It stops rogue DHCP servers inside the domain."',
         "",
+        "[[quiz]]",
+        "q = \"Joining a server to the domain fails with 'domain could not be contacted'. What do you fix?\"",
+        'answer = "Its DNS server setting, so that it points at the DC"',
+        'wrong = ["The computer name, which is too long", "The DHCP scope\'s lease time", "The domain\'s functional level"]',
+        'why = "The join finds the domain through DNS: fix DNS, not the join."',
+        "",
     ]
 
     checks = [("the forest exists and dc is its domain controller", dc.id,
@@ -432,16 +444,141 @@ def render(lab: Lab) -> tuple[str, str]:
     return "\n".join(lesson), "\n".join(ex) + "\n"
 
 
+# --------------------------------------------------------------------------
+# The worked solution (content/solutions/foundation-<lab>.toml): the lesson's
+# steps as a correct student types them, for the self-test (winlab/selftest.py)
+# --------------------------------------------------------------------------
+
+def _ps(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _step(node: str, shell: str, script: str, reboot: bool = False, wait: int = 0, timeout: int = 0) -> list[str]:
+    out = ["", "[[step]]", f"node = {_q(node)}", f"shell = {_q(shell)}", "script = '''",
+           *script.strip("\n").splitlines(), "'''"]
+    if reboot:
+        out.append("reboot = true")
+    if wait:
+        out.append(f"wait = {wait}")
+    if timeout:
+        out.append(f"timeout = {timeout}")
+    return out
+
+
+def _adapter(nic) -> str:
+    """The adapter a card is inside Windows, found by its MAC as the lesson says."""
+    return f"(Get-NetAdapter | Where-Object MacAddress -eq '{nic.mac.upper().replace(':', '-')}').ifIndex"
+
+
+def _address_script(node: Node, nets: dict, dns: str) -> str:
+    static = [c for c in node.nics if c.ip and not nets[c.network].wan]
+    lines = []
+    for c in static:
+        net = nets[c.network]
+        gw = (f" -DefaultGateway {net.default_gateway}"
+              if net.default_gateway and c is static[0] and net.default_gateway != c.ip else "")
+        lines += [f"$if = {_adapter(c)}",
+                  f"New-NetIPAddress -InterfaceIndex $if -IPAddress {c.ip} -PrefixLength {net.prefixlen}{gw} | Out-Null",
+                  f"Set-DnsClientServerAddress -InterfaceIndex $if -ServerAddresses {dns}"]
+    return "\n".join(lines)
+
+
+def render_solution(lab: Lab) -> str:
+    """The foundation's worked solution, from the same plan as its steps."""
+    from . import routing
+    lid = f"foundation-{lab.name}"
+    head = ["# Generated by winlab/foundation.py from the lab definition (python -m winlab.foundation).",
+            "[solution]", f"exercise = {_q(lid)}"]
+    netplan.compile_topology(lab, check_ports=False)   # gives every card its MAC
+    if not any("ad-ds" in n.roles for n in lab.node_list()) and routing.routers(lab):
+        from .debpacks import MOUNT, PACKS, STICK_LABEL
+        pkgs = " ".join(PACKS[routing.PACK].packages)
+        out = head + [f"notes = {_q('The frr package stick goes into each router in turn (winlab media <lab> <router> pack frr), as the lesson does from Settings.')}"]
+        for r in routing.routers(lab):
+            out += _step("winlab", "winlab", f"media {lab.name} {r.id} pack {routing.PACK}", wait=15)
+            out += _step(r.id, "sh", "\n".join([
+                f"mkdir -p {MOUNT}",
+                f"mountpoint -q {MOUNT} || mount LABEL={STICK_LABEL} {MOUNT}",
+                f"echo 'deb [trusted=yes] file:{MOUNT} ./' > /etc/apt/sources.list.d/winlab-pack.list",
+                "apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- update",
+                f"DEBIAN_FRONTEND=noninteractive apt-get install -y {pkgs}",
+                f"umount {MOUNT}",
+                "systemctl enable --now frr",
+                "echo net.ipv4.ip_forward=1 > /etc/sysctl.d/90-router.conf",
+                "sysctl --system >/dev/null",
+            ]), timeout=1200)
+            out += _step("winlab", "winlab", f"media {lab.name} {r.id} unplug", wait=5)
+        return "\n".join(out) + "\n"
+    p = plan(lab)
+    dc, members, scopes, nets = p["dc"], p["members"], p["scopes"], p["nets"]
+    dc_ip = next(c.ip for c in dc.nics if c.ip)
+    base = ",".join(f"DC={x}" for x in lab.domain.split("."))
+    out = head + [f"notes = {_q('The DSRM password and every new account take the lab password ({{winlab:lab-secret}}).')}"]
+    a = _address_script(dc, nets, dc_ip)
+    if a:
+        out += _step(dc.id, "powershell", a)
+    out += _step(dc.id, "powershell", "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools", timeout=1800)
+    out += _step(dc.id, "powershell", "\n".join([
+        "$dsrm = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force",
+        f"Install-ADDSForest -DomainName {lab.domain} -DomainNetbiosName {lab.netbios} -InstallDns "
+        "-SafeModeAdministratorPassword $dsrm -Force -NoRebootOnCompletion | Out-Null"]), timeout=1800)
+    out += _step(dc.id, "powershell", "Restart-Computer -Force", reboot=True, wait=180)
+    if scopes:
+        lines = ["Install-WindowsFeature DHCP -IncludeManagementTools | Out-Null", "Add-DhcpServerInDC"]
+        for sc in scopes:
+            lines.append(f"Add-DhcpServerv4Scope -Name {sc['network']} -StartRange {sc['lo']} -EndRange {sc['hi']} "
+                         f"-SubnetMask {sc['mask']}")
+            lines.append(f"Set-DhcpServerv4OptionValue -ScopeId {sc['subnet']}"
+                         + (f" -Router {sc['gateway']}" if sc["gateway"] else "")
+                         + f" -DnsServer {dc_ip} -DnsDomain {lab.domain}")
+        out += _step(dc.id, "powershell", "\n".join(lines), timeout=1200)
+    people = _people(lab, dc)
+    if people:
+        from .dscroles import DEFAULT_OUS
+        ous = [str(o) for o in (dc.vars.get("ous") or DEFAULT_OUS)]
+        lines = []
+        for o in ous:
+            parts = o.split("/")
+            path = ",".join([f"OU={x}" for x in reversed(parts[:-1])] + [base])
+            lines.append(f"New-ADOrganizationalUnit -Name {_ps(parts[-1])} -Path {_ps(path)}")
+        lines.append("$pw = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force")
+        for u in people["users"]:
+            dept = f" -Department {_ps(u['dept'])}" if u["dept"] else ""
+            lines.append(f"New-ADUser -Name {_ps(u['name'])} -SamAccountName {u['sam']}{dept} "
+                         f"-Path {_ps(people['users_ou'])} -AccountPassword $pw -Enabled $true")
+        for g in people["groups"]:
+            lines.append(f"New-ADGroup -Name {_ps(g['name'])} -GroupScope {g['scope']} -GroupCategory "
+                         f"{g.get('category', 'Security')} -Path {_ps(people['groups_ou'])}")
+        for g in people["groups"]:
+            lines.append(f"Add-ADGroupMember -Identity {_ps(g['name'])} -Members {','.join(g['members'])}")
+        out += _step(dc.id, "powershell", "\n".join(lines))
+    for m in members:
+        a = _address_script(m, nets, dc_ip)
+        out += _step(m.id, "powershell", a or "ipconfig /renew | Out-Null", wait=0 if a else 20)
+        out += _step(m.id, "powershell", "\n".join([
+            "$pw = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force",
+            f"$cred = New-Object System.Management.Automation.PSCredential('{lab.netbios}\\Administrator', $pw)",
+            f"Add-Computer -DomainName {lab.domain} -Credential $cred -Force -Restart"]), reboot=True, wait=60)
+    return "\n".join(out) + "\n"
+
+
 def files(lab_name: str) -> dict[Path, str]:
+    """The lesson and the exercise generated for a lab."""
     lab = schema.load(lab_name)
     lesson, ex = render(lab)
     return {paths.ROOT / "content" / "lessons" / f"foundation-{lab_name}.toml": lesson,
             paths.ROOT / "content" / "exercises" / f"foundation-{lab_name}.toml": ex}
 
 
+def solution_file(lab_name: str) -> dict[Path, str]:
+    """The worked solution the self-test runs for it (winlab/selftest.py)."""
+    return {paths.ROOT / "content" / "solutions" / f"foundation-{lab_name}.toml":
+            render_solution(schema.load(lab_name))}
+
+
 def main() -> int:
     for name in LABS + ROUTER_LABS:
-        for path, text in files(name).items():
+        for path, text in {**files(name), **solution_file(name)}.items():
             path.write_text(text, encoding="utf-8")
             print(f"wrote {path.relative_to(paths.ROOT)}")
     return 0

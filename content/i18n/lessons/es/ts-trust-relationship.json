@@ -1,0 +1,57 @@
+{
+ "title": "Los usuarios del dominio no pueden iniciar sesión en un servidor",
+ "summary": "Las cuentas locales inician sesión, las cuentas del dominio reciben 'the trust relationship failed'; la red está bien.",
+ "why": "Todo miembro del dominio guarda una contraseña para su cuenta de equipo y la cambia cada 30 días, y el controlador de dominio guarda la copia correspondiente. Revierte una máquina virtual a un punto de control antiguo, restaura un servidor desde la copia de seguridad del mes pasado o restablece la cuenta en el DC, y las dos copias difieren: el DC ya no cree que la máquina sea quien dice ser. Los inicios de sesión del dominio, Group Policy y Kerberos hacia esa máquina dejan de funcionar.\n\nEl hábito que debes crear: prueba directamente el canal seguro y repáralo sin sacar la máquina del dominio. Quitarla del dominio y volver a unirla también lo \"arregla\", y tira a la basura la pertenencia del equipo a grupos y sus SPN.",
+ "concepts": [
+  "La cuenta de equipo y su contraseña: un secreto compartido por el miembro y el dominio",
+  "El canal seguro: el enlace autenticado de Netlogon de un miembro a un DC",
+  "Test-ComputerSecureChannel y nltest /sc_verify: pregunta al propio canal",
+  "Reparar sin sacarlo del dominio: Test-ComputerSecureChannel -Repair o Reset-ComputerMachinePassword"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 secure-channel-broken). No leas todavía las pistas.",
+  "Reproduce el síntoma: inicia sesión en fs01 como usuario del dominio y después como el Administrator local.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que has descartado.",
+  "Corrige la causa, no el síntoma. Después pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la evidencia que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Volver a unirse al dominio funciona, pero crea una nueva relación de confianza y pierde la pertenencia del equipo a grupos; repara primero.",
+  "Un administrador del dominio que inició sesión antes puede seguir entrando con credenciales en caché: prueba con un inicio de sesión nuevo."
+ ],
+ "verify": [
+  "si el canal seguro está sano"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué comando repara un canal seguro roto sin sacar la máquina del dominio?",
+   "answer": "Test-ComputerSecureChannel -Repair",
+   "wrong": [
+    "Remove-Computer",
+    "gpupdate /force",
+    "ipconfig /renew"
+   ],
+   "why": "Reset-ComputerMachinePassword también funciona."
+  },
+  {
+   "q": "¿Por qué reparar en lugar de volver a unirse al dominio?",
+   "answer": "Volver a unirse crea una nueva relación de cuenta y pierde la pertenencia a grupos",
+   "wrong": [
+    "Volver a unirse es imposible",
+    "Reparar es la única forma admitida",
+    "Volver a unirse cambia el nombre de host"
+   ],
+   "why": "Repara primero."
+  },
+  {
+   "q": "Un administrador del dominio todavía puede iniciar sesión en el servidor averiado. ¿Por qué?",
+   "answer": "Por las credenciales en caché de un inicio de sesión anterior",
+   "wrong": [
+    "Los administradores se saltan el canal seguro",
+    "La relación de confianza está bien",
+    "Los administradores siempre usan NTLM"
+   ],
+   "why": "Prueba con un inicio de sesión nuevo."
+  }
+ ]
+}

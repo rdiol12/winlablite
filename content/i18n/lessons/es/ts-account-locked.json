@@ -1,0 +1,58 @@
+{
+ "title": "Un usuario se queda bloqueado una y otra vez",
+ "summary": "Alice queda bloqueada a los pocos minutos de desbloquearla; jura que la escribió bien.",
+ "why": "Los bloqueos no los causa el usuario sentado en su puesto ni de lejos tan a menudo como\nalgo que recuerda una contraseña antigua: un teléfono, una unidad asignada en otro PC,\nuna tarea programada, un servicio. Desbloquear arregla el síntoma; la causa es el\nequipo llamador del evento 4740 en el controlador de dominio que procesó el\nbloqueo, y por eso esta lección se hace en dc01.\n\nAprende los dos comandos: Search-ADAccount -LockedOut para ver quién, y la consulta\ndel 4740 para ver desde dónde.",
+ "concepts": [
+  "Directiva de bloqueo: umbral, ventana de observación, duración; se fija en la Default Domain Policy o en un PSO",
+  "Evento 4740: el bloqueo, con el nombre del equipo llamador",
+  "Evento 4625 en el origen: los inicios de sesión fallidos, con el tipo de inicio de sesión y el proceso",
+  "Los atributos badPwdCount y lastBadPasswordAttempt son contadores por DC, así que léelos con -Server contra el emulador de PDC"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break dc01 account-locked). No leas todavía las pistas.",
+  "Reproduce el síntoma tal como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que has descartado.",
+  "Corrige la causa, no el síntoma. Después pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Busca en los registros la evidencia que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ],
+ "pitfalls": [
+  "Desbloquear sin encontrar el origen significa que el siguiente bloqueo llega en una ventana de observación.",
+  "Los recuentos de contraseñas incorrectas se guardan por DC y se reenvían al emulador de PDC; consulta el PDC cuando los recuentos parezcan incoherentes."
+ ],
+ "verify": [
+  "cuentas bloqueadas",
+  "eventos de bloqueo recientes"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué evento registra un bloqueo con el nombre del equipo llamador?",
+   "answer": "4740",
+   "wrong": [
+    "4625",
+    "4720",
+    "4771"
+   ],
+   "why": "El equipo llamador es de donde vienen las contraseñas incorrectas."
+  },
+  {
+   "q": "¿Por qué consultar el emulador de PDC para los recuentos de contraseñas incorrectas?",
+   "answer": "Los recuentos son por DC y los fallos se reenvían al PDC",
+   "wrong": [
+    "Solo el PDC almacena usuarios",
+    "Los demás DC ocultan el atributo",
+    "El PDC es más rápido"
+   ],
+   "why": "Lee con -Server contra el PDC."
+  },
+  {
+   "q": "Desbloqueas al usuario sin encontrar el origen. ¿Qué pasa después?",
+   "answer": "Vuelve a quedar bloqueado en una ventana de observación",
+   "wrong": [
+    "El problema desaparece",
+    "La cuenta se elimina",
+    "El umbral de bloqueo sube"
+   ],
+   "why": "Encuentra el dispositivo con la contraseña antigua."
+  }
+ ]
+}

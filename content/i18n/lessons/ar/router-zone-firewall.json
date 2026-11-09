@@ -1,0 +1,76 @@
+{
+ "title": "جدار حماية قائم على المناطق على الموجّه: الخوادم والمستخدمون في مناطقهم الخاصة",
+ "summary": "قسّم المكتب إلى شبكة LAN للخوادم وشبكة LAN للمستخدمين على الموجّه، وضع كلًّا منهما في منطقة أمان، واسمح للمستخدمين بالوصول فقط إلى الخدمات التي يحتاجها عضو المجال، مع تتبّع حركة الإرجاع بحفظ الحالة.",
+ "why": "قائمة الوصول على واجهة الموجّه قائمة بالحزم التي يمرّرها. لا تعرف شيئًا عن المحادثات:\nلإدخال الردود تكتب قائمة ثانية للاتجاه الآخر، وتُبقي الاثنتين متوافقتين يدويًا. وعلى\nموجّه فيه أكثر من شبكتين يتحوّل ذلك إلى متاهة لا يجرؤ أحد على لمسها.\n\nأما zone-based policy firewall (ZBF) من Cisco فيفكّر بالمناطق. توضع كل واجهة في منطقة\n(SERVERS وUSERS والـ DMZ)، وتُسقط الحركة بين منطقتين ما لم يحمل zone-pair، في اتجاه واحد،\nسياسة تسمح بها. الحركة داخل منطقة واحدة تمر؛ والواجهة في منطقة لا تتحدث أبدًا مع واجهة\nليست في أي منطقة. وتُبنى السياسة من الأجزاء الثلاثة نفسها كما في QoS: class-map يقول\nأي حركة، وpolicy-map يقول ماذا يُفعل بكل فئة (inspect أو pass أو drop)، والـ zone-pair\nيطبّقها. والـ inspect هو المغزى: يتذكّر المحادثة، فيعود رد الخادم بلا قاعدة خاصة به،\nولا يمر شيء يبدؤه الخادم من تلقاء نفسه.\n\nفي هذا المختبر الموجّه موجّه Linux حقيقي (VM من Alpine) وتحوّل وحدة التحكم ما تكتبه\nإلى قواعد nftables الخاصة به: تصبح المناطق مجموعات واجهات، ويعلّم inspect الاتصال في\nتتبّع الاتصالات في النواة (conntrack)، وحركة الإرجاع للاتصالات المعلَّمة هي ما يعود.\nيقرأ show policy-map type inspect zone-pair sessions تلك الاتصالات من الموجّه. لا شيء\nمُعدّ لك: تبني بنفسك شبكة LAN الثانية والمناطق والسياسة.",
+ "concepts": [
+  "المناطق: الواجهات في المنطقة نفسها تتحدث بحرية؛ وبين منطقتين يُسقط كل شيء حتى يسمح به zone-pair؛ والواجهة ذات المنطقة لا تتحدث أبدًا مع واجهة بلا منطقة",
+  "منطقة self هي الموجّه نفسه (عناوينه): الحركة إليه ومنه حرّة حتى يسمّي zone-pair المنطقة self، وعندها لا يمر إلا ما تسمح به تلك السياسة",
+  "للـ zone-pair اتجاه: source USERS destination SERVERS يحكم فقط على ما يبدؤه المستخدمون؛ والردود على الحركة المفحوصة تعود من تلقاء نفسها",
+  "class-map type inspect match-any (أي سطر match واحد) أو match-all (كل أسطر match): match protocol <name> أو match access-group <list>",
+  "policy-map type inspect: inspect (بحفظ الحالة، وحركة الإرجاع مسموحة)، وpass (اتجاه واحد، بلا حالة: يحتاج الرد إلى pass خاص به)، وdrop (الافتراضي لـ class-default)، وdrop log",
+  "في IOS تأتي أسماء البروتوكولات من محرّك الفحص؛ وهنا يعمل match protocol بالمنفذ المعروف (http 80، وdns 53، وmicrosoft-ds 445): ولأي شيء آخر استخدم قائمة وصول",
+  "يحتاج عضو مجال Windows من وحدة التحكم بالمجال الخاصة به إلى DNS (53)، وKerberos (88)، وLDAP (389)، وSMB (445)، ومخطّط نقاط نهاية RPC (135) ومنافذ RPC الديناميكية (من 49152 إلى 65535)، وتغيير كلمة مرور Kerberos (464)، والكتالوج العمومي (3268)، والوقت (123)"
+ ],
+ "steps": [
+  "أنهِ أولًا الدروس الأولى في المختبر: dc01 هي وحدة التحكم بالمجال مع DNS وDHCP، وfs01 وpc01 عضوان في المجال. افتح طاولة الشبكة وشغّل الموجّه وdc01 وfs01 وpc01.",
+  "ابنِ شبكة LAN للمستخدمين. على طاولة الشبكة أضف مبدّلًا واسحب وصلته الصاعدة (Gi0/1) إلى منفذ حرّ في الموجّه، ثم اسحب كبل pc01 من مبدّل corp إلى المبدّل الجديد. في وحدة تحكم الموجّه: enable؛ ويخبرك show ip interface brief في أي منفذ يقع المبدّل الجديد (GigabitEthernet0/0/1 إن كان الثاني).",
+  "أعطه عنوانًا ووزّع عقود الإيجار من الموجّه: configure terminal، interface g0/0/1، ip address 10.10.20.1 255.255.255.0، no shutdown، exit، ip dhcp excluded-address 10.10.20.1 10.10.20.49، ip dhcp pool USERS، network 10.10.20.0 255.255.255.0، default-router 10.10.20.1، dns-server 10.10.10.10، domain-name corp.lab، end.",
+  "على pc01: ipconfig /release، ثم ipconfig /renew، ثم ipconfig /all: عنوان في 10.10.20.0/24، والبوابة 10.10.20.1، وDNS 10.10.10.10. سجّل الدخول بحساب مجال وافتح \\\\fs01\\c$ كمسؤول: كل شيء يعمل لأن لا شيء يرشّح بعد.",
+  "المناطق: configure terminal، zone security SERVERS، description dc01 and fs01، exit، zone security USERS، exit. لا تضع واجهات فيها بعد: في اللحظة التي تكون فيها واجهة في منطقة والأخرى لا، يتوقفان عن التحدث.",
+  "قائمة ما يحتاجه عضو المجال، كقائمة وصول موسّعة: ip access-list extended DOMAIN-SVCS، ثم permit udp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq 88, permit udp any host 10.10.10.10 eq 88, permit tcp any host 10.10.10.10 eq 389, permit udp any host 10.10.10.10 eq 389, permit tcp any host 10.10.10.10 eq 135, permit tcp any host 10.10.10.10 range 49152 65535, permit tcp any host 10.10.10.10 eq 3268, permit tcp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq ntp, permit tcp any 10.10.10.0 0.0.0.255 eq 445، ثم exit.",
+  "الفئات: class-map type inspect match-any DOMAIN، match access-group name DOMAIN-SVCS، exit. class-map type inspect match-any PING، match protocol icmp، exit.",
+  "السياسة: policy-map type inspect USERS-TO-SERVERS، class type inspect DOMAIN، inspect، class type inspect PING، inspect، class class-default، drop log، exit، exit.",
+  "الـ zone-pair، في اتجاه واحد فقط: zone-pair security U2S source USERS destination SERVERS، service-policy type inspect USERS-TO-SERVERS، exit. لا يوجد زوج في الاتجاه الآخر: يجوز للخوادم أن تجيب، لا أن تبدأ أبدًا.",
+  "الآن الواجهات: interface g0/0/0، zone-member security SERVERS، interface g0/0/1، zone-member security USERS، end. يسرد show zone security المنطقتين مع أعضائهما؛ ويُظهر show zone-pair security الزوج U2S وسياسته.",
+  "اختبر من pc01: Test-NetConnection fs01 -Port 445 (True)، وgpupdate /force (يتحدّث النهجان)، وping dc01 (يجيب). سجّل الخروج ثم الدخول مجددًا: تسجيل الدخول إلى المجال يعمل عبر جدار الحماية.",
+  "اقرأ الحالة على الموجّه: show policy-map type inspect zone-pair sessions. كل اتصال مفحوص سطر: عنوان pc01 ومنفذه إلى عنوان dc01 ومنفذه على 88 و389 و445. شغّله مجددًا بعد دقيقة: المنتهية اختفت، والمفتوحة باقية.",
+  "جرّب الاتجاه الآخر: على dc01 يفشل Test-Connection pc01 -Count 2، ويفشل Test-NetConnection pc01 -Port 445. لا يزال show policy-map type inspect zone-pair يُظهر U2S فقط: لا شيء يسمح بـ SERVERS إلى USERS، فيُسقطها الموجّه، ويرتفع عدّاد الإسقاط في تحقّق winlab أدناه (no-zone-pair SERVERS USERS).",
+  "جرّب شيئًا لا تسمّيه السياسة: على pc01 يفشل Test-NetConnection 10.10.10.10 -Port 80؛ فقد أسقطه class-default drop log. غيّر drop log إلى pass log مرة واحدة (policy-map type inspect USERS-TO-SERVERS، class class-default، pass log): يخرج الآن الـ SYN، لكن لا يعود أي رد، لأن pass لا يحفظ الحالة ولا يوجد زوج للرد. أعِد drop log.",
+  "احفظه: write memory. يُظهر show running-config الـ class-maps والـ policy-map والمناطق والـ zone-pair وzone-member security على كل واجهة."
+ ],
+ "pitfalls": [
+  "وضع واجهة في منطقة قبل الأخرى يفصل الشبكتين فورًا: أنشئ المناطق والسياسة أولًا، وأضف الأعضاء في النهاية.",
+  "pass ليس inspect: يسمح باتجاه واحد ولا يحفظ الحالة، لذا تحتاج الردود إلى pass خاص بها في zone-pair في الاتجاه الآخر. استخدم inspect لكل ما له رد.",
+  "الـ zone-pair بلا service-policy يُسقط كل شيء في اتجاهه؛ ويجب أن توجد السياسة قبل أن يسمّيها service-policy type inspect.",
+  "يستخدم عضو مجال Windows منافذ RPC ديناميكية (من 49152 إلى 65535) نحو الـ DC الخاصة به؛ أغفلها فيفشل نهج المجموعة وتسجيل الدخول بطرق تبدو مشكلات DNS.",
+  "مجمّع DHCP على الموجّه هو منطقة self: يستمر في العمل مع وجود المناطق لأن لا zone-pair يسمّي self. أضف زوجًا من USERS إلى self وسيحتاج DHCP إلى فئة له (udp 67).",
+  "match protocol هنا يعمل بالمنفذ المعروف، لا بالفحص العميق: خادم ويب على المنفذ 8080 ليس http بالنسبة إلى هذا الموجّه. سمِّ المنفذ بقائمة وصول بدلًا من ذلك."
+ ],
+ "verify": [
+  "قواعد جدار الحماية على الموجّه: مجموعات المناطق، وسلاسل zone-pair وعدّاداتها",
+  "الاتصالات المفحوصة في تتبّع الاتصالات على الموجّه (المعلَّمة بواسطة inspect)",
+  "يصل pc01 إلى fs01 عبر SMB من خلال جدار الحماية"
+ ],
+ "quiz": [
+  {
+   "q": "GigabitEthernet0/0/0 في المنطقة SERVERS وGigabitEthernet0/1/0 ليست في أي منطقة. ما الذي يمر بينهما؟",
+   "answer": "لا شيء: الواجهة ذات المنطقة والواجهة بلا منطقة لا تتحدثان أبدًا",
+   "wrong": [
+    "كل شيء، حتى يسمّيهما zone-pair",
+    "فقط ما تسمح به قائمة وصول على الواجهة بلا منطقة",
+    "حركة الإرجاع فقط"
+   ],
+   "why": "السلوك الافتراضي لـ ZBF: داخل المنطقة الواحدة يمر كل شيء، وبين المناطق فقط ما يسمح به zone-pair، والعضو لا يتحدث أبدًا مع غير العضو."
+  },
+  {
+   "q": "يفحص الـ zone-pair من USERS إلى SERVERS حركة SMB. ما الذي يسمح لرد fs01 بالعودة إلى pc01؟",
+   "answer": "الفحص: يتتبّع الاتصال ويمرّر حركة الإرجاع الخاصة به",
+   "wrong": [
+    "zone-pair ثانٍ من SERVERS إلى USERS يفحص SMB",
+    "class-default pass",
+    "لا شيء، يُسقط الرد"
+   ],
+   "why": "inspect يحفظ الحالة. وما يبدؤه fs01 من تلقاء نفسه فقط هو ما يحتاج إلى زوج في الاتجاه الآخر."
+  },
+  {
+   "q": "فئة في policy-map لـ ZBF تستخدم pass بدل inspect. ما الذي يتعطّل؟",
+   "answer": "الردود: pass لا يحفظ الحالة، فتُسقط ما لم يمرّرها زوج في الاتجاه الآخر أيضًا",
+   "wrong": [
+    "لا شيء، pass وinspect متماثلان",
+    "تُسقط الحزمة الأولى",
+    "يتوقف التسجيل"
+   ],
+   "why": "pass سماح أحادي الاتجاه بلا حالة، مثل إدخال في قائمة وصول."
+  }
+ ]
+}

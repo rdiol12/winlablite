@@ -1,0 +1,64 @@
+{
+ "title": "سلة محذوفات AD: استرجع وحدة OU محذوفة مع أشخاصها ومجموعاتها",
+ "summary": "فعّل سلة المحذوفات قبل أن تحتاجها، ثم استعد وحدة OU محذوفة بالكامل، الأصل أولاً، مع كل سماتها وعضويات المجموعات.",
+ "why": "يحذف أحدهم وحدة OU. وتذهب معها حسابات المستخدمين التي بداخلها، ومجموعة كانت فيها، وكل\nعضوية كانت لهؤلاء المستخدمين في مجموعات أخرى. قبل Windows Server 2008 R2 كان طريق العودة\nاستعادة حالة النظام في وضع Directory Services Restore Mode واستعادة موثوقة (authoritative)\nباستخدام ntdsutil (درس ad-authoritative-restore)، مع فصل وحدة التحكم بالمجال واستعادة\nالروابط العكسية يدوياً.\n\nتحتفظ سلة المحذوفات بالكائن المحذوف كاملاً طوال مدة بقائه (180 يوماً افتراضياً): كل سماته،\nوSID الخاص به، وكلمة مروره، وروابطه، فيعود المستخدم المستعاد إلى المجموعات التي كان فيها\nويستطيع تسجيل الدخول مجدداً بكلمة المرور التي كانت لديه. يجب تفعيلها أولاً، ولا يمكن\nإيقافها، ولا تحفظ إلا ما يُحذف بعد تفعيلها.\n\nفعّلها، واضغط اكسر، فتختفي OU=Contractors من dc01 مع المتعاقدَين اللذين فيها ومجموعة\nVPN التي كانت فيها.",
+ "concepts": [
+  "الكائنات المحذوفة: مع سلة المحذوفات، isDeleted ونقل إلى CN=Deleted Objects مع الإبقاء على السمات والروابط؛ وبدونها، شاهد قبر (tombstone) لا يحتفظ بشيء تقريباً",
+  "msDS-deletedObjectLifetime وtombstoneLifetime: المدة التي يمكن خلالها إعادة كائن محذوف (180 يوماً لكل منهما افتراضياً)",
+  "lastKnownParent: المكان الذي كان فيه الكائن؛ لا يمكن استعادة الابن إلا داخل أصل موجود، لذا استعد من الأعلى إلى الأسفل",
+  "السمات المرتبطة (member وmemberOf) تعود مع الكائن، بينما تتطلب الاستعادة الموثوقة إصلاحها يدوياً",
+  "ProtectedFromAccidentalDeletion: إدخال يمنع الحذف على الوحدة OU تحترمه وحدة التحكم وPowerShell"
+ ],
+ "steps": [
+  "فعّل سلة المحذوفات (على مستوى الغابة كلها، وباتجاه واحد): Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target corp.lab. تحقق: (Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes.",
+  "اضغط اكسر (أو winlab break dc01 ou-deleted). في Active Directory Users and Computers (بعد التحديث) لم تعد هناك وحدة Contractors تحت Corp.",
+  "انظر في السلة: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent, whenChanged | Format-Table Name, ObjectClass, lastKnownParent, whenChanged -AutoSize.",
+  "استعد الوحدة OU أولاً: Get-ADObject -Filter \"isDeleted -eq `$true -and Name -like 'Contractors*'\" -IncludeDeletedObjects | Restore-ADObject.",
+  "ثم كل ما كان فيها: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent | Where-Object { $_.lastKnownParent -like 'OU=Contractors,*' } | Restore-ADObject.",
+  "تحقق من عودة الروابط: Get-ADUser mnovak -Properties MemberOf | Select-Object -ExpandProperty MemberOf، وGet-ADGroupMember G-Contractors-VPN.",
+  "صعّب الأمر في المرة القادمة: Set-ADOrganizationalUnit 'OU=Contractors,OU=Corp,DC=corp,DC=lab' -ProtectedFromAccidentalDeletion $true.",
+  "اعرف من فعلها: على dc01، يعرض Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5141} (مع تفعيل تدقيق Directory Service Changes) اسم الحساب. ثم اضغط تحقق من إصلاحي."
+ ],
+ "pitfalls": [
+  "استعادة المستخدمين قبل الوحدة OU تفشل: فالـ lastKnownParent الخاص بهم ما زال محذوفاً. من الأعلى إلى الأسفل دائماً.",
+  "إعادة إنشاء المستخدمين يدوياً تنتج كائنات جديدة بمعرّفات SID جديدة: الملفات وأذونات صناديق البريد وعضويات المجموعات لا تعرفها.",
+  "سلة المحذوفات ليست نسخة احتياطية: تغيير خاطئ في سمة، أو قاعدة بيانات تالفة، أو حذف أقدم من مدة البقاء، كلها ما زالت تحتاج إلى النسخة الاحتياطية لحالة النظام.",
+  "لا يمكن التراجع عن تفعيل سلة المحذوفات، ويجب أن يكون المستوى الوظيفي للغابة 2008 R2 أو أحدث (وكل غابة جديدة كذلك)."
+ ],
+ "verify": [
+  "سلة المحذوفات وما فيها",
+  "الوحدة Contractors وأشخاصها ومجموعاتهم"
+ ],
+ "quiz": [
+  {
+   "q": "كانت وحدة OU محذوفة تضم مستخدمين. بأي ترتيب تستعيد؟",
+   "answer": "الوحدة OU أولاً، ثم الكائنات التي يكون lastKnownParent لها هو تلك الوحدة",
+   "wrong": [
+    "المستخدمون أولاً، ثم الوحدة OU",
+    "الكل دفعة واحدة بأي ترتيب",
+    "المجموعات أولاً، ثم الوحدة OU"
+   ],
+   "why": "لا يعود الكائن إلا إلى أصل موجود."
+  },
+  {
+   "q": "مع تفعيل سلة المحذوفات، ما الذي يعود مع المستخدم المستعاد؟",
+   "answer": "سماته وSID وكلمة مروره وعضوياته في المجموعات",
+   "wrong": [
+    "اسمه وSID فقط",
+    "كل شيء ما عدا عضوياته في المجموعات",
+    "ما كان في آخر نسخة احتياطية فقط"
+   ],
+   "why": "تحتفظ سلة المحذوفات بالكائن كاملاً وبروابطه؛ أما شاهد القبر بدونها فلا يحتفظ بشيء تقريباً."
+  },
+  {
+   "q": "هل يمكن إيقاف سلة محذوفات AD بعد تفعيلها؟",
+   "answer": "لا، تفعيلها دائم للغابة",
+   "wrong": [
+    "نعم، باستخدام Disable-ADOptionalFeature",
+    "نعم، بخفض المستوى الوظيفي للغابة",
+    "على محاكي PDC فقط"
+   ],
+   "why": "فعّلها مبكراً؛ فهي لا تفيد إلا في عمليات الحذف التي تتم بعد تفعيلها."
+  }
+ ]
+}

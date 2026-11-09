@@ -1,0 +1,14 @@
+{
+ "Map a network drive with Group Policy": "Asigna una unidad de red con directiva de grupo",
+ "Sales wants the company share as drive S: on every logon. Do it once, centrally,\nwith a Group Policy Preference, not with a logon script on each PC. Drive maps\nare a *user* setting, so the GPO links to the OU that holds the users. Builds\non create-ou-and-user (OU=Sales, jdoe) and on the file role's Company share on\nfs01.": "Ventas quiere el recurso compartido de la empresa como unidad S: en cada inicio de sesión. Hazlo una vez, de forma centralizada,\ncon una preferencia de directiva de grupo, no con un script de inicio de sesión en cada PC. Las asignaciones de unidades\nson una configuración de *usuario*, así que la GPO se vincula a la OU que contiene a los usuarios. Se basa\nen create-ou-and-user (OU=Sales, jdoe) y en el recurso compartido Company del rol de archivos en\nfs01.",
+ "Create a GPO named 'Map S Drive'": "Crea una GPO llamada 'Map S Drive'",
+ "In User Configuration > Preferences > Drive Maps, map S: to \\\\fs01\\Company (action Update, reconnect on)": "En User Configuration > Preferences > Drive Maps, asigna S: a \\\\fs01\\Company (acción Update, reconectar activado)",
+ "Link the GPO to OU=Sales": "Vincula la GPO a OU=Sales",
+ "Log on to pc01 as jdoe and confirm S: appears (gpupdate /force if needed)": "Inicia sesión en pc01 como jdoe y confirma que aparece S: (gpupdate /force si hace falta)",
+ "GPO is linked to OU=Sales": "la GPO está vinculada a OU=Sales",
+ "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'": "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'",
+ "S: maps to the fs01 Company share": "S: se asigna al recurso compartido Company de fs01",
+ "The path is the share's UNC path, \\\\fs01\\Company; the drive letter is S": "La ruta es la ruta UNC del recurso compartido, \\\\fs01\\Company; la letra de unidad es S",
+ "jdoe can reach the share": "jdoe puede acceder al recurso compartido",
+ "A mapped drive to a share the user cannot open fails silently at logon": "Una unidad asignada a un recurso compartido que el usuario no puede abrir falla en silencio al iniciar sesión"
+}

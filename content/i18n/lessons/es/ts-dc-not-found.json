@@ -1,0 +1,57 @@
+{
+ "title": "Nadie encuentra el controlador de dominio",
+ "summary": "El DC está en marcha, el DNS responde, y los miembros dicen que no se pudo contactar con ningún controlador de dominio.",
+ "why": "Los miembros no encuentran un controlador de dominio por nombre: piden al DNS registros de servicio (SRV) como _ldap._tcp.dc._msdcs.corp.lab, que cada DC registra para sí mismo mediante el servicio Netlogon. Elimina esos registros e impide que Netlogon los vuelva a poner, y el DC es invisible para el dominio aunque esté perfectamente sano. Las pruebas de DNS de dcdiag y una consulta nslookup lo encuentran en minutos.",
+ "concepts": [
+  "El localizador de DC: registros SRV bajo _msdcs y en la zona del dominio",
+  "Netlogon los registra, a partir de netlogon.dns, al arrancar y cada 24 horas",
+  "nslookup -type=SRV, nltest /dsgetdc, dcdiag /test:dns",
+  "Parámetros de Netlogon que desactivan el registro"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break dc01 srv-records-missing). No leas aún las pistas.",
+  "Reprodúcelo desde fs01: nltest /dsgetdc:corp.lab /force, e inicia sesión con una cuenta del dominio que no haya iniciado sesión allí antes.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Arregla la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la prueba que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Las credenciales en caché permiten que los usuarios existentes sigan iniciando sesión durante un tiempo, lo que oculta el fallo a quienes lo notificarían.",
+  "Volver a crear los registros a mano funciona hasta el siguiente ciclo de Netlogon; arregla el registro."
+ ],
+ "verify": [
+  "el registro SRV del DC"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué servicio registra los registros SRV de un DC?",
+   "answer": "Netlogon",
+   "wrong": [
+    "DNS Client",
+    "DHCP Server",
+    "Kerberos KDC"
+   ],
+   "why": "A partir de netlogon.dns, al arrancar y cada 24 horas."
+  },
+  {
+   "q": "¿Por qué no dura volver a crear a mano los registros SRV?",
+   "answer": "El siguiente ciclo de Netlogon lo deshace; arregla el registro",
+   "wrong": [
+    "El DNS rechaza los registros manuales",
+    "Los registros caducan en un minuto",
+    "Sí dura"
+   ],
+   "why": "Encuentra el parámetro que desactivó el registro."
+  },
+  {
+   "q": "¿Por qué los usuarios notifican tarde este fallo?",
+   "answer": "Las credenciales en caché permiten que los usuarios existentes sigan iniciando sesión durante un tiempo",
+   "wrong": [
+    "El DC no envía errores",
+    "Los inicios de sesión solo son más lentos",
+    "Solo afecta a los administradores"
+   ],
+   "why": "Los inicios de sesión nuevos y las máquinas nuevas fallan primero."
+  }
+ ]
+}

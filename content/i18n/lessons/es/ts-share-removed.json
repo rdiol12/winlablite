@@ -1,0 +1,58 @@
+{
+ "title": "El recurso compartido que desapareció",
+ "summary": "La unidad S: de todos los usuarios de Sales muestra una cruz roja; los archivos siguen en el servidor.",
+ "why": "\"No se encontró la ruta de red\" con el servidor encendido y accesible significa que lo que ha\ndesaparecido es el recurso compartido, no los datos. Un recurso compartido es un nombre asociado a una\ncarpeta con su propia capa de permisos; eliminarlo deja intactas la carpeta y la ACL de NTFS.\nVolver a crearlo con el permiso de recurso compartido correcto restaura el acceso al instante, y las\nunidades asignadas se reconectan en la siguiente actualización.\n\nLa lección de fondo es saber cuál de las dos capas de permisos estás mirando cuando falla el acceso,\ny que la capa del recurso compartido es la que desaparece con él.",
+ "concepts": [
+  "Get-SmbShare y Get-SmbShareAccess: qué se publica y quién puede conectarse",
+  "Recurso compartido frente a NTFS: la ACL del recurso compartido se recrea con él; la ACL de NTFS vive en la carpeta",
+  "Comportamiento de las unidades asignadas: una reconexión fallida muestra una cruz roja y se reintenta al acceder",
+  "Registro de cambios: el registro Microsoft-Windows-SMBServer/Operational guarda la creación y eliminación de recursos compartidos"
+ ],
+ "pitfalls": [
+  "Volver a crear un recurso compartido con Full Control para Everyone para que funcione rápido lo deja así durante años.",
+  "El motor de estado deseado puede devolver el recurso compartido exactamente como estaba definido: Comprobar desviación en la pestaña Roles muestra que falta, Aplicar lo restaura."
+ ],
+ "verify": [
+  "recursos compartidos en el servidor",
+  "la carpeta sigue ahí"
+ ],
+ "quiz": [
+  {
+   "q": "Se eliminó un recurso compartido y se volvió a crear. ¿Qué permisos volvieron con él?",
+   "answer": "Nada de la ACL del recurso compartido: se recrea con él; NTFS vive en la carpeta y no cambia",
+   "wrong": [
+    "Tanto el recurso compartido como NTFS se restablecen a Everyone",
+    "Solo los permisos del recurso compartido",
+    "No cambia nada en absoluto"
+   ],
+   "why": "Vuelve a establecer la ACL del recurso compartido, con cuidado."
+  },
+  {
+   "q": "¿Qué registro guarda la creación y eliminación de recursos compartidos?",
+   "answer": "Microsoft-Windows-SMBServer/Operational",
+   "wrong": [
+    "System",
+    "Application",
+    "Solo Security"
+   ],
+   "why": "Es el registro de cambios de los recursos compartidos."
+  },
+  {
+   "q": "¿Qué herramienta de winlab devuelve el recurso compartido exactamente como estaba definido?",
+   "answer": "Comprobar desviación y Aplicar en la ventana Servicios (Roles)",
+   "wrong": [
+    "Reconstruir la VM",
+    "Un punto de control del DC",
+    "Fallos de red"
+   ],
+   "why": "El estado deseado lo restaura."
+  }
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 share-removed). No leas aún las pistas.",
+  "Reproduce el síntoma como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Corrige la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la evidencia que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ]
+}

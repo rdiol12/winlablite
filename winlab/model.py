@@ -102,6 +102,16 @@ class Network:
     # of this switch's VLANs is the same segment as the VLAN with the same
     # number on that switch (when it has one): see Lab.segment_id.
     upstream: str = ""
+    # The virtual switch's type, as in Hyper-V's Virtual Switch Manager
+    # (winlab/vswitch.py): private (the default: the lab's machines only),
+    # internal (they can also reach this PC) or external (they reach the
+    # internet through this PC's connection). host_ports: "node:port" or
+    # "node:port@hostport", a machine's port this PC can open on 127.0.0.1.
+    vswitch: str = "private"
+    host_ports: list[str] = field(default_factory=list)
+    # A cable straight from one router's port to another's (winlab/routers.py):
+    # a two-ended segment with no switch, drawn on the canvas as the cable.
+    link: bool = False
 
     @property
     def vlan_no(self) -> int:
@@ -399,8 +409,14 @@ class Lab:
 
     def _cut_off(self, sw: str) -> bool:
         """A switch whose uplink trunk is shut or err-disabled, with no other
-        cable round to the switch above (winlab/stp.py)."""
+        cable round to the switch above (winlab/stp.py), or whose switch above
+        is powered off: a dead switch passes no frames, so the ones cabled
+        below it are on their own."""
+        from .devcli import switch_off
         from .stp import cut_off
+        box = self.networks.get(sw)
+        if box is not None and box.upstream and switch_off(self, box.upstream):
+            return True
         return cut_off(self, sw)
 
     def node_list(self) -> list[Node]:

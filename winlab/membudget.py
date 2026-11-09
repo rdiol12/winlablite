@@ -5,7 +5,8 @@ asks for is RAM the host must really have free. Starting more than that does
 not fail cleanly: QEMU dies with an allocation error on Windows hosts, or the
 host pages until nothing responds. So before anything boots, winlab works out
 what the machines it is about to start need, and if the host is short it first
-trims machines toward their floor (never below it, see Node.trim_floor_mb)
+trims machines toward their floor (never below it, see floor: Node.trim_floor_mb,
+raised for a machine whose packs need more, like Wazuh's indexer)
 and otherwise refuses with a plain explanation of what would fit.
 
 It also decides *which* machines to start: an exercise or `--only` names a
@@ -28,6 +29,17 @@ TRIM_STEP_MB = 256
 
 class BudgetError(Exception):
     pass
+
+
+def floor(node) -> int:
+    """The least this machine may be trimmed to: its OS's floor, raised to
+    what the software it is built to run needs (the min_mb of the packs its
+    node vars name: Wazuh's indexer, a database), never above what the lab
+    gives it."""
+    from .debpacks import PACKS
+    v = (getattr(node, "vars", None) or {}).get("packs") or []
+    need = max((PACKS[p].min_mb for p in (v if isinstance(v, list) else [v]) if p in PACKS), default=0)
+    return max(node.trim_floor_mb, min(need, node.memory_mb))
 
 
 @dataclass
@@ -109,7 +121,7 @@ def plan(lab: Lab, start: list[str], fabric_mb: int, avail_mb: int) -> Budget:
     while deficit > 0:
         progressed = False
         for n in start:
-            slack = sizes[n] - lab.nodes[n].trim_floor_mb
+            slack = sizes[n] - floor(lab.nodes[n])
             if slack <= 0 or deficit <= 0:
                 continue
             step = min(TRIM_STEP_MB, slack)
@@ -134,7 +146,7 @@ def apply(lab: Lab, b: Budget) -> None:
 
 def floor_mb(lab: Lab, ids: list[str], fabric_mb: int) -> int:
     """The least these machines can boot in, every one at its floor."""
-    total = sum(lab.nodes[n].trim_floor_mb + QEMU_OVERHEAD_MB for n in ids)
+    total = sum(floor(lab.nodes[n]) + QEMU_OVERHEAD_MB for n in ids)
     return total + (fabric_mb + QEMU_OVERHEAD_MB if fabric_mb else 0)
 
 

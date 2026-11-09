@@ -1,0 +1,83 @@
+{
+ "title": "קלוט את המצטרפים החדשים",
+ "summary": "הפוך את גיליון המצטרפים החדשים של משאבי אנוש לחשבונות, קבוצות, תיקיות ותיקיות בית, ואז צפה בעובדים נכנסים ועובדים.",
+ "why": "קליטת עובדים היא משימת הספרייה הנפוצה ביותר שיש, וזו שאנשים שמים לב אליה\nראשונה: מצטרף חדש שלא מצליח להיכנס ביום הראשון מתקשר לתמיכה הטכנית לפני\nתשע. משאבי אנוש שולחים גיליון (שמות, מחלקות, תפקידים, שמות המשתמש שסוכמו);\nה-IT הופך כל שורה לחשבון עם התכונות הנכונות, מכניס אותו לקבוצות שהתפקיד\nשלו צריך, ונותן לו מקום לעבוד: תיקיית המחלקה ותיקיית בית משלו.\n\nביד, לאדם אחד, זה עשר לחיצות. מהגיליון עם Import-Csv ולולאה זה סקריפט אחד\nשנבדק, זהה בכל פעם, והגיליון נשאר הרישום של מי הוגדר ואיך. הקבוצות הן מה\nשמאפשר להתרחב: הענק את תיקיית המחלקה לקבוצת המחלקה פעם אחת, וכל מצטרף חדש\nבמחלקה הזו צריך רק חברות אחת.\n\nבמעבדה הזו העובדים באמת באים לעבוד. כשיום העבודה פועל (חלון משרד), כל אדם\nמגיע למחשב שלו בסביבות שמונה וחצי, נכנס עם הסיסמה הראשונה שנתת לו, פותח את\nתיקיית המחלקה שלו, שומר מסמכים, רושם הערות בתיקיית הבית שלו, ואם יש במעבדה,\nמדפיס ושולח דואר. מה שטעית בו חוזר ככרטיסי תמיכה במילים שלהם.",
+ "concepts": [
+  "גיליון המצטרפים החדשים: שורה אחת לכל אדם, עמודות שממופות לפרמטרים של New-ADUser (GivenName, Surname, SamAccountName, Department, Title, EmailAddress, OfficePhone)",
+  "Import-Csv הופך את הגיליון לאובייקטים; ForEach-Object מריץ את New-ADUser פעם אחת לכל שורה",
+  "סיסמה ראשונה שה-IT קובע עם ChangePasswordAtLogon: האדם בוחר סיסמה משלו בכניסה הראשונה, וה-IT אף פעם לא יודע אותה",
+  "קבוצה גלובלית אחת לכל מחלקה (G-Finance); תיקיית המחלקה מוענקת לקבוצה, לא לאנשים",
+  "תיקיות בית: שיתוף מוסתר (Home$), תיקייה אחת לכל משתמש שרק המשתמש הזה והמנהלים יכולים לפתוח, והתכונות HomeDirectory ו-HomeDrive שממפות אותה ככונן H: בכניסה",
+  "כניסות נרשמות ביומן Security של בקר התחום: 4624 היא כניסה מוצלחת, 4625 כניסה שנכשלה עם הסיבה בקוד הסטטוס שלה"
+ ],
+ "steps": [
+  "התחל את יום העבודה: פתח את משרד מתפריט התחל והפעל את יום עבודה (או הרץ winlab workday start). הגיליון של משאבי אנוש מגיע למדף המדיה בתור הזיכרון 'משאבי אנוש: גיליון מצטרפים חדשים'.",
+  "חבר את הזיכרון ל-dc01 ממדף המדיה ומצא את אות הכונן שלו: Get-Volume | Where-Object DriveType -eq Removable.",
+  "קרא את הגיליון: Import-Csv 'E:\\New starters.csv' | Format-Table DisplayName, Department, Title, SamAccountName.",
+  "תן לעובדים בית בספרייה: New-ADOrganizationalUnit -Name Staff -Path 'DC=corp,DC=lab'.",
+  "קבוצה גלובלית אחת לכל מחלקה, בשם G- ושם המחלקה בלי רווחים: 'Front desk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { New-ADGroup -Name ('G-' + ($_ -replace ' ', '')) -GroupScope Global -GroupCategory Security -Path 'OU=Staff,DC=corp,DC=lab' }.",
+  "צור את החשבונות מהגיליון, והקלד סיסמה ראשונה לכל אדם כשתתבקש: Import-Csv 'E:\\New starters.csv' | ForEach-Object { New-ADUser -Name $_.DisplayName -GivenName $_.FirstName -Surname $_.LastName -SamAccountName $_.SamAccountName -UserPrincipalName $_.EmailAddress -EmailAddress $_.EmailAddress -Department $_.Department -Title $_.Title -OfficePhone $_.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString \"First password for $($_.SamAccountName)\") -ChangePasswordAtLogon $true -Enabled $true }.",
+  "הכנס כל אדם לקבוצה של המחלקה שלו: Import-Csv 'E:\\New starters.csv' | ForEach-Object { Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName }.",
+  "ב-fs01, תן לכל מחלקה תיקייה בשיתוף Company שרק הקבוצה שלה יכולה לשנות: 'FrontDesk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { $d = New-Item -ItemType Directory -Force \"D:\\Shares\\Company\\$_\"; icacls $d.FullName /grant \"CORP\\G-$($_):(OI)(CI)M\" }.",
+  "ב-fs01, צור את השיתוף של תיקיות הבית: New-Item -ItemType Directory D:\\Shares\\Home, ואז New-SmbShare -Name 'Home$' -Path D:\\Shares\\Home -FullAccess 'CORP\\Domain Admins' -ChangeAccess 'CORP\\Domain Users'.",
+  "לכל אדם, תיקייה שרק הוא יכול לפתוח, ממופה ככונן H: בכניסה: ב-fs01 New-Item -ItemType Directory D:\\Shares\\Home\\<account>, icacls D:\\Shares\\Home\\<account> /inheritance:r /grant 'CORP\\Domain Admins:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' 'CORP\\<account>:(OI)(CI)M'; ב-dc01 Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:.",
+  "חלק את הסיסמאות הראשונות: ב-משרד > רשימת העובדים, הקלד את הסיסמה הראשונה שנתת לכל אדם (או הרץ winlab staff password <account>; הוא שואל אותה, היא אף פעם לא חלק מהפקודה). היא נשמרת רק בתיקייה של המעבדה הזו במחשב הזה.",
+  "צפה בהם עובדים: משרד > היום מציג מי הגיע, באיזה מחשב, ומה הוא עושה; הפיד מציג כל כניסה, שמירה והדפסה. ב-dc01: Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624,4625} -MaxEvents 30 | Format-Table TimeCreated, Id, Message -Wrap.",
+  "קרא את הכרטיסים שמגיעים (מישהו שפספסת, תיקייה שהם לא מצליחים לפתוח) ותקן את הגורם, לא את הסימפטום."
+ ],
+ "pitfalls": [
+  "חשבון שנוצר בלי סיסמה מושבת, ואדם שהחשבון שלו מושבת מתקשר ביום הראשון; בדוק את Enabled בכל שורה.",
+  "הקלדת סיסמה ברשימת העובדים ששונה מזו שקבעת היא סיסמה שגויה ב-DC: 4625 ביומן Security שלו, ואחרי כמה ניסיונות חשבון נעול אם בדומיין יש מדיניות נעילה.",
+  "עם ChangePasswordAtLogon האדם בוחר סיסמה חדשה בכניסה הראשונה; מאז הסיסמה הראשונה כבר לא עובדת, וזו בדיוק הכוונה.",
+  "קבוצת מחלקה מקבלת Modify על התיקייה שלה, אף פעם לא Full Control: Full Control מאפשר לחברים לשנות את ההרשאות בעצמם.",
+  "תיקיות בית אסור שירשו את ההרשאות של תיקיית האב, אחרת כל אחד יכול לקרוא את תיקיית הבית של כולם.",
+  "שמות מחלקות עם רווחים (Front desk) יוצרים שמות קבוצות ותיקיות מסורבלים; הסכם על כלל אחד (כאן: להשמיט את הרווחים) והשתמש בו בכל מקום."
+ ],
+ "verify": [
+  "חשבונות העובדים מהגיליון",
+  "קבוצות המחלקות והחברים בהן",
+  "הכניסות האחרונות ב-DC"
+ ],
+ "quiz": [
+  {
+   "q": "משאבי אנוש שולחים גיליון של שנים עשר מצטרפים חדשים. מה הופך את השורות שלו לחשבונות בצעד אחד שנבדק?",
+   "answer": "Import-Csv שמועבר ב-pipe אל ForEach-Object שמריץ New-ADUser",
+   "wrong": [
+    "שתים עשרה הרצות של אשף New Object ב-dsa.msc",
+    "csvde עם אפשרויות ברירת המחדל",
+    "העתקת משתמש קיים שתים עשרה פעמים"
+   ],
+   "why": "Import-Csv יוצר אובייקט אחד לכל שורה ו-New-ADUser מקבל את העמודות שלו כפרמטרים, כך שהגיליון נשאר הרישום של מה שנוצר."
+  },
+  {
+   "q": "החשבון של מצטרף חדש נוצר בלי סיסמה. מה קורה כשהוא מנסה להיכנס?",
+   "answer": "זה נכשל: חשבון שנוצר בלי סיסמה מושבת",
+   "wrong": [
+    "הוא נכנס עם סיסמה ריקה",
+    "Windows מבקש ממנו לבחור סיסמה",
+    "זה עובד עד החלפת הסיסמה הראשונה"
+   ],
+   "why": "New-ADUser משאיר חשבון מושבת עד שיש לו סיסמה שעומדת במדיניות; ה-DC רושם 4625 על הניסיון."
+  },
+  {
+   "q": "היכן נרשמת כניסה שנכשלה מול הדומיין, ובאיזה אירוע?",
+   "answer": "ביומן Security של בקר התחום, אירוע 4625",
+   "wrong": [
+    "ביומן System של המחשב, אירוע 7036",
+    "ביומן Directory Service של ה-DC, אירוע 1644",
+    "בשום מקום, אלא אם הביקורת מוגדרת לכל משתמש"
+   ],
+   "why": "4624 היא כניסה מוצלחת ו-4625 כניסה שנכשלה; קוד הסטטוס שלה אומר למה (משתמש לא ידוע, סיסמה שגויה, מושבת, נעול)."
+  },
+  {
+   "q": "למה להעניק את תיקיית Finance ל-G-Finance ולא לכל איש כספים בנפרד?",
+   "answer": "כך מצטרף חדש צריך רק חברות אחת בקבוצה, וה-ACL של התיקייה אף פעם לא משתנה",
+   "wrong": [
+    "משתמשים לא יכולים להופיע ב-ACL",
+    "קבוצות גורמות לקבצים להיטען מהר יותר",
+    "רק לקבוצות אפשר לתת Modify"
+   ],
+   "why": "ההרשאות הולכות אחרי הקבוצה; קליטה ועזיבה הופכות לשינויי חברות, וביקורת קוראת קבוצה אחת."
+  }
+ ]
+}

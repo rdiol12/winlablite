@@ -1,0 +1,16 @@
+{
+ "Move Dan Price from Sales to Finance without leaving Sales access behind": "Mueve a Dan Price de Sales a Finance sin dejar atrás el acceso de Sales",
+ "Dan Price (dprice) becomes a Finance analyst on Monday. Press Break in the\nlesson first: it sets him up in Sales on dc01. Keep his account; change what\nhangs on it. He must reach what Finance reaches and nothing Sales has, and his\nhome folder moves to Finance's share, HomeFinance$, with its files and his\npermission on it.": "Dan Price (dprice) pasa a ser analista de Finance el lunes. Pulsa primero Romper en la lección: lo configura en Sales en dc01. Conserva su cuenta; cambia lo que depende de ella. Debe llegar a lo que llega Finance y a nada de lo que tiene Sales, y su carpeta personal se mueve al recurso compartido de Finance, HomeFinance$, con sus archivos y su permiso sobre ella.",
+ "Department Finance, Title 'Finance analyst', on the same account": "Department Finance, Title 'Finance analyst', en la misma cuenta",
+ "Out of G-Sales and Sales Team, into G-Finance and Finance Team": "Fuera de G-Sales y Sales Team, dentro de G-Finance y Finance Team",
+ "No permission for dprice left on any Sales folder": "Ningún permiso para dprice en ninguna carpeta de Sales",
+ "Home folder moved to C:\\Shares\\HomeFinance\\dprice with its permissions, the old one gone, HomeDirectory pointing at \\\\dc01\\HomeFinance$\\dprice": "Carpeta personal movida a C:\\Shares\\HomeFinance\\dprice con sus permisos, la antigua eliminada, HomeDirectory apuntando a \\\\dc01\\HomeFinance$\\dprice",
+ "the same account, now in Finance": "la misma cuenta, ahora en Finance",
+ "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; never delete and recreate a mover": "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; nunca elimines y vuelvas a crear a alguien que cambia de puesto",
+ "groups swapped, not added": "grupos intercambiados, no añadidos",
+ "Remove-ADGroupMember G-Sales and 'Sales Team', Add-ADGroupMember G-Finance and 'Finance Team'": "Remove-ADGroupMember G-Sales y 'Sales Team', Add-ADGroupMember G-Finance y 'Finance Team'",
+ "no direct permission left on Sales folders": "no queda ningún permiso directo en las carpetas de Sales",
+ "(Get-Acl <folder>).Access | Where-Object { -not $_.IsInherited } shows grants to people; icacls '<folder>' /remove CORP\\dprice": "(Get-Acl <carpeta>).Access | Where-Object { -not $_.IsInherited } muestra los permisos concedidos a personas; icacls '<carpeta>' /remove CORP\\dprice",
+ "home folder moved with its files and permission": "carpeta personal movida con sus archivos y su permiso",
+ "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL, then Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:": "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL y después Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:"
+}

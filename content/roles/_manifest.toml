@@ -65,170 +65,6 @@ needs = ["domain-join"]
 reboots = false
 description = "File shares with NTFS + share permissions and ABE"
 
-[dfs]
-engine = "dsc"
-needs = ["file"]
-reboots = false
-description = "DFS namespace and replication"
-
-[adcs]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = false
-description = "Enterprise CA, certificate templates, web enrolment"
-
-[iis]
-engine = "dsc"
-needs = []
-reboots = false
-description = "IIS web server with HTTP and HTTPS bindings"
-
-[firewall]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Windows Firewall rules, open/close ports, profiles"
-
-[ntp]
-engine = "dsc"
-needs = ["ad-ds"]
-reboots = false
-description = "Authoritative time on the PDC emulator"
-
-[fsrm]
-engine = "dsc"
-needs = ["file"]
-reboots = false
-description = "Quotas and file screening (FSRM)"
-
-[wsus]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = false
-description = "Windows Server Update Services: patch management + client GPO"
-
-[backup]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Windows Server Backup + scheduled system-state (AD recovery)"
-
-[rds]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = true
-description = "Remote Desktop Session Host + licensing"
-
-[storage]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Storage Spaces pool + iSCSI target server"
-
-[monitoring]
-engine = "dsc"
-needs = []
-reboots = false
-description = "PerfMon baseline data collector + event log collector"
-
-[wac]
-engine = "dsc"
-download = "windows-admin-center"
-needs = ["domain-join"]
-reboots = false
-description = "Windows Admin Center gateway on https 443 (Microsoft's installer, fetched onto the PC and signature-checked in the machine), to run the lab's servers from a browser"
-
-[cluster-storage]
-engine = "dsc"
-needs = []
-reboots = false
-description = "iSCSI target 'cluster' with a 1 GB witness LUN and two 20 GB LUNs (file server, virtual machines), offered only to the lab's cluster-node machines"
-
-[cluster-node]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = false
-description = "Failover Clustering feature and tools, and the cluster's shared disks connected over iSCSI; the student creates the cluster"
-
-[rras]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Routing and Remote Access: software router + VPN gateway"
-
-[nps]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = false
-description = "Network Policy Server (RADIUS) for VPN/802.1x"
-
-[laps]
-engine = "dsc"
-needs = ["ad-ds"]
-reboots = false
-description = "Windows LAPS: per-machine local admin password rotation in AD"
-
-[printer]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Print server with a shared, AD-published queue"
-
-[hardening]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Security baseline: audit policy, SMB signing, LSA/NTLM, Defender"
-
-[dsc]
-engine = "dsc"
-needs = []
-reboots = false
-description = "PowerShell DSC: configuration-as-code with drift auto-correction"
-
-[devices]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Host and share this node's printers and scanners"
-
-[connect-devices]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = false
-description = "Connect this machine to shared printers and scan folders"
-
-[drivers]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Install vendor drivers (.inf) from the staged driver store via pnputil"
-
-[lean]
-engine = "dsc"
-needs = []
-reboots = true
-description = "Lean profile (default on every Windows machine): idle services, telemetry, Widgets, OneDrive and, on a server no role wants it on, Defender off"
-
-[vpn-s2s]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Site-to-site IKEv2 VPN (RRAS) to the other site's gateway, with routes for its prefixes; peer and key from the lab's [[site]] entries"
-
-[sql]
-engine = "dsc"
-media = "sql2022"
-needs = []
-reboots = true
-description = "SQL Server 2022 Developer: Database Engine installed unattended from your own ISO (TCP 1433 open, Agent running, Domain Admins sysadmin, the LabInventory database on the data disk)"
-
-[adfs]
-engine = "dsc"
-needs = ["domain-join"]
-reboots = true
-description = "Active Directory Federation Services: a one-server farm (Windows Internal Database), a group managed service account, the TLS certificate from the lab's enterprise CA, the federation name in DNS"
-
 [vpn-gateway]
 script = "vpn-gateway.sh"
 needs = []
@@ -285,7 +121,7 @@ description = "Admin tools server on Debian 12: a plain server and a message of 
 script = "ipphone.sh"
 image = "alpine"
 apk = ["calls", "cage", "seatd", "gnome-keyring", "dbus", "eudev", "gst-plugins-base", "gst-plugins-good",
-       "adwaita-icon-theme", "font-dejavu", "e2fsprogs"]
+       "adwaita-icon-theme", "font-dejavu", "e2fsprogs", "lldpd"]
 needs = []
 reboots = false
 description = "IP desk phone appliance: GNOME Calls, a SIP softphone, full screen on its own screen; no account until the student signs it in to the phone system in Calls (menu > VoIP Accounts)"
@@ -378,68 +214,6 @@ needs = []
 reboots = false
 description = "Ubuntu: Prometheus scrapes every machine with the metrics role, Grafana (port 3000, admin with the lab password) draws the generated dashboards; the node exporter watches the appliance itself"
 
-[metrics]
-engine = "dsc"
-download = "windows-exporter"
-needs = []
-reboots = false
-description = "Prometheus Windows exporter (windows_exporter) as a service on 9182 with the collectors the machine's roles call for, firewall open for the monitoring appliance"
-
-[mecm]
-engine = "dsc"
-media = "mecm"
-needs = ["domain-join"]
-reboots = true
-minutes = 180
-description = "Microsoft Configuration Manager (evaluation): a primary site with management and distribution point, its database on the lab's SQL Server (your SQL Server ISO), installed from the disc winlab mecm prepare builds from your Microsoft downloads"
-
-# Remote administration between lab machines (winlab/remoteadmin.py): the
-# per-machine switches in the Machines window.
-[remote-desktop]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Remote Desktop on, Network Level Authentication required, the Remote Desktop firewall group enabled (who may sign in stays yours to grant)"
-
-[winrm]
-engine = "dsc"
-needs = []
-reboots = false
-description = "PowerShell remoting: WinRM running at boot, its HTTP listener on 5985 and the firewall rule (Windows 11 has it off out of the box)"
-
-[rsat]
-engine = "dsc"
-media = "fod-win11"
-media_on = "windows-client"
-needs = []
-reboots = false
-description = "Admin tools (RSAT): AD, Group Policy, DNS, DHCP, file services and Server Manager; Windows features on a server, Features on Demand from your own Languages and Optional Features ISO on Windows 11"
-
-# Windows Server Backup (winlab/wsbackup.py): model answers for `winlab roles
-# apply` and CI; in the app the backup is the student's work.
-[server-backup]
-engine = "dsc"
-needs = []
-reboots = false
-description = "Windows Server Backup: the feature, wbadmin and its console (wbadmin.msc); the backup itself is yours to write"
-
-[backup-nas]
-engine = "dsc"
-needs = ["server-backup"]
-reboots = false
-description = "A nightly full-server backup (bare-metal recovery and system state) to \\\\<nas>\\Backups on the lab's NAS as its svc-backup account, at 21:00 lab time (vars.backup_at); the share and the account are built in the NAS's web UI first"
-
-# Imaging (winlab/imaging.py): golden images captured and deployed over PXE.
-[wds]
-engine = "dsc"
-media = "ws2022"
-media_on = "windows-server"
-needs = []
-reboots = false
-description = "Windows Deployment Services: RemoteInstall on the data disk, answering PXE clients, a Setup and a capture boot image from your Windows Server 2022 DVD's boot.wim, an image group for golden images, and a domain-join answer file to attach to them"
-
-# The web-farm lab's proxy (winlab/webfarm.py): the model answer of the nginx
-# lesson, for `winlab roles apply` and CI.
 [web-proxy]
 script = "web-proxy.sh"
 image = "ubuntu"
@@ -447,3 +221,4 @@ pack = "nginx"
 needs = []
 reboots = false
 description = "Ubuntu: nginx from the pack as reverse proxy for intranet.<domain>, an upstream of the machines in vars.backends with passive health checks, HTTP to HTTPS when /etc/ssl/winlab/intranet.pem is there"
+

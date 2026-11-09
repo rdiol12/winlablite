@@ -46,3 +46,6 @@ Thumbs.db
 
 # the README's screenshots
 !docs/screenshots/*.png
+
+# The trial build writes its pack key here; it is compiled into the exe, never committed.
+/winlab/licensing/trialkey.py

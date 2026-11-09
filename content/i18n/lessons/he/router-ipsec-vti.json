@@ -1,0 +1,80 @@
+{
+ "title": "IPsec בין אתרים בנתב: IKEv2 וממשק מנהרה לסניף",
+ "summary": "חבר סניף למשרד על גבי רשת לא מהימנה עם IKEv2 ו-IPsec: בנה כל חלק של IKEv2 ו-IPsec בנתב, ממשק מנהרה וירטואלי סטטי, ואת הקצה של הסניף עצמו עם strongSwan על Linux.",
+ "why": "שני משרדים שמדברים דרך האינטרנט צריכים שני דברים שהאינטרנט לא נותן להם: פרטיות (אף אחד בדרך לא יכול לקרוא את התעבורה) והוכחה (הקצה השני הוא באמת הסניף). IPsec בין אתרים נותן את שניהם. IKEv2 הוא השיחה שבה שני הנתבים מוכיחים מי הם (כאן עם מפתח משותף מראש) ומסכימים על מפתחות; ואז ESP של IPsec מצפין וחותם כל מנה בין שני האתרים.\n\nIOS בונה את זה מחלקים קטנים שמציינים זה את זה, והשמות הם הדרך לאבחן תקלות: הצעה (באילו צפנים IKE רשאי להשתמש), מדיניות שמציעה את ההצעות האלה, keyring (איזה מפתח לאיזה עמית), פרופיל IKEv2 (איזה עמית, איך הוא מוכיח את עצמו, איזה keyring), transform set (איך ESP מצפין) ופרופיל IPsec שקושר את שני האחרונים. הפרופיל מגן על ממשק מנהרה: Tunnel0 עם tunnel mode ipsec ipv4 הוא ממשק מנהרה וירטואלי (VTI) סטטי, ממשק כמו כל ממשק אחר, כך שמה שאתה מנתב לתוכו מוצפן, ופרוטוקול ניתוב יכול לרוץ מעליו. זה התכנון המודרני מבוסס הנתיבים; ה-crypto map הישן יותר, רשימת גישה בממשק החיצוני שבוחרת מה להצפין, הוא מה שתפגוש בנתבים ישנים.\n\nבמעבדה הזו הנתב הוא נתב Linux (VM של Alpine): Tunnel0 הופך לממשק XFRM, ו-charon של strongSwan עושה IKEv2 עם מה שהקלדת. הסניף הוא שרת Linux שאתה מוסיף, עם strongSwan מהארכיון של Ubuntu על זיכרון חבילות, מוגדר ידנית בתצורה של swanctl עצמו. ה\"אינטרנט\" ביניהם הוא רשת של המעבדה: המעבדה לעולם לא מגיעה לאמיתי. רק מפתחות משותפים מראש נבנים; אישורים (rsa-sig) לא.",
+ "concepts": [
+  "IKEv2 SA (show crypto ikev2 sa): הערוץ המאובטח של הנתבים עצמם, READY כשהם הסכימו; IPsec SA (show crypto ipsec sa): אחד לכל כיוון, עם המנות שהם הצפינו ופענחו",
+  "crypto ikev2 proposal: encryption aes-cbc-256, integrity sha256, group 14 (Diffie-Hellman MODP של 2048 סיביות; 19 ו-20 הם העקומים האליפטיים); מדיניות מציעה הצעות, ואפשר רק בכתובת מקומית אחת",
+  "crypto ikev2 keyring, peer, address, pre-shared-key: המפתח הוא לכל עמית, ושני הקצוות חייבים להקליד בדיוק את אותו מפתח",
+  "crypto ikev2 profile: match identity remote address (לאיזה עמית הוא מיועד), authentication local ו-remote pre-share, keyring local; identity local address כשהצד הזה מוכר בכתובת אחרת",
+  "crypto ipsec transform-set: esp-aes 256 esp-sha256-hmac, או esp-gcm 256 (הצפנה ושלמות באחד); mode tunnel; set pfs group14 בפרופיל IPsec למפתחות טריים בכל חידוש",
+  "בוררי התעבורה של VTI הם מכל אחד לכל אחד (0.0.0.0/0 בשני הצדדים): מה שמוצפן נקבע על ידי הניתוב לתוך המנהרה, לא על ידי רשימת גישה",
+  "UDP 500 (IKE), UDP 4500 (IKE ו-ESP מאחורי NAT) ופרוטוקול IP 50 (ESP) חייבים לעבור בין שתי הכתובות החיצוניות"
+ ],
+ "steps": [
+  "סיים את השיעור הראשון של המעבדה (dc01 עם DNS ו-DHCP, pc01 מצורף). במחשב הזה, הורד קודם את חבילת strongSwan: התקנה מציגה אותה, או winlab packs fetch strongswan.",
+  "בנה את האינטרנט ואת הסניף. בשולחן רשת הוסף מתג (הרשת של הספק) וגרור את קישור ה-uplink שלו לפורט פנוי בנתב; הוסף שרת Linux (Ubuntu, מוכן מראש), קרא לו br01, וחבר אותו בכבל למתג הזה. show ip interface brief בקונסולת הנתב אומר באיזה פורט המתג נמצא (GigabitEthernet0/1/0 כשהוא השלישי).",
+  "הכתובת החיצונית של הנתב: configure terminal, interface g0/1/0, description to the provider, ip address 203.0.113.1 255.255.255.0, no shutdown, end.",
+  "ב-br01, היכנס כ-ubuntu עם הסיסמה של המעבדה. ip -br link מציין את כרטיס הרשת שלו; תן לו את הכתובת החיצונית: sudo ip addr add 203.0.113.2/24 dev <הכרטיס>, sudo ip link set <הכרטיס> up. ping -c 2 203.0.113.1 עונה: שתי הכתובות החיצוניות יכולות לדבר, בגלוי, כמו כל שני מארחים באינטרנט.",
+  "תן לסניף LAN: sudo ip link add branch type dummy, sudo ip addr add 10.50.0.1/24 dev branch, sudo ip link set branch up. ממשק dummy מייצג את הרשת המשרדית של הסניף; שום דבר במשרד עדיין לא יכול להגיע ל-10.50.0.0/24.",
+  "בנתב, חלקי ה-IKEv2: configure terminal, crypto ikev2 proposal PROP-AES256, encryption aes-cbc-256, integrity sha256, group 14, exit. crypto ikev2 policy POL-HQ, proposal PROP-AES256, exit.",
+  "ה-keyring: crypto ikev2 keyring KR-BRANCH, peer BR01, address 203.0.113.2, ואז pre-shared-key ואחריו מפתח שאתה בוחר (אותיות, ספרות וסימני פיסוק, בלי רווחים), exit, exit. רשום את המפתח: הסניף צריך בדיוק את אותו מפתח.",
+  "פרופיל ה-IKEv2: crypto ikev2 profile PROF-BRANCH, match identity remote address 203.0.113.2 255.255.255.255, authentication remote pre-share, authentication local pre-share, keyring local KR-BRANCH, exit.",
+  "חלקי ה-IPsec: crypto ipsec transform-set TS-AES256 esp-aes 256 esp-sha256-hmac, mode tunnel, exit. crypto ipsec profile IPSEC-BRANCH, set transform-set TS-AES256, set ikev2-profile PROF-BRANCH, exit.",
+  "המנהרה: interface Tunnel0, ip address 10.255.0.1 255.255.255.252, tunnel source g0/1/0, tunnel mode ipsec ipv4, tunnel destination 203.0.113.2, tunnel protection ipsec profile IPSEC-BRANCH, exit. והנתיב לתוכה: ip route 10.50.0.0 255.255.255.0 Tunnel0, end. show crypto ikev2 sa ריק: הסניף עדיין לא עונה.",
+  "התקן את strongSwan ב-br01: במכונות פתח את ההגדרות של br01 ולחץ על חבר את זיכרון החבילות strongswan, ואז sudo mkdir -p /mnt/winlab-pack, sudo mount LABEL=WLPACK /mnt/winlab-pack, cat /mnt/winlab-pack/README.txt ופעל לפיו כדי להתקין את charon-systemd, strongswan-swanctl ו-libstrongswan-standard-plugins במצב לא מקוון. systemctl status strongswan: charon רץ.",
+  "אמור ל-charon לא ליצור נתיבים משלו (ממשק המנהרה יישא אותם): ב-/etc/strongswan.d/charon.conf הגדר install_routes = no בתוך הסעיף charon (sudo nano), ואז sudo systemctl restart strongswan.",
+  "כתוב את הקצה של הסניף ב-/etc/swanctl/conf.d/hq.conf: בלוק connections עם חיבור אחד hq (version = 2, local_addrs = 203.0.113.2, remote_addrs = 203.0.113.1, proposals = aes256-sha256-modp2048, סעיפי local ו-remote עם auth = psk ו-id = הכתובת החיצונית של כל אחד) ובתוכו בלוק children עם hq (local_ts ו-remote_ts = 0.0.0.0/0, esp_proposals = aes256-sha256, if_id_in = 42, if_id_out = 42). ואז בלוק secrets עם ike-hq: id = 203.0.113.1, וההגדרה secret שמכילה את המפתח שהקלדת בנתב, במירכאות כפולות. sudo chmod 600 לקובץ.",
+  "ממשק המנהרה והנתיב של הסניף: sudo ip link add xfrm-hq type xfrm if_id 42, sudo ip addr add 10.255.0.2/30 dev xfrm-hq, sudo ip link set xfrm-hq up, sudo ip route add 10.10.10.0/24 dev xfrm-hq. ואז sudo swanctl --load-all: הוא טוען חיבור אחד וסוד אחד.",
+  "הרם את זה: בנתב, clear crypto session (או חכה כמה שניות: הנתב ממשיך לנסות). show crypto ikev2 sa מציג READY עם AES-CBC 256, SHA256 ו-DH group 14, ו-Auth sign: PSK. ב-br01, sudo swanctl --list-sas מציג את אותו SA מהצד השני, ESTABLISHED, עם ילד INSTALLED, TUNNEL.",
+  "שלח תעבורה: ב-pc01, ping 10.50.0.1 עונה. בנתב, show crypto ipsec sa: #pkts encaps ו-#pkts decaps עולים עם כל ping, ו-show ip route מציג את 10.50.0.0/24 כמחובר ישירות ל-Tunnel0.",
+  "ראה שזה מוצפן: ב-br01, sudo tcpdump -ni <הכרטיס> host 203.0.113.1 בזמן ש-pc01 שולח ping: רק מנות ESP (proto 50) חוצות את הרשת של הספק, אף פעם לא ICMP מ-10.10.10.x. sudo tcpdump -ni xfrm-hq מציג את אותם ping מפוענחים.",
+  "שבור את זה פעם אחת בכוונה: בנתב, crypto ikev2 keyring KR-BRANCH, peer BR01, והקלד pre-shared-key אחר, end, ואז clear crypto session. show crypto ikev2 sa נשאר ריק או IN-NEG, וב-br01 sudo journalctl -u strongswan מציג כשל אימות (AUTHENTICATION_FAILED). החזר את המפתח הנכון.",
+  "שמור: write memory. show running-config מציג כל חלק crypto ואת interface Tunnel0; המפתח מוצג בגלוי כמו ש-IOS מציג אותו, ו-service password-encryption מערבל אותו."
+ ],
+ "pitfalls": [
+  "שני הקצוות חייבים להסכים על הכול: הצעה שצד אחד לא מציע מקבלת NO_PROPOSAL_CHOSEN, מפתח שונה מקבל AUTHENTICATION_FAILED. קרא את היומן של הצד השני לפני שאתה משנה את הצד שלך.",
+  "זהות העמית נבדקת: match identity remote address חייב להיות הכתובת שהסניף אומר שהוא (ה-id שלו), לא רק המקום שממנו המנות שלו מגיעות.",
+  "כשחומת האש מבוססת האזורים מהשיעור router-zone-firewall קיימת, Tunnel0 חייב להיות באזור (BRANCH, למשל) עם zone-pairs לאזורים שמשתמשים בו; ממשק שלא נמצא באף אזור לא מדבר עם אף ממשק שנמצא באזור.",
+  "הסניף צריך נתיב חזרה דרך ממשק המנהרה שלו. בלעדיו התשובה יוצאת בגלוי דרך נתיב ברירת המחדל שלו והמשרד לעולם לא רואה אותה.",
+  "VTI מצפין את מה שמנותב לתוכו; נתיב סטטי לסניף דרך הכתובת של הספק במקום Tunnel0 שולח את התעבורה בגלוי.",
+  "charon שיוצר נתיבים משלו (install_routes) עם בוררים מכל אחד לכל אחד יכול להשתלט על טבלת הניתוב של מכונת Linux; ב-VPN מבוסס נתיבים, כבה את זה."
+ ],
+ "verify": [
+  "ה-SA של IKEv2 ו-IPsec בנתב, כפי ש-strongSwan מחזיק אותם",
+  "ממשקי המנהרה של הנתב והנתיבים לתוכם",
+  "pc01 מגיע ל-LAN של הסניף דרך המנהרה"
+ ],
+ "quiz": [
+  {
+   "q": "show crypto ikev2 sa אומר READY אבל pc01 לא מגיע לסניף, ו-show crypto ipsec sa מציג encaps עולה ו-decaps על 0. איפה התקלה כנראה?",
+   "answer": "בסניף: התעבורה שלו חזרה לא מנותבת לתוך ממשק המנהרה שלו",
+   "wrong": [
+    "המפתחות המשותפים מראש שונים",
+    "הצעות ה-IKEv2 לא תואמות",
+    "UDP 500 חסום"
+   ],
+   "why": "ה-SA פעילים, אז המפתחות וההצעות מסכימים; מנות יוצאות מוצפנות ושום דבר לא חוזר דרך המנהרה, אז נתיב החזרה של הקצה הרחוק שגוי."
+  },
+  {
+   "q": "מה קובע איזו תעבורה VTI סטטי (tunnel mode ipsec ipv4) מצפין?",
+   "answer": "הניתוב: כל מה שמנותב לתוך ממשק המנהרה",
+   "wrong": [
+    "רשימת גישה שמצוינת ב-crypto map",
+    "ה-transform set",
+    "הצעת ה-IKEv2"
+   ],
+   "why": "VTI מנהל משא ומתן על בוררים מכל אחד לכל אחד; טבלת הניתוב בוחרת מה נכנס."
+  },
+  {
+   "q": "איזה חלק מחזיק את המפתח המשותף מראש של עמית?",
+   "answer": "ה-keyring של IKEv2 (peer, address, pre-shared-key)",
+   "wrong": [
+    "הצעת ה-IKEv2",
+    "ה-transform set",
+    "פרופיל ה-IPsec"
+   ],
+   "why": "הפרופיל מצביע על ה-keyring עם keyring local; ב-keyring יש מפתח אחד לכל עמית."
+  }
+ ]
+}

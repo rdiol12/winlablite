@@ -76,7 +76,8 @@ def _load_providers() -> None:
     # Device modules register at import; import them here so a view never
     # depends on what else happened to be imported first.
     from . import appliance, bsdfw, opnsense  # noqa: F401
-    for mod in ("wifi", "ups", "power", "mail", "san", "adminpc", "omv", "voip", "webmin", "linuxiso", "doctools"):
+    for mod in ("wifi", "ups", "power", "mail", "san", "adminpc", "omv", "voip", "webmin", "linuxiso", "doctools", "netops",
+                "netdocs", "netos", "servicedesk", "secops", "vmbackup", "bareos", "unifi", "openwisp", "hmdm"):
         try:
             __import__(f"{__package__}.{mod}")
         except ImportError:

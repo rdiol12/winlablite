@@ -1,0 +1,15 @@
+{
+ "A partner domain, aging on, and one static record": "مجال شريك، والتقادم مفعّل، وسجل ثابت واحد",
+ "A partner company's names live at partner.lab, served by their DNS server at\n10.10.10.99; your users must resolve them without asking the Internet. Your\nown zone collects stale records from machines that left years ago, and the\nintranet needs a name that never ages out.": "أسماء شركة شريكة موجودة في partner.lab، ويخدمها خادم DNS الخاص بهم على\n10.10.10.99؛ ويجب أن يحلّها مستخدموك دون سؤال الإنترنت. أما منطقتك\nفتجمع سجلات قديمة من أجهزة غادرت منذ سنوات، والشبكة\nالداخلية تحتاج إلى اسم لا يتقادم أبداً.",
+ "Add a conditional forwarder for partner.lab to 10.10.10.99": "أضف معيد توجيه شرطياً لـ partner.lab إلى 10.10.10.99",
+ "Turn on aging for the corp.lab zone (the server-wide scavenging setting is up to you)": "فعّل التقادم للمنطقة corp.lab (إعداد التنظيف على مستوى الخادم متروك لك)",
+ "Create a static A record intranet.corp.lab pointing at 10.10.10.20": "أنشئ سجل A ثابتاً intranet.corp.lab يشير إلى 10.10.10.20",
+ "partner.lab is a conditional forwarder": "partner.lab معيد توجيه شرطي",
+ "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "it forwards to the partner's server": "يعيد التوجيه إلى خادم الشريك",
+ "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "aging is on for corp.lab": "التقادم مفعّل لـ corp.lab",
+ "Set-DnsServerZoneAging -Name corp.lab -Aging $true (no-refresh and refresh default to 7 days each)": "Set-DnsServerZoneAging -Name corp.lab -Aging $true (القيمة الافتراضية لكل من no-refresh وrefresh هي 7 أيام)",
+ "intranet is a static record for 10.10.10.20": "intranet سجل ثابت لـ 10.10.10.20",
+ "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; a static record has no Timestamp, so scavenging never removes it": "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20؛ ليس للسجل الثابت Timestamp، لذا لا يزيله التنظيف أبداً"
+}

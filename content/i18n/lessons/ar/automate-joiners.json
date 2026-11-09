@@ -1,0 +1,67 @@
+{
+ "title": "أتمتة إضافة الموظفين الجدد من ملف CSV الخاص بالموارد البشرية",
+ "summary": "حوّل حلقة Import-Csv المؤقتة إلى سكربت تمر عبره ورقة الموارد البشرية الأسبوعية من تلقاء نفسها: مع التحقق والتسجيل، وآمن للتشغيل مرتين.",
+ "why": "في المرة الأولى التي يصل فيها موظفون جدد، تكفي حلقة في وحدة التحكم (درس onboard-new-starters). وبحلول الأسبوع الثالث تصبح مهمة روتينية تفشل في اليوم الذي تغيب فيه: ترسل الموارد البشرية الشخص نفسه مرتين، أو قسمًا لم يُخبر به أحد قسم تقنية المعلومات، أو خطأً إملائيًا في اسم مستخدم. سكربت الإضافة هو الحلقة نفسها مع الفحوص التي يجريها المسؤول الحريص بعينه: هل الحساب موجود مسبقًا، هل للقسم مجموعة، هل كل الأعمدة موجودة. ما ينجح يُنشأ؛ وما يفشل يُكتب في سجل بكلمات تستطيع الموارد البشرية التصرف بناءً عليها؛ وتُنقل الورقة حتى لا تُعالج مرتين أبدًا؛ وتشغّله مهمة مجدولة كل صباح.\n\nاضغط اكسر فتصل ورقة الموارد البشرية لهذا الأسبوع إلى C:\\HR\\Joiners على dc01، وهو مجلد الإيداع الذي يشير إليه مجلدهم المشترك. ست صفوف: قسم واحد ليس له مجموعة بعد، وشخص واحد مذكور في الورقة مرتين.",
+ "concepts": [
+  "مجلد الإيداع: تكتب الموارد البشرية ويقرأ سكربت تقنية المعلومات، ويحفظ مجلد Processed ما تم، ويوضح مجلد Logs سبب عدم تنفيذ شيء ما",
+  "عدم التأثر بالتكرار: التشغيل الثاني للورقة نفسها لا يغيّر شيئًا، لأن السكربت يتخطى الحسابات الموجودة (Get-ADUser -Filter على SamAccountName)",
+  "التحقق قبل الإنشاء: يجب أن تكون مجموعة G- الخاصة بالقسم موجودة، وأن يكون SamAccountName متاحًا، وأن تكون الأعمدة المطلوبة معبأة",
+  "كلمة مرور أولى لا يكتبها أحد: تُولّد لكل شخص، وتُضبط مع -ChangePasswordAtLogon، وتُسلَّم عبر قناة منفصلة (وليس في السجل أبدًا)",
+  "التشغيل دون إشراف: مهمة مجدولة بصلاحية SYSTEM على DC (أو gMSA بصلاحيات مفوّضة)، وStart-Transcript أو ملف سجل لكل تشغيل، وLastTaskResult للمراقبة"
+ ],
+ "steps": [
+  "اضغط اكسر (أو winlab break dc01 hr-joiners-drop). اقرأ الورقة: Import-Csv C:\\HR\\Joiners\\joiners-*.csv | Format-Table DisplayName, Department, SamAccountName.",
+  "قارنها بالدليل: Get-ADGroup -Filter \"Name -like 'G-*'\" | Select-Object Name. دوّن القسم الذي ليس له مجموعة والشخص الذي يظهر مرتين.",
+  "أنشئ المجلدات التي يستخدمها السكربت: New-Item -ItemType Directory C:\\Scripts, C:\\HR\\Joiners\\Processed, C:\\HR\\Joiners\\Logs -Force.",
+  "اكتب C:\\Scripts\\New-Starters.ps1 في محرر (notepad أو PowerShell ISE). هيكله: $log = Join-Path C:\\HR\\Joiners\\Logs ('run-' + (Get-Date -Format yyyyMMdd-HHmm) + '.log'); foreach ($file in Get-ChildItem C:\\HR\\Joiners -Filter *.csv -File) { foreach ($r in Import-Csv $file.FullName) { ... }; Move-Item $file.FullName C:\\HR\\Joiners\\Processed -Force }.",
+  "داخل حلقة الصفوف، تحقق قبل أن تنشئ: if (Get-ADUser -Filter \"SamAccountName -eq '$($r.SamAccountName)'\") { Add-Content $log \"skip $($r.SamAccountName): exists\"; continue }; $g = 'G-' + ($r.Department -replace ' ', ''); if (-not (Get-ADGroup -Filter \"Name -eq '$g'\")) { Add-Content $log \"refuse $($r.SamAccountName): no group $g\"; continue }.",
+  "أنشئ الحساب بكلمة مرور أولى عشوائية لكل شخص ($first = ConvertTo-SecureString -AsPlainText -Force ([guid]::NewGuid().ToString('N').ToUpper() + '-' + [guid]::NewGuid().ToString('N'))); New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $first -ChangePasswordAtLogon $true -Enabled $true; Add-ADGroupMember $g -Members $r.SamAccountName; Add-Content $log \"created $($r.SamAccountName)\".",
+  "شغّله مرة واحدة يدويًا: powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1. اقرأ السجل وتحقق من الحسابات باستخدام Get-ADUser -Filter * -SearchBase 'OU=Staff,DC=corp,DC=lab' -Properties Department | Format-Table SamAccountName, Department, Enabled.",
+  "أثبت أنه آمن للتشغيل مرتين: انسخ الورقة المعالجة مرة أخرى إلى C:\\HR\\Joiners وشغّل السكربت من جديد. يقول السجل skip لكل صف؛ ولا يظهر شيء جديد.",
+  "جدوِله: Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM -RunLevel Highest. Start-ScheduledTask 'New starters'، ثم (Get-ScheduledTaskInfo 'New starters').LastTaskResult يساوي 0.",
+  "أخبر الموارد البشرية عن Marketing بكلماتهم (سطر السجل)، ثم اضغط تحقق من عملي."
+ ],
+ "pitfalls": [
+  "السكربت الذي يخلو من فحص 'exists' يفشل في منتصف التشغيل الثاني، أو الأسوأ أنه ينشئ tbecker2 لأن أحدهم 'أصلح' الخطأ بعدّاد.",
+  "كتابة كلمات المرور الأولى في السجل أو في ملف CSV: يقرأ السجلات أشخاص أكثر مما تظن. سلّم كلمة المرور بالهاتف أو شخصيًا، وألزم الشخص بتغييرها عند أول تسجيل دخول.",
+  "اسم القسم الذي يحتوي على مسافة (Front desk) يصبح G-Frontdesk في مكان وG-FrontDesk في مكان آخر؛ وحّده في سطر واحد من السكربت واستخدم تلك القيمة في كل مكان.",
+  "لا تدع المهمة المجدولة تشغّل سكربتًا يستطيع أي شخص تعديله: يجب أن تكون الكتابة في C:\\Scripts للمسؤولين فقط، وإلا فإن من يستطيع تغيير السكربت ينفّذ تعليمات برمجية بصلاحية SYSTEM على DC."
+ ],
+ "verify": [
+  "الموظفون الجدد لهذا الأسبوع",
+  "مجلد الإيداع والأوراق المعالجة والسجلات",
+  "المهمة ونتيجتها الأخيرة"
+ ],
+ "quiz": [
+  {
+   "q": "ترسل الموارد البشرية الشخص نفسه في ورقتين. ما الذي يمنع سكربت الإضافة من الفشل أو إنشاء نسخة مكررة؟",
+   "answer": "يتحقق مما إذا كان SamAccountName موجودًا ويتخطى الصف إن كان كذلك",
+   "wrong": [
+    "يكتب New-ADUser فوق الحساب الموجود",
+    "يزيل Import-Csv الصفوف المكررة",
+    "تعمل المهمة المجدولة مرة واحدة فقط لكل ورقة"
+   ],
+   "why": "التحقق قبل الإنشاء يجعل السكربت غير متأثر بالتكرار: تشغيله مرتين لا يغيّر شيئًا في المرة الثانية."
+  },
+  {
+   "q": "يذكر صف قسمًا ليس له مجموعة. ماذا يجب أن يفعل السكربت؟",
+   "answer": "يرفض الصف ويسجّل السبب، حتى تصلح الموارد البشرية أو تقنية المعلومات أصل المشكلة",
+   "wrong": [
+    "ينشئ المستخدم من دون مجموعة",
+    "ينشئ المجموعة الناقصة في الحال",
+    "يوقف التشغيل بالكامل"
+   ],
+   "why": "اختراع المجموعات من جدول بيانات يُضخّم الدليل عن غير قصد؛ والصف المرفوض مع سبب هو سؤال موجّه إلى إنسان."
+  },
+  {
+   "q": "أين يجب أن تكون كلمة المرور الأولى للموظف الجديد؟",
+   "answer": "تُسلَّم عبر قناة منفصلة، مع تفعيل إلزام تغييرها عند تسجيل الدخول التالي",
+   "wrong": [
+    "في سجل التشغيل، حتى يتمكن الدعم الفني من قراءتها",
+    "في ملف CSV الذي ترسله الموارد البشرية",
+    "في حقل Description للحساب"
+   ],
+   "why": "السجلات والأوصاف يقرؤها كثيرون؛ وكلمة المرور الأولى لا تعيش إلا حتى يسجّل الشخص دخوله ويختار كلمته الخاصة."
+  }
+ ]
+}

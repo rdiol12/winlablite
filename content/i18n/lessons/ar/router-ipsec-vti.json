@@ -1,0 +1,80 @@
+{
+ "title": "IPsec بين موقعين على الموجّه: IKEv2 وواجهة نفق إلى فرع",
+ "summary": "صِل فرعًا بالمكتب عبر شبكة غير موثوقة باستخدام IKEv2 وIPsec: ابنِ كل جزء من IKEv2 وIPsec على الموجّه، وواجهة نفق افتراضية ثابتة، وطرف الفرع نفسه باستخدام strongSwan على Linux.",
+ "why": "مكتبان يتحدثان عبر الإنترنت يحتاجان أمرين لا يمنحهما الإنترنت: الخصوصية (لا أحد في الطريق يستطيع قراءة الحركة) والإثبات (الطرف الآخر هو الفرع فعلًا). يمنح IPsec بين موقعين كليهما. IKEv2 هو المحادثة التي يثبت فيها الموجّهان هويتهما (هنا بمفتاح مشترك مسبقًا) ويتفقان على المفاتيح؛ ثم يشفّر ESP في IPsec كل حزمة بين الموقعين ويوقّعها.\n\nيبنيه IOS من أجزاء صغيرة يسمّي بعضها بعضًا، والأسماء هي طريقة استكشاف أعطاله: اقتراح (أي خوارزميات تشفير يجوز لـ IKE استخدامها)، ونهج يعرض تلك الاقتراحات، وkeyring (أي مفتاح لأي نظير)، وملف تعريف IKEv2 (أي نظير، وكيف يثبت نفسه، وأي keyring)، وtransform set (كيف يشفّر ESP)، وملف تعريف IPsec يربط الأخيرين. يحمي ملف التعريف واجهة نفق: Tunnel0 مع tunnel mode ipsec ipv4 واجهة نفق افتراضية (VTI) ثابتة، واجهة كأي واجهة أخرى، فما توجّهه إليها يُشفَّر، ويمكن لبروتوكول توجيه أن يعمل فوقها. هذا هو التصميم الحديث القائم على المسارات؛ أما crypto map الأقدم، وهو قائمة وصول على الواجهة الخارجية تختار ما يُشفَّر، فهو ما ستصادفه على الموجّهات القديمة.\n\nفي هذا المختبر الموجّه موجّه Linux (VM من Alpine): يصبح Tunnel0 واجهة XFRM، ويجري charon من strongSwan IKEv2 بما كتبته. والفرع خادم Linux تضيفه، مع strongSwan من أرشيف Ubuntu على ذاكرة حزم، يُضبط يدويًا في تكوين swanctl نفسه. و\"الإنترنت\" بينهما شبكة مختبر: لا يصل المختبر أبدًا إلى الإنترنت الحقيقي. لا تُبنى إلا المفاتيح المشتركة مسبقًا؛ أما الشهادات (rsa-sig) فلا.",
+ "concepts": [
+  "IKEv2 SA (show crypto ikev2 sa): القناة الآمنة الخاصة بالموجّهين، READY حين يتفقان؛ وIPsec SA (show crypto ipsec sa): واحدة لكل اتجاه، مع الحزم التي شفّرتها وفكّت تشفيرها",
+  "crypto ikev2 proposal: encryption aes-cbc-256، integrity sha256، group 14 (Diffie-Hellman MODP بطول 2048 بت؛ و19 و20 هما المنحنيات الإهليلجية)؛ يعرض النهج الاقتراحات، اختياريًا على عنوان محلي واحد فقط",
+  "crypto ikev2 keyring، peer، address، pre-shared-key: المفتاح لكل نظير، ويجب أن يكتب الطرفان المفتاح نفسه تمامًا",
+  "crypto ikev2 profile: match identity remote address (لأي نظير هو)، و authentication local وremote pre-share، و keyring local؛ وidentity local address حين يُعرف هذا الجانب بعنوان آخر",
+  "crypto ipsec transform-set: esp-aes 256 esp-sha256-hmac، أو esp-gcm 256 (التشفير والسلامة في واحد)؛ mode tunnel؛ و set pfs group14 في ملف تعريف IPsec لمفاتيح جديدة في كل تجديد",
+  "محددات الحركة في VTI من أي عنوان إلى أي عنوان (0.0.0.0/0 على الجانبين): ما يُشفَّر يقرّره التوجيه إلى النفق، لا قائمة وصول",
+  "يجب أن يمر UDP 500 (IKE) وUDP 4500 (IKE وESP خلف NAT) وبروتوكول IP رقم 50 (ESP) بين العنوانين الخارجيين"
+ ],
+ "steps": [
+  "أكمل الدرس الأول في المختبر (dc01 مع DNS وDHCP، وpc01 منضم). على هذا الحاسوب، نزّل حزمة strongSwan أولًا: تسردها نافذة الإعداد، أو winlab packs fetch strongswan.",
+  "ابنِ الإنترنت والفرع. على طاولة الشبكة أضف مبدّلًا (شبكة المزوّد) واسحب وصلته الصاعدة إلى منفذ شاغر في الموجّه؛ وأضف خادم Linux (Ubuntu، جاهز)، وسمّه br01، ووصّله بالكبل إلى ذلك المبدّل. يقول show ip interface brief على وحدة تحكم الموجّه في أي منفذ يوجد المبدّل (GigabitEthernet0/1/0 حين يكون الثالث).",
+  "العنوان الخارجي للموجّه: configure terminal، interface g0/1/0، description to the provider، ip address 203.0.113.1 255.255.255.0، no shutdown، end.",
+  "على br01، سجّل الدخول باسم ubuntu بكلمة مرور المختبر. يسمّي ip -br link بطاقة الشبكة؛ امنحها العنوان الخارجي: sudo ip addr add 203.0.113.2/24 dev <البطاقة>، sudo ip link set <البطاقة> up. يجيب ping -c 2 203.0.113.1: يستطيع العنوانان الخارجيان التحدث، بنص واضح، كما يستطيع أي مضيفين على الإنترنت.",
+  "امنح الفرع شبكة LAN: sudo ip link add branch type dummy، sudo ip addr add 10.50.0.1/24 dev branch، sudo ip link set branch up. تمثّل واجهة dummy شبكة مكتب الفرع؛ ولا شيء في المكتب يستطيع الوصول إلى 10.50.0.0/24 بعد.",
+  "على الموجّه، أجزاء IKEv2: configure terminal، crypto ikev2 proposal PROP-AES256، encryption aes-cbc-256، integrity sha256، group 14، exit. ثم crypto ikev2 policy POL-HQ، proposal PROP-AES256، exit.",
+  "الـ keyring: crypto ikev2 keyring KR-BRANCH، peer BR01، address 203.0.113.2، ثم pre-shared-key متبوعًا بمفتاح تختاره (حروف وأرقام وعلامات ترقيم، بلا مسافات)، exit، exit. دوّن المفتاح: يحتاج الفرع المفتاح نفسه تمامًا.",
+  "ملف تعريف IKEv2: crypto ikev2 profile PROF-BRANCH، match identity remote address 203.0.113.2 255.255.255.255، authentication remote pre-share، authentication local pre-share، keyring local KR-BRANCH، exit.",
+  "أجزاء IPsec: crypto ipsec transform-set TS-AES256 esp-aes 256 esp-sha256-hmac، mode tunnel، exit. ثم crypto ipsec profile IPSEC-BRANCH، set transform-set TS-AES256، set ikev2-profile PROF-BRANCH، exit.",
+  "النفق: interface Tunnel0، ip address 10.255.0.1 255.255.255.252، tunnel source g0/1/0، tunnel mode ipsec ipv4، tunnel destination 203.0.113.2، tunnel protection ipsec profile IPSEC-BRANCH، exit. والمسار إليه: ip route 10.50.0.0 255.255.255.0 Tunnel0، end. show crypto ikev2 sa فارغ: لا يجيب الفرع بعد.",
+  "ثبّت strongSwan على br01: في الأجهزة افتح إعدادات br01 واضغط صِل ذاكرة الحزم strongswan، ثم sudo mkdir -p /mnt/winlab-pack، sudo mount LABEL=WLPACK /mnt/winlab-pack، cat /mnt/winlab-pack/README.txt واتّبعه لتثبيت charon-systemd وstrongswan-swanctl وlibstrongswan-standard-plugins دون اتصال. systemctl status strongswan: يعمل charon.",
+  "أخبر charon ألا ينشئ مسارات خاصة به (ستحملها واجهة النفق): في /etc/strongswan.d/charon.conf اضبط install_routes = no داخل قسم charon (sudo nano)، ثم sudo systemctl restart strongswan.",
+  "اكتب طرف الفرع في /etc/swanctl/conf.d/hq.conf: كتلة connections فيها اتصال واحد hq (version = 2، local_addrs = 203.0.113.2، remote_addrs = 203.0.113.1، proposals = aes256-sha256-modp2048، وقسما local وremote مع auth = psk وid = العنوان الخارجي لكل منهما) وبداخله كتلة children فيها hq (local_ts وremote_ts = 0.0.0.0/0، esp_proposals = aes256-sha256، if_id_in = 42، if_id_out = 42). ثم كتلة secrets فيها ike-hq: id = 203.0.113.1، والإعداد secret الذي يحمل المفتاح الذي كتبته على الموجّه، بين علامتي اقتباس مزدوجتين. ثم sudo chmod 600 على الملف.",
+  "واجهة النفق والمسار في الفرع: sudo ip link add xfrm-hq type xfrm if_id 42، sudo ip addr add 10.255.0.2/30 dev xfrm-hq، sudo ip link set xfrm-hq up، sudo ip route add 10.10.10.0/24 dev xfrm-hq. ثم sudo swanctl --load-all: يحمّل اتصالًا واحدًا وسرًّا واحدًا.",
+  "شغّله: على الموجّه، clear crypto session (أو انتظر بضع ثوانٍ: يواصل الموجّه المحاولة). يُظهر show crypto ikev2 sa READY مع AES-CBC 256 وSHA256 وDH group 14، وAuth sign: PSK. على br01، يُظهر sudo swanctl --list-sas الـ SA نفسها من الجانب الآخر، ESTABLISHED، مع ابن INSTALLED, TUNNEL.",
+  "أرسل حركة: على pc01 يجيب ping 10.50.0.1. على الموجّه، show crypto ipsec sa: يرتفع #pkts encaps و#pkts decaps مع كل ping، ويسرد show ip route الشبكة 10.50.0.0/24 متصلة مباشرة بـ Tunnel0.",
+  "تحقق من أنه مشفّر: على br01، sudo tcpdump -ni <البطاقة> host 203.0.113.1 بينما يرسل pc01 ping: لا تعبر شبكة المزوّد إلا حزم ESP (proto 50)، ولا ICMP من 10.10.10.x أبدًا. ويُظهر sudo tcpdump -ni xfrm-hq حزم ping نفسها بعد فك تشفيرها.",
+  "اكسره مرة عن قصد: على الموجّه، crypto ikev2 keyring KR-BRANCH، peer BR01، واكتب pre-shared-key مختلفًا، end، ثم clear crypto session. يبقى show crypto ikev2 sa فارغًا أو IN-NEG، وعلى br01 يُظهر sudo journalctl -u strongswan فشل مصادقة (AUTHENTICATION_FAILED). أعِد المفتاح الصحيح.",
+  "احفظه: write memory. يسرد show running-config كل جزء crypto وinterface Tunnel0؛ ويظهر المفتاح بنص واضح كما يعرضه IOS، ويخلطه service password-encryption."
+ ],
+ "pitfalls": [
+  "يجب أن يتفق الطرفان على كل شيء: الاقتراح الذي لا يعرضه أحد الجانبين يعطي NO_PROPOSAL_CHOSEN، والمفتاح المختلف يعطي AUTHENTICATION_FAILED. اقرأ سجل الجانب الآخر قبل أن تغيّر جانبك.",
+  "تُفحص هوية النظير: يجب أن يكون match identity remote address هو العنوان الذي يقول الفرع إنه هو (الـ id الخاص به)، لا مجرد المكان الذي تأتي منه حزمه.",
+  "مع وجود الجدار الناري القائم على المناطق من درس router-zone-firewall، يجب أن يكون Tunnel0 في منطقة (BRANCH مثلًا) مع zone-pairs إلى المناطق التي تستخدمه؛ والواجهة التي ليست في أي منطقة لا تتحدث مع أي واجهة في منطقة.",
+  "يحتاج الفرع مسار عودة عبر واجهة النفق الخاصة به. من دونه يخرج الرد بنص واضح عبر مساره الافتراضي ولا يراه المكتب أبدًا.",
+  "تشفّر VTI ما يُوجَّه إليها؛ والمسار الثابت إلى الفرع عبر عنوان المزوّد بدلًا من Tunnel0 يرسل الحركة بنص واضح.",
+  "إنشاء charon مسارات خاصة به (install_routes) مع محددات من أي عنوان إلى أي عنوان قد يستولي على جدول توجيه جهاز Linux؛ في VPN قائمة على المسارات، عطّله."
+ ],
+ "verify": [
+  "SA الخاصة بـ IKEv2 وIPsec على الموجّه، كما يحملها strongSwan",
+  "واجهات النفق على الموجّه والمسارات إليها",
+  "يصل pc01 إلى شبكة LAN في الفرع عبر النفق"
+ ],
+ "quiz": [
+  {
+   "q": "يقول show crypto ikev2 sa READY لكن pc01 لا يصل إلى الفرع، ويُظهر show crypto ipsec sa encaps يرتفع وdecaps عند 0. أين العطل على الأرجح؟",
+   "answer": "في الفرع: حركته العائدة لا تُوجَّه إلى واجهة النفق الخاصة به",
+   "wrong": [
+    "المفاتيح المشتركة مسبقًا مختلفة",
+    "اقتراحات IKEv2 غير متطابقة",
+    "UDP 500 محجوب"
+   ],
+   "why": "SA قائمة، فالمفاتيح والاقتراحات متفقة؛ تخرج الحزم مشفّرة ولا يعود شيء عبر النفق، فمسار العودة في الطرف البعيد خاطئ."
+  },
+  {
+   "q": "ما الذي يقرّر أي حركة تشفّرها VTI ثابتة (tunnel mode ipsec ipv4)؟",
+   "answer": "التوجيه: كل ما يُوجَّه إلى واجهة النفق",
+   "wrong": [
+    "قائمة وصول مسمّاة في crypto map",
+    "الـ transform set",
+    "اقتراح IKEv2"
+   ],
+   "why": "تفاوض VTI على محددات من أي عنوان إلى أي عنوان؛ وجدول التوجيه يختار ما يدخل."
+  },
+  {
+   "q": "أي جزء يحمل المفتاح المشترك مسبقًا لنظير؟",
+   "answer": "الـ keyring في IKEv2 (peer، address، pre-shared-key)",
+   "wrong": [
+    "اقتراح IKEv2",
+    "الـ transform set",
+    "ملف تعريف IPsec"
+   ],
+   "why": "يشير ملف التعريف إلى الـ keyring بـ keyring local؛ وفي الـ keyring مفتاح واحد لكل نظير."
+  }
+ ]
+}

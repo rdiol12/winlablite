@@ -1,0 +1,75 @@
+{
+ "title": "אבטחת יציאה ו-802.1X: מי רשאי להתחבר לפורט של מתג",
+ "summary": "נעל פורט שולחני למחשב ששייך לשם, צפה במחשב נייד של מבקר מעביר אותו ל-err-disabled, ואז גרום לפורט לשאול את NPS מי מתחבר.",
+ "why": "פורט מתג מקבל מסגרות ממי שמחובר אליו. כל מי שמוצא שקע קיר פנוי, או מנתק מחשב שולחני ומחבר מחשב נייד, נמצא ברשת שלך עם כתובת משרת ה-DHCP שלך, ליד בקר התחום שלך. שני דברים סוגרים את הדלת הזו, ורשתות אמיתיות משתמשות בשניהם.\n\nאבטחת יציאה היא הרשימה של המתג עצמו: פורט מתיר את הכתובות שהוא מכיר (מוקלדות, או נלמדות מהמסגרות הראשונות ונשמרות: sticky), עד מקסימום, וכל דבר אחר הוא הפרה. Shutdown, ברירת המחדל, מעביר את הפורט ל-err-disabled: נורית הקישור כבה, גם המחשב שמאחוריו מאבד את הרשת, והפורט נשאר למטה עד שמישהו מסתכל. זה עוצר את המחשב הנייד המזדמן, אבל קל להעתיק כתובת.\n\n802.1X שואל מי שם. עד ששרת RADIUS (NPS או FreeRADIUS) אומר כן, הפורט לא מעביר דבר מלבד EAPOL, המסגרות שנושאות את השיחה. המתג הוא המאמת: הוא מעביר בין המכונה (המבקש, Wired AutoConfig ב-Windows) לבין השרת, שבודק משתמש או מחשב מול Active Directory והמדיניות שלך.\n\nבמעבדה הזו שניהם אמיתיים על הנתב, שבו הכבל של כל מכונה הוא פורט של ה-bridge שלו: אבטחת יציאה היא משפחת bridge של nftables (ה-kernel לומד את הכתובות לתוך קבוצה בגודל המקסימום וסופר את מה שהוא זורק), ו-802.1X הוא המנהל הקווי של hostapd על הפורט, שמדבר RADIUS עם השרת שאתה בונה. שום דבר בשרת או במחשב לא מוגדר בשבילך.",
+ "concepts": [
+  "כתובות מאובטחות: מוגדרות (מוקלדות), sticky (נלמדות ואז נשמרות בתצורה הפעילה), דינמיות (נלמדות ונשכחות כשהקישור יורד); מקסימום 1 כברירת מחדל",
+  "מצבי הפרה: shutdown (err-disable לפורט, ברירת המחדל), restrict (זריקה, ספירה, רישום), protect (זריקה בשקט)",
+  "err-disabled: המתג כיבה את הפורט בעצמו; shutdown ואז no shutdown מחזירים אותו, או errdisable recovery cause psecure-violation עם טיימר",
+  "תפקידים ב-802.1X: מבקש (המכונה), מאמת (פורט המתג), שרת אימות (RADIUS: NPS או FreeRADIUS)",
+  "EAPOL נושא EAP בין המכונה למתג; המתג עוטף אותו ב-RADIUS אל השרת; PEAP עם MS-CHAP v2 הוא השיטה הרגילה ב-Windows ודורש אישור בשרת",
+  "לקוח ה-RADIUS הוא המתג, שהשרת מכיר לפי הכתובת שממנה מגיעות הבקשות שלו ומפתח משותף; מפתח שגוי לא מקבל שום תשובה, אפילו לא דחייה"
+ ],
+ "steps": [
+  "פתח את שולחן רשת, הדלק את הנתב, את dc01 ואת pc01. פתח את הלוח הקדמי של המתג של corp (לחיצה ימנית עליו) ורשום את מספר הפורט של pc01 (Fa0/N). המכונות ממוספרות משמאל לימין על הקנבס.",
+  "נעל את הפורט של pc01 ל-pc01: פתח את הקונסולה של המתג, ואז enable, configure terminal, interface fa0/N (של pc01), switchport port-security, switchport port-security mac-address sticky. מנעול קטן מופיע על הפורט הזה בקנבס. השאר את pc01 רץ זמן מה (הוא מפטפט מהאתחול), ואז show port-security interface fa0/N ו-show running-config: הכתובת של pc01 היא עכשיו שורת sticky בתצורה.",
+  "היה המבקר: לחץ לחיצה ימנית על הכבל של pc01 ובחר חבר מחשב נייד של מבקר בשולחן הזה (מחשב נייד על מתג שולחני קטן, שחולק את שקע הקיר). תוך שנייה המנעול מאדים ו-pc01 מציג Network cable unplugged. בקונסולה: show interfaces status (err-disabled), show port-security (הפרה נספרה), show port-security interface fa0/N (כתובת המקור האחרונה היא של המחשב הנייד), show logging (PSECURE_VIOLATION עם הכתובת של המחשב הנייד).",
+  "החזר את הפורט בדרך הנכונה: קודם שלוף את המחשב הנייד של המבקר (התפריט שלו בקנבס), ואז interface fa0/N, shutdown, no shutdown. נסה פעם אחת בסדר ההפוך: כשהמחשב הנייד עדיין מחובר, הפורט חוזר ישר ל-err-disabled.",
+  "נסה את המצבים העדינים יותר: switchport port-security violation restrict, וחבר שוב את המחשב הנייד. pc01 ממשיך לעבוד והספירה ב-show port-security עולה. protect זורק באותו שקט ולא סופר כלום. שלוף את המחשב הנייד, ואז החזר את violation shutdown (no switchport port-security violation).",
+  "תן לפורטים להחלים בעצמם אם תרצה: errdisable recovery cause psecure-violation ו-errdisable recovery interval 60 ב-configure terminal; show errdisable recovery מציג את הטיימר ואת הפורטים הממתינים.",
+  "בנה את שרת ה-RADIUS ב-dc01: Install-WindowsFeature NPAS -IncludeManagementTools, ואז netsh nps add registeredserver (או ב-nps.msc, Register server in Active Directory). PEAP צריך אישור ב-NPS: אחד מה-CA שלך אם בנית AD CS, או למעבדה New-SelfSignedCertificate -DnsName dc01.corp.lab -CertStoreLocation Cert:\\LocalMachine\\My. השיעור radius-with-nps מעמיק במדיניות.",
+  "ספר ל-NPS על המתג. בקשות יוצאות מהנתב מהכתובת שלו ברשת של dc01 (show radius server-group all במתג אומר איזו, כאן 10.10.10.1): New-NpsRadiusClient -Name corp-switch -Address 10.10.10.1 -SharedSecret <מפתח שאתה בוחר>. ב-nps.msc, Policies > Network Policies > New: תנאי NAS Port Type = Ethernet ו-Windows Groups = CORP\\Domain Computers (ו-Domain Users), גישה מאושרת, אימות Microsoft: Protected EAP (PEAP) עם האישור שלך.",
+  "או, במכונת Linux במקום NPS: חבר את זיכרון חבילת freeradius (קודם winlab packs fetch freeradius במחשב הזה), apt install freeradius, הוסף את המתג ל-/etc/freeradius/3.0/clients.conf עם אותו מפתח, משתמש ל-mods-config/files/authorize, והרץ freeradius -X כדי לצפות בכל בקשה.",
+  "כוון את המתג אליו: configure terminal, aaa new-model, aaa authentication dot1x default group radius, radius server NPS, address ipv4 10.10.10.10 auth-port 1812 acct-port 1813, key <אותו מפתח>, exit, dot1x system-auth-control. ואז בפורט של pc01: interface fa0/N, authentication port-control auto, dot1x pae authenticator. המנעול נעשה ענברי: pc01 לא מורשה והפורט מעביר רק EAPOL.",
+  "הפוך את pc01 למבקש: ב-pc01, Services: Wired AutoConfig, הפעלה Automatic, Start (sc.exe config dot3svc start= auto, ואז net start dot3svc). במאפייני כרטיס הרשת מופיעה לשונית Authentication חדשה: סמן Enable IEEE 802.1X authentication, בחר Microsoft: Protected EAP (PEAP), ותחת Additional settings בחר User or computer authentication. סמוך על האישור של השרת (או, למעבדה הזו בלבד, בטל את הסימון של Verify the server's identity).",
+  "צפה בזה עובד: show authentication sessions במתג (Auth, עם הכתובת של pc01), show authentication sessions interface fa0/N (שם המשתמש ש-NPS ראה: host/pc01.corp.lab עבור המחשב), show logging (DOT1X-5-SUCCESS). ב-dc01, ביומן Security יש אירוע 6272 (גישה אושרה). המנעול מוריק. ב-pc01, netsh lan show interfaces.",
+  "ראה מפתח שגוי: במתג, radius server NPS, key something-else. האימות הבא של pc01 לעולם לא מסתיים: show authentication sessions נשאר Running, show radius server-group all סופר פסקי זמן ואפס תשובות, וביומן System של dc01 יש אירוע NPS 18 (ה-Message-Authenticator אינו תקף). החזר את המפתח הנכון.",
+  "תרגל: לחץ על המתג, ותחת אבטחת יציאה ו-802.1X בחר הסתר התקן זדוני או שבור את מפתח ה-RADIUS. מצא את זה עם הקנבס והקונסולה, תקן, ולחץ על בדוק את התיקון שלי."
+ ],
+ "pitfalls": [
+  "הפעלת אבטחת יציאה כשהמחשב כבוי: הכתובת הראשונה שהפורט רואה היא זו שהוא שומר. אם המחשב הנייד של מבקר הגיע ראשון, clear port-security sticky interface fa0/N ותן למחשב לדבר.",
+  "no switchport port-security על פורט ב-err-disabled לא מחזיר אותו: shutdown, ואז no shutdown.",
+  "לקוח RADIUS שנרשם עם כתובת הניהול של המתג כשהבקשות שלו מגיעות מכתובת אחרת לעולם לא תואם: NPS רושם לקוח לא ידוע ולא עונה כלום. השתמש בכתובת שממנה מגיעות הבקשות.",
+  "מפתח משותף שגוי נראה כמו שרת מת, לא כמו דחייה: השרת לא יכול לאמת את הבקשה, זורק אותה ואומר זאת רק ביומן שלו.",
+  "PEAP בלי אישור ב-NPS נכשל בצד השרת: אירוע 6273 עם הסיבה 'the client could not be authenticated' או בלי מדיניות תואמת; בדוק את שיטות האימות של המדיניות.",
+  "במעבדה הזו 802.1X רץ על הנתב, ולכן בקשות ה-RADIUS של המתג יוצאות מהכתובת של הנתב ברשת של השרת, גם אחרי שנותנים למתג כתובת ניהול משלו (interface vlan 1, ip address). רשום ב-NPS את כתובת הנתב הזו."
+ ],
+ "verify": [
+  "כללי הפורטים בנתב: כתובות מותרות, מוני הפרות, מה ש-802.1X הכניס",
+  "ההפעלות של hostapd בפורטים שמריצים 802.1X",
+  "NPS: המתג כלקוח RADIUS",
+  "pc01: Wired AutoConfig ומצב ה-802.1X שלו"
+ ],
+ "quiz": [
+  {
+   "q": "בפורט יש switchport port-security עם ברירות המחדל. כתובת שנייה מופיעה בו. מה קורה?",
+   "answer": "הפורט עובר ל-err-disabled: shutdown הוא מצב ההפרה כברירת מחדל והמקסימום הוא 1",
+   "wrong": [
+    "הכתובת השנייה נזרקת ונספרת",
+    "הכתובת הראשונה מוחלפת בשנייה",
+    "כלום עד שמנהל מאשר"
+   ],
+   "why": "מקסימום 1, הפרה shutdown: המתג מכבה את הפורט בעצמו, נורית הקישור כבויה, עד shutdown / no shutdown או טיימר התאוששות."
+  },
+  {
+   "q": "ב-802.1X, איזה התקן הוא לקוח ה-RADIUS?",
+   "answer": "המתג (המאמת)",
+   "wrong": [
+    "המחשב (המבקש)",
+    "בקר התחום",
+    "שרת ה-NPS"
+   ],
+   "why": "המכונה מדברת EAPOL עם המתג; המתג הוא מה ש-NPS מכיר, לפי הכתובת שלו והמפתח המשותף."
+  },
+  {
+   "q": "המפתח המשותף במתג לא תואם לזה של NPS. מה המחשב רואה?",
+   "answer": "האימות לעולם לא מסתיים: NPS זורק את הבקשות שאינו יכול לאמת ולא עונה כלום",
+   "wrong": [
+    "Access-Reject מיד",
+    "הוא מוכנס בלי אימות",
+    "פורט המתג עובר ל-err-disabled"
+   ],
+   "why": "בלי המפתח הנכון NPS לא יכול לבדוק את ה-Message-Authenticator, ולכן הוא זורק את הבקשה ורושם אירוע 18; המתג רואה רק פסקי זמן."
+  }
+ ]
+}

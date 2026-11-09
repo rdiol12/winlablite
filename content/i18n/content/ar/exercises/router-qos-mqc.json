@@ -1,0 +1,19 @@
+{
+ "A 20 Mbit/s line to the users, shared out by class": "خط بسرعة 20 Mbit/s إلى المستخدمين، موزّع حسب الفئات",
+ "The users' LAN behind the router is to behave like a 20 Mbit/s branch line,\nand on it voice must go first and file copies must get a fair share, marked\nso the rest of the network knows them. Build it with the router's Modular\nQoS CLI: class-maps, a child policy that shares the line, a parent that\nshapes it, attached on the way out to the users. Then copy a large file from\nfs01 to pc01 through it. The checks read the router's own queues and its\nclassification counters.": "يجب أن تتصرف شبكة LAN الخاصة بالمستخدمين خلف الموجّه كخط فرع بسرعة 20 Mbit/s، وعليه يجب أن يمر الصوت أولًا وأن تحصل نسخ الملفات على حصة عادلة، مع تعليمها كي تتعرف عليها بقية الشبكة. ابنِ ذلك باستخدام Modular QoS CLI في الموجّه: class-maps، ونهج فرعي يوزّع الخط، ونهج أب يشكّله، مرفقًا في اتجاه الخروج إلى المستخدمين. ثم انسخ ملفًا كبيرًا من fs01 إلى pc01 عبره. تقرأ عمليات التحقق قوائم انتظار الموجّه نفسه وعدّادات التصنيف لديه.",
+ "The user LAN on its own router port, with pc01 on it (as in lesson router-zone-firewall)": "شبكة LAN للمستخدمين على منفذ موجّه خاص بها، وعليها pc01 (كما في الدرس router-zone-firewall)",
+ "class-map VOICE (match dscp ef) and FILES (an access list for SMB, tcp port 445)": "class-map VOICE (match dscp ef) وFILES (قائمة وصول لـ SMB، tcp المنفذ 445)",
+ "A child policy-map: priority for VOICE, bandwidth and set dscp af11 for FILES, fair-queue in class-default": "policy-map فرعي: priority لـ VOICE، وbandwidth وset dscp af11 لـ FILES، وfair-queue في class-default",
+ "A parent policy-map whose class-default shapes to 20000000 bit/s with the child under it, as service-policy output on the users' port": "policy-map أب يشكّل class-default الخاص به إلى 20000000 bit/s مع النهج الفرعي تحته، بصفة service-policy output على منفذ المستخدمين",
+ "Copy a file of 100 MB or more from a share on fs01 to pc01": "انسخ ملفًا بحجم 100 MB أو أكثر من مشاركة على fs01 إلى pc01",
+ "an output policy queues on a router interface": "نهج خروج يدير قوائم الانتظار على واجهة في الموجّه",
+ "interface g0/0/1 (the users' port), service-policy output with a policy that has priority, bandwidth or shape in it.": "interface g0/0/1 (منفذ المستخدمين)، ثم service-policy output بنهج يحتوي priority أو bandwidth أو shape.",
+ "the line is shaped, with a child policy sharing it": "الخط مشكَّل، مع نهج فرعي يوزّعه",
+ "policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT.": "policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT.",
+ "a class has a priority or a bandwidth guarantee": "لدى فئة ما ضمان أولوية أو عرض نطاق",
+ "In the child policy-map: class VOICE, priority 1000; class FILES, bandwidth 5000.": "في policy-map الفرعي: class VOICE, priority 1000؛ class FILES, bandwidth 5000.",
+ "file traffic was classified and marked": "صُنّفت حركة الملفات وعُلّمت",
+ "class FILES needs set dscp af11 and a class-map that matches SMB from fs01 (permit tcp any eq 445 any: the server's packets come from port 445). show policy-map interface counts what it marked.": "تحتاج class FILES إلى set dscp af11 وclass-map يطابق SMB من fs01 (permit tcp any eq 445 any: حزم الخادم تأتي من المنفذ 445). يحصي show policy-map interface ما علّمه.",
+ "a large copy went through the shaped line": "مرّت نسخة كبيرة عبر الخط المشكَّل",
+ "Copy a file of 100 MB or more from \\\\fs01 to pc01 (fsutil file createnew makes one) after the service-policy is on.": "انسخ ملفًا بحجم 100 MB أو أكثر من \\\\fs01 إلى pc01 (ينشئ fsutil file createnew واحدًا) بعد تفعيل service-policy."
+}

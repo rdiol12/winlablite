@@ -1,0 +1,55 @@
+[solution]
+exercise = "router-ospf-neighbour"
+notes = "rtr-edge installs FRRouting from the frr pack stick (winlab packs fetch frr first). The lab router gets priority 200 before rtr-edge's OSPF starts, so it wins the first election without a clear ip ospf process."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+media router-protocols rtr-edge pack frr
+'''
+
+[[step]]
+node = "rtr-edge"
+shell = "sh"
+script = '''
+mkdir -p /mnt/winlab-pack
+mount LABEL=WLPACK /mnt/winlab-pack
+echo 'deb [trusted=yes] file:/mnt/winlab-pack ./' > /etc/apt/sources.list.d/winlab-pack.list
+apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- update
+DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools traceroute
+umount /mnt/winlab-pack
+echo net.ipv4.ip_forward=1 > /etc/sysctl.d/90-router.conf
+sysctl --system
+sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
+
+systemctl restart frr
+'''
+timeout = 1200
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+router ospf 1
+router-id 2.2.2.2
+network 10.80.0.0 0.0.0.255 area 0
+passive-interface default
+no passive-interface g0/1/0
+exit
+interface g0/1/0
+ip ospf priority 200
+end
+write memory
+'''
+wait = 45
+
+[[step]]
+node = "rtr-edge"
+shell = "sh"
+script = '''
+vtysh -c 'configure terminal' -c 'router ospf' -c 'ospf router-id 3.3.3.3' -c 'network 10.80.0.0/24 area 0' -c 'network 10.81.0.0/24 area 0' -c 'exit' -c 'interface eth0' -c 'ip ospf passive' -c 'end' -c 'write memory'
+'''
+wait = 60

@@ -1,0 +1,16 @@
+{
+ "The guest network in a VRF of its own: its gateway answers, the office does not": "شبكة الضيوف في VRF خاص بها: بوابتها تستجيب، والمكتب لا يستجيب",
+ "Guests and the office hang off the same router, and the router routes between\nthem. Put the guest network into a VRF named GUEST at the lab router's console,\nso the guests' routing table holds only their own network. The checks read the\nrouter's kernel (the VRF device and its table) and ping from the guest's laptop.": "يتصل الضيوف والمكتب بالموجّه نفسه، والموجّه يوجّه الحركة بينهم. ضع شبكة الضيوف في VRF باسم GUEST من وحدة تحكم موجّه المختبر، ليحتوي جدول توجيه الضيوف على شبكتهم فقط. تقرأ عمليات التحقق نواة الموجّه (جهاز VRF وجدوله) وتنفّذ ping من الحاسوب المحمول الخاص بالضيف.",
+ "vrf definition GUEST with rd 65000:20 and address-family ipv4": "vrf definition GUEST مع rd 65000:20 و address-family ipv4",
+ "interface g0/0/0: vrf forwarding GUEST, then its address again (ip address 10.80.20.1 255.255.255.0)": "interface g0/0/0: vrf forwarding GUEST، ثم عنوانها مرة أخرى (ip address 10.80.20.1 255.255.255.0)",
+ "show ip route vrf GUEST lists the guest network; show ip route no longer does": "يعرض show ip route vrf GUEST شبكة الضيوف؛ ولم يعد show ip route يعرضها",
+ "pc-guest still reaches its gateway and no longer reaches pc-office": "لا يزال pc-guest يصل إلى بوابته ولم يعد يصل إلى pc-office",
+ "the router has a VRF named GUEST": "لدى الموجّه VRF باسم GUEST",
+ "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 on the console; show vrf lists it": "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 على وحدة التحكم؛ ويعرضه show vrf",
+ "the guest network's interface is in GUEST, with its address": "واجهة شبكة الضيوف في GUEST، مع عنوانها",
+ "interface g0/0/0, vrf forwarding GUEST: IOS removes the address when the VRF changes, so type ip address 10.80.20.1 255.255.255.0 again afterwards": "interface g0/0/0, vrf forwarding GUEST: يحذف IOS العنوان عند تغيير VRF، لذا اكتب ip address 10.80.20.1 255.255.255.0 مرة أخرى بعد ذلك",
+ "the guest network is in GUEST's table and not in the global one": "شبكة الضيوف في جدول GUEST وليست في الجدول العام",
+ "show ip route vrf GUEST and show ip route on the console: the guest's C line belongs only in the first": "show ip route vrf GUEST و show ip route على وحدة التحكم: سطر C الخاص بالضيوف ينتمي إلى الأول فقط",
+ "pc-guest reaches its gateway and not the office": "يصل pc-guest إلى بوابته ولا يصل إلى المكتب",
+ "The gateway does not answer: the interface lost its address with vrf forwarding (type it again). The office still answers: the interface is not in the VRF yet (show ip vrf).": "البوابة لا تستجيب: فقدت الواجهة عنوانها مع vrf forwarding (اكتبه مرة أخرى). المكتب لا يزال يستجيب: الواجهة ليست في VRF بعد (show ip vrf)."
+}

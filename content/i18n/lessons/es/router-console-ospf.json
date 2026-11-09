@@ -1,0 +1,71 @@
+{
+ "title": "OSPF en el router del laboratorio: un vecino a través de la LAN de la oficina",
+ "summary": "Activa OSPF en la consola del router del laboratorio y en un router Ubuntu con FRRouting, observa cómo eligen un router designado en una LAN compartida, mantén en silencio las demás interfaces y llega a la red del taller sin que nadie haya escrito una ruta.",
+ "why": "La mayoría de las redes que te encontrarás son una mezcla: un router Cisco en el núcleo, y algo\nmás a su lado, un firewall, una máquina Linux, un router de otro fabricante. Se ponen de acuerdo en\nlas rutas porque hablan el mismo protocolo abierto, y OSPF es el que todos\nhablan. Aquí el router del laboratorio se configura como un router Cisco, en su\nconsola (router ospf 1, network ... area 0), y el router de al lado es Ubuntu\ncon FRRouting, configurado en vtysh. Se encuentran en la LAN de la oficina, un segmento\nde difusión, así que también eligen un router designado, algo que un enlace punto a punto nunca\nhace.\n\nLo que hace winlab por debajo, para que sepas con qué hablas: el router del laboratorio\nconvierte lo que escribes en una configuración de FRRouting y la ejecuta. Los hellos, el\nintercambio de bases de datos y las rutas son reales; show ip ospf neighbor en la consola\nlee la propia tabla de FRRouting. Dos diferencias con un Cisco real son\nhonestas: el número de proceso (router ospf 1) es una etiqueta, porque este router ejecuta un\nproceso OSPF por VRF, y router eigrp se rechaza, porque EIGRP es el protocolo propio de Cisco\ny ningún router Linux lo habla lo bastante bien como para enseñarlo.",
+ "concepts": [
+  "network <address> <wildcard> area <n> (IOS) y network <prefix> area <n> (FRRouting) eligen ambas interfaces por dirección; 0.0.0.255 es el wildcard de un /24",
+  "Router ID: establécelo a mano (router-id en IOS, ospf router-id en FRRouting); un cambio solo surte efecto después de clear ip ospf process",
+  "En una LAN de difusión los routers eligen un router designado (DR) y uno de respaldo (BDR): gana la prioridad de interfaz más alta, luego el router ID más alto, y una elección nunca se repite solo porque aparezca un router mejor",
+  "ip ospf priority 0 significa nunca DR; ip ospf cost establece lo que cuesta cruzar una interfaz (gana el coste total más bajo)",
+  "passive-interface default detiene los hellos en todas las interfaces; no passive-interface <if> los activa donde hay un vecino. La red de una interfaz pasiva se sigue anunciando",
+  "Las rutas O de show ip route llevan [110/<cost>]: distancia administrativa 110 y luego el coste OSPF para llegar"
+ ],
+ "steps": [
+  "Inicia rtr-edge, pc-office y pc-edge, y enciende la red. Inicia sesión en rtr-edge como ubuntu con la contraseña del laboratorio (la llave de la barra de tareas la tiene). rtr-edge es un Ubuntu Server recién instalado: eth0 es 10.81.0.1/24 (edge-lan, el taller), eth1 es 10.80.0.3/24 (office). Compruébalo con ip -br addr.",
+  "Instala FRRouting en rtr-edge desde la memoria del paquete frr (el laboratorio no tiene Internet): en Máquinas abre la Configuración de rtr-edge y pulsa Conectar la memoria de paquetes frr. Luego sudo mkdir -p /mnt/winlab-pack; sudo mount LABEL=WLPACK /mnt/winlab-pack; cat /mnt/winlab-pack/README.txt y síguelo para instalar frr frr-pythontools traceroute. Después saca la memoria (Configuración): rtr-isp la necesita en la siguiente lección.",
+  "Haz que rtr-edge reenvíe paquetes entre sus tarjetas: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf, y luego sudo sysctl --system. Activa el demonio OSPF de FRRouting: sudo sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons, y luego sudo systemctl restart frr.",
+  "Mira primero el problema. En pc-office, ping -c 2 10.81.0.10 (pc-edge) falla: la puerta de enlace de pc-office es el router del laboratorio (10.80.0.2), y el router del laboratorio nunca ha oído hablar de 10.81.0.0/24. Haz doble clic en el router en el Banco de red (o en el Mapa de red) para abrir su consola: enable, show ip route. Tres redes conectadas (C) y nada más. show ip interface brief muestra qué interfaz es cuál: GigabitEthernet0/1/0 es la oficina (10.80.0.2), GigabitEthernet0/0/0 la red de invitados, GigabitEthernet0/0/1 el enlace al ISP.",
+  "OSPF en el router del laboratorio: configure terminal, router ospf 1. El indicador pasa a ser Router(config-router)#. Escribe router-id 2.2.2.2, y luego network 10.80.0.0 0.0.0.255 area 0. Déjalo así por ahora y escribe end. La primera vez que se configura un protocolo de enrutamiento el router instala FRRouting desde el volumen de paquetes del laboratorio, así que dale unos segundos.",
+  "OSPF en rtr-edge: sudo vtysh, configure terminal, router ospf, ospf router-id 3.3.3.3, network 10.80.0.0/24 area 0, network 10.81.0.0/24 area 0, end, write memory. La misma idea en palabras de FRRouting: un prefijo en lugar de una dirección y un wildcard.",
+  "Observa cómo se encuentran. En la consola del router: show ip ospf neighbor. 3.3.3.3 aparece en GigabitEthernet0/1/0, primero en INIT o 2WAY, luego EXSTART y EXCHANGE, y tras unos 40 segundos (el temporizador de espera antes de una elección) FULL/DR o FULL/BDR. En vtysh en rtr-edge, show ip ospf neighbor muestra 2.2.2.2 desde el otro lado.",
+  "Ahora las rutas: show ip route en la consola del router tiene O 10.81.0.0/24 [110/20] via 10.80.0.3, GigabitEthernet0/1/0. En pc-office, ping -c 2 10.81.0.10 responde, y traceroute -n 10.81.0.10 muestra 10.80.0.2, luego 10.80.0.3, luego el PC. Nadie escribió una ruta.",
+  "Haz que el router del laboratorio sea el DR a propósito. En su consola: configure terminal, interface g0/1/0, ip ospf priority 200, end. show ip ospf neighbor: nada cambia, porque OSPF no celebra una nueva elección cuando aparece un router mejor. Fuérzala: clear ip ospf process en la consola (el lado de rtr-edge dice que su vecino cayó y volvió). Tras los 40 segundos rtr-edge figura como FULL/BDR en show ip ospf neighbor en la consola, así que el router del laboratorio es el DR.",
+  "Mantén OSPF fuera de las interfaces donde nunca debería haber un router. En la consola: configure terminal, router ospf 1, passive-interface default, no passive-interface g0/1/0, end. Haz lo mismo en rtr-edge para su tarjeta del taller: en vtysh, configure terminal, interface eth0, ip ospf passive, end, write memory. show ip protocols en la consola enumera las interfaces pasivas y las redes para las que enruta OSPF.",
+  "Lee el resto: show ip ospf interface brief (cada interfaz, su área, coste, rol DR o BDR y vecinos), show ip ospf database (un LSA de router por router, un LSA de red del DR), show running-config | section router ospf. En la consola, write memory lo conserva para el siguiente arranque de la red.",
+  "Pulsa Comprobar mi trabajo: lee el vecino OSPF y las rutas del router del laboratorio, la vista de rtr-edge, qué router es el DR, y hace ping de pc-office a pc-edge."
+ ],
+ "pitfalls": [
+  "Vecino atascado en INIT o nada en absoluto: ambos extremos deben coincidir en subred, área y temporizadores hello y dead. show ip ospf interface en ambos extremos (la consola y vtysh) imprime los temporizadores uno al lado del otro.",
+  "Un wildcard no es una máscara: network 10.80.0.0 255.255.255.0 area 0 es una instrucción distinta (y errónea). El router rechaza wildcards con huecos.",
+  "Un router-id escrito después de que los vecinos se levantaran no hace nada hasta clear ip ospf process; la consola lo dice.",
+  "passive-interface default en el router del laboratorio sin no passive-interface g0/1/0 silencia también la oficina: el vecino cae tras el intervalo dead (40 segundos).",
+  "Los ajustes escritos en la consola son la configuración en ejecución: write memory, o el siguiente arranque de la red traerá de vuelta la de inicio. En rtr-edge, write memory en vtysh guarda /etc/frr/frr.conf."
+ ],
+ "verify": [
+  "los vecinos OSPF del router del laboratorio (la propia tabla de FRRouting)",
+  "las rutas que el router del laboratorio aprendió por OSPF, en su kernel",
+  "pc-office llega al taller"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué wildcard va con network 10.80.0.0 para abarcar todo 10.80.0.0/24 en el router ospf de IOS?",
+   "answer": "0.0.0.255",
+   "wrong": [
+    "255.255.255.0",
+    "0.0.0.0",
+    "255.255.255.255"
+   ],
+   "why": "Un wildcard marca los bits que pueden diferir: el último octeto de un /24."
+  },
+  {
+   "q": "Subes la prioridad OSPF de un router después de que se eligiera el DR. ¿Qué ocurre?",
+   "answer": "Nada hasta que se reinicie la adyacencia o el proceso: OSPF no se apropia del rol de DR",
+   "wrong": [
+    "Se convierte en DR al instante",
+    "El antiguo DR pasa a BDR en el siguiente hello",
+    "Ambos se convierten en DR"
+   ],
+   "why": "La elección se celebra cuando un router se une al segmento, no cuando cambia una prioridad."
+  },
+  {
+   "q": "¿Qué le hace passive-interface a la red de una interfaz?",
+   "answer": "Se sigue anunciando, pero ahí no se envían ni se responden hellos",
+   "wrong": [
+    "Deja de anunciarse",
+    "Se anuncia como ruta externa",
+    "Se elimina de la tabla de rutas"
+   ],
+   "why": "Pasiva mantiene a los vecinos fuera de la interfaz; la red se queda en OSPF."
+  }
+ ]
+}

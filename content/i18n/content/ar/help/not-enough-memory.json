@@ -1,0 +1,15 @@
+{
+ "Not enough memory to start the machines": "لا توجد ذاكرة كافية لتشغيل الأجهزة",
+ "Common problems": "مشكلات شائعة",
+ "memory": "الذاكرة",
+ "ram": "ram",
+ "not enough memory": "ذاكرة غير كافية",
+ "won't start": "لا يبدأ",
+ "refuses": "يرفض",
+ "low-memory": "ذاكرة منخفضة",
+ "lean": "خفيف",
+ "thrash": "اختناق",
+ "slow": "بطيء",
+ "What to do when winlab says the machines do not fit.": "ما الذي تفعله عندما يقول winlab إن الأجهزة لا تتسع.",
+ "Before anything boots, winlab compares what the machines need with the memory free on this PC right now. If they do not fit, it trims the servers for that run, and if they still do not fit it says so instead of letting the PC grind to a halt.\n\n- **Start only what the lesson needs.** Use Start these machines in the Lab guide (or `winlab learn start <lesson>`), not the whole lab.\n- **Turn machines off** that the current lesson does not use, in Machines.\n- **Close other programs** on this PC, especially browsers with many tabs. They take memory the machines could use.\n- **Use the Low-memory profile** (the switch in the Start menu, or Settings for this lab). It turns off what an isolated machine gets nothing from, so a server works in 1.5 GB. It takes effect the next time a machine is set up.\n\nAn 8 GB PC runs every one- and two-machine lesson. See System requirements for more.": "قبل أن يُقلع أي شيء، يقارن winlab ما تحتاجه الأجهزة بالذاكرة المتاحة على هذا الكمبيوتر في تلك اللحظة. إذا لم تتسع، يقلّص الخوادم لذلك التشغيل، وإذا ظلت لا تتسع يقول ذلك بدلًا من ترك الكمبيوتر يتباطأ حتى يتوقف.\n\n- **شغّل فقط ما يحتاجه الدرس.** استخدم تشغيل هذه الأجهزة في دليل المختبر (أو `winlab learn start <lesson>`)، لا المختبر كله.\n- **أطفئ الأجهزة** التي لا يستخدمها الدرس الحالي، في الأجهزة.\n- **أغلق البرامج الأخرى** على هذا الكمبيوتر، ولا سيما المتصفحات ذات علامات التبويب الكثيرة. فهي تأخذ ذاكرة يمكن للأجهزة استخدامها.\n- **استخدم ملف الذاكرة المنخفضة** (المفتاح في قائمة ابدأ، أو الإعدادات لهذا المختبر). يوقف ما لا يستفيد منه جهاز معزول، فيعمل الخادم بـ 1.5 GB. يسري مفعوله في المرة التالية التي يُجهَّز فيها جهاز.\n\nيشغّل كمبيوتر بذاكرة 8 GB كل دروس الجهاز الواحد والجهازين. راجع متطلبات النظام لمزيد من المعلومات."
+}

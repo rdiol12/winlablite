@@ -1,0 +1,19 @@
+{
+ "Virtualization is off, or machines are very slow": "La virtualización está desactivada o las máquinas van muy lentas",
+ "Common problems": "Problemas comunes",
+ "virtualization": "virtualización",
+ "vt-x": "vt-x",
+ "amd-v": "amd-v",
+ "svm": "svm",
+ "bios": "bios",
+ "uefi": "uefi",
+ "firmware": "firmware",
+ "slow": "lento",
+ "hypervisor platform": "hypervisor platform",
+ "whpx": "whpx",
+ "tcg": "tcg",
+ "acceleration": "aceleración",
+ "kvm": "kvm",
+ "Machines need the processor's virtualization support, and Windows' Hypervisor Platform.": "Las máquinas necesitan el soporte de virtualización del procesador y Windows Hypervisor Platform.",
+ "Without hardware virtualization a machine still starts, but it runs many times slower and Windows can take hours to install. Setup says which of these two is missing.\n\n**Virtualization is off in the PC's firmware**\n\n1. Restart the PC into its firmware settings (UEFI or BIOS). On Windows: Settings, System, Recovery, Advanced startup, Restart now, then Troubleshoot, Advanced options, UEFI Firmware Settings.\n2. Turn on the setting called Intel Virtualization Technology (VT-x), SVM Mode or AMD-V. Its place differs by maker; it is often under Advanced or CPU Configuration.\n3. Save, exit, and open winlab again.\n\n**Windows Hypervisor Platform is off**\n\nSetup offers **Turn it on**. Windows asks for permission, and the PC needs a restart to finish.\n\nCheck from a command prompt with `winlab doctor`: look for the lines about virtualization and the verdict on acceleration.": "Sin virtualización por hardware una máquina sigue arrancando, pero va muchas veces más lenta y Windows puede tardar horas en instalarse. La configuración indica cuál de estas dos falta.\n\n**La virtualización está desactivada en el firmware del PC**\n\n1. Reinicia el PC en la configuración de su firmware (UEFI o BIOS). En Windows: Settings, System, Recovery, Advanced startup, Restart now, luego Troubleshoot, Advanced options, UEFI Firmware Settings.\n2. Activa la opción llamada Intel Virtualization Technology (VT-x), SVM Mode o AMD-V. Su ubicación varía según el fabricante; suele estar en Advanced o CPU Configuration.\n3. Guarda, sal y vuelve a abrir winlab.\n\n**Windows Hypervisor Platform está desactivado**\n\nLa configuración ofrece **Turn it on**. Windows pide permiso y el PC necesita reiniciarse para terminar.\n\nCompruébalo desde un símbolo del sistema con `winlab doctor`: busca las líneas sobre virtualización y el veredicto sobre la aceleración."
+}
