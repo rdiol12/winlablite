@@ -2836,6 +2836,8 @@ print(json.dumps(out, ensure_ascii=False))
               and b"Promote" not in (home / "content" / "packs" / "trial.wlpack").read_bytes())
         env = {k: v for k, v in os.environ.items() if not k.startswith("WINLAB_")}
         env["WINLAB_HOME"] = str(home)
+        # the probe prints Hebrew; Windows' pipe default (cp1252) can't encode it
+        env["PYTHONIOENCODING"] = "utf-8"
 
         def run(extra: dict) -> dict:
             pr = subprocess.run([sys.executable, "-c", probe], cwd=root, capture_output=True, text=True,
