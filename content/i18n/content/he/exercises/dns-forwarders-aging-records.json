@@ -1,0 +1,15 @@
+{
+ "A partner domain, aging on, and one static record": "תחום של שותף, הזדקנות מופעלת, ורשומה סטטית אחת",
+ "A partner company's names live at partner.lab, served by their DNS server at\n10.10.10.99; your users must resolve them without asking the Internet. Your\nown zone collects stale records from machines that left years ago, and the\nintranet needs a name that never ages out.": "השמות של חברה שותפה נמצאים ב-partner.lab, ומוגשים על ידי שרת ה-DNS שלהם בכתובת\n10.10.10.99; המשתמשים שלך חייבים לתרגם אותם בלי לשאול את האינטרנט. האזור\nשלך אוסף רשומות ישנות ממכונות שעזבו לפני שנים, והאינטרנט\nהפנימי צריך שם שלעולם לא יתיישן.",
+ "Add a conditional forwarder for partner.lab to 10.10.10.99": "הוסף מעביר מותנה עבור partner.lab אל 10.10.10.99",
+ "Turn on aging for the corp.lab zone (the server-wide scavenging setting is up to you)": "הפעל הזדקנות עבור האזור corp.lab (הגדרת הניקוי ברמת השרת נתונה לבחירתך)",
+ "Create a static A record intranet.corp.lab pointing at 10.10.10.20": "צור רשומת A סטטית intranet.corp.lab שמצביעה אל 10.10.10.20",
+ "partner.lab is a conditional forwarder": "partner.lab הוא מעביר מותנה",
+ "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "it forwards to the partner's server": "הוא מעביר לשרת של השותף",
+ "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "aging is on for corp.lab": "ההזדקנות מופעלת עבור corp.lab",
+ "Set-DnsServerZoneAging -Name corp.lab -Aging $true (no-refresh and refresh default to 7 days each)": "Set-DnsServerZoneAging -Name corp.lab -Aging $true (ברירת המחדל של no-refresh ו-refresh היא 7 ימים כל אחד)",
+ "intranet is a static record for 10.10.10.20": "intranet היא רשומה סטטית עבור 10.10.10.20",
+ "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; a static record has no Timestamp, so scavenging never removes it": "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; לרשומה סטטית אין Timestamp, ולכן הניקוי לעולם לא מסיר אותה"
+}

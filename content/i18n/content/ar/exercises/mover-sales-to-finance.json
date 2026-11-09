@@ -1,0 +1,16 @@
+{
+ "Move Dan Price from Sales to Finance without leaving Sales access behind": "انقل Dan Price من Sales إلى Finance دون ترك صلاحيات Sales خلفه",
+ "Dan Price (dprice) becomes a Finance analyst on Monday. Press Break in the\nlesson first: it sets him up in Sales on dc01. Keep his account; change what\nhangs on it. He must reach what Finance reaches and nothing Sales has, and his\nhome folder moves to Finance's share, HomeFinance$, with its files and his\npermission on it.": "يصبح Dan Price (dprice) محللاً في Finance يوم الاثنين. اضغط أولاً اكسر في الدرس: فهو يُعدّه في Sales على dc01. احتفظ بحسابه؛ وغيّر ما يرتبط به. يجب أن يصل إلى ما تصل إليه Finance ولا شيء مما لدى Sales، وينتقل مجلده الرئيسي إلى مشاركة Finance، HomeFinance$، مع ملفاته وإذنه عليه.",
+ "Department Finance, Title 'Finance analyst', on the same account": "Department Finance، Title 'Finance analyst'، على الحساب نفسه",
+ "Out of G-Sales and Sales Team, into G-Finance and Finance Team": "خارج G-Sales و Sales Team، وداخل G-Finance و Finance Team",
+ "No permission for dprice left on any Sales folder": "لم يبقَ أي إذن لـ dprice على أي مجلد من مجلدات Sales",
+ "Home folder moved to C:\\Shares\\HomeFinance\\dprice with its permissions, the old one gone, HomeDirectory pointing at \\\\dc01\\HomeFinance$\\dprice": "المجلد الرئيسي منقول إلى C:\\Shares\\HomeFinance\\dprice مع أذوناته، والقديم محذوف، و HomeDirectory يشير إلى \\\\dc01\\HomeFinance$\\dprice",
+ "the same account, now in Finance": "الحساب نفسه، الآن في Finance",
+ "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; never delete and recreate a mover": "Set-ADUser dprice -Department Finance -Title 'Finance analyst'؛ لا تحذف أبداً حساب موظف ينتقل ثم تعيد إنشاءه",
+ "groups swapped, not added": "المجموعات مُبدَّلة، لا مُضافة",
+ "Remove-ADGroupMember G-Sales and 'Sales Team', Add-ADGroupMember G-Finance and 'Finance Team'": "Remove-ADGroupMember G-Sales و 'Sales Team'، و Add-ADGroupMember G-Finance و 'Finance Team'",
+ "no direct permission left on Sales folders": "لم يبقَ أي إذن مباشر على مجلدات Sales",
+ "(Get-Acl <folder>).Access | Where-Object { -not $_.IsInherited } shows grants to people; icacls '<folder>' /remove CORP\\dprice": "يعرض (Get-Acl <المجلد>).Access | Where-Object { -not $_.IsInherited } الأذونات الممنوحة للأشخاص؛ icacls '<المجلد>' /remove CORP\\dprice",
+ "home folder moved with its files and permission": "المجلد الرئيسي منقول مع ملفاته وإذنه",
+ "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL, then Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:": "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL، ثم Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:"
+}

@@ -43,6 +43,9 @@ CORE_OUT_LESSONS = frozenset({
     "remote-power-bmc", "storage-spaces-repair",
     "ts-wol-off", "ups-power-cut",
     "wake-on-lan", "wpa2-enterprise",
+    # The helpdesk queue is osTicket on the IT ops server, which the trial
+    # does not have.
+    "work-the-helpdesk-queue",
 })
 
 # The lab's own exercise list, less the ones those lessons grade.
@@ -50,6 +53,7 @@ CORE_OUT_EXERCISES = frozenset({
     "power-cycle-hung-server", "rebuild-a-mirror",
     "repair-a-storage-pool",
     "ups-graceful-shutdown", "wake-a-pc", "wpa2-enterprise",
+    "helpdesk-shift",
 })
 
 # Content folders core filters; everything else under content/ (roles, the
@@ -60,7 +64,7 @@ _FILTERED = ("labs", "lessons", "exercises", "guides", "scenarios", "exams")
 CORE_COMMANDS = frozenset({
     "doctor", "setup", "gui", "bootstrap", "lab", "images", "exercise", "snap",
     "console", "console-agent", "exec", "shell", "cp", "break", "fault",
-    "helpdesk", "learn", "commands", "progress", "transcript", "virtio",
+    "learn", "commands", "progress", "transcript", "virtio",
     "viewer", "window", "icon", "fw", "routing", "net", "media",
 })
 
@@ -68,7 +72,7 @@ CORE_COMMANDS = frozenset({
 CORE_HIDDEN_WINDOWS = (
     "Guide", "Build", "Activation", "Scenario", "Pager", "Office",
     "Rack", "Inherited", "Classwork", "ClassResults", "Alerts", "Activity",
-    "Company", "Shift",
+    "Company", "Shift", "Helpdesk", "AIDC", "Building", "Site", "Recordings",
 )
 
 _cache: str | None = None

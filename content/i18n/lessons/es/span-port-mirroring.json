@@ -1,0 +1,65 @@
+{
+ "title": "SPAN: refleja el puerto del switch de un servidor en un PC que ejecuta Wireshark",
+ "summary": "Un switch solo envía a un PC su propio tráfico. Copia el puerto de un servidor a un PC que escucha con monitor session, y lee las conversaciones del servidor en Wireshark.",
+ "why": "Conecta un PC con Wireshark a un switch y verás tu propio tráfico, las difusiones y nada más: un switch aprende dónde vive cada dirección y envía cada trama solo allí. Es el switch haciendo su trabajo, y es la razón por la que \"simplemente ejecuta Wireshark\" no funciona para un problema entre otras dos máquinas (un servidor que tarda en responder a un cliente, un inicio de sesión que falla, una impresora que inunda la red).\n\nSPAN (Switched Port Analyzer, el nombre de Cisco; port mirroring en otros sitios) hace que el switch copie lo que uno o más puertos envían y reciben a otro puerto, donde escucha un analizador. monitor session 1 source interface indica qué copiar (rx: lo que recibe el puerto, tx: lo que envía, ambos por defecto), monitor session 1 destination interface indica adónde van las copias. El puerto de destino deja de ser un puerto normal: sale de su VLAN y, por defecto, ignora lo que entra por él, así que el PC conectado ahí es un oyente y nada más.\n\nEn este laboratorio cada puerto del switch es un puerto del bridge del router, y una sesión SPAN es tc en esos puertos: una acción mirred copia cada trama de la entrada (rx) y la salida (tx) del puerto de origen al puerto de destino, como hace el ASIC de un Catalyst. El puerto de destino sale de su VLAN y su entrada se descarta, como en el switch real.",
+ "concepts": [
+  "Un switch reenvía unicast solo al puerto en el que aprendió esa dirección; una captura en cualquier otro puerto no lo ve",
+  "Puertos de origen y direcciones: rx es lo que el switch recibe en el puerto, tx lo que envía por él, both es el valor por defecto; una VLAN de origen refleja todos sus puertos",
+  "El puerto de destino solo lleva las copias: sin VLAN, sin aprendizaje, y las tramas que entran se descartan salvo que se habilite ingress",
+  "La tarjeta del PC que captura debe estar en modo promiscuo para quedarse con tramas dirigidas a otras máquinas: Wireshark (con Npcap) lo hace por defecto",
+  "Sobresuscripción: reflejar un puerto gigabit ocupado en ambas direcciones puede superar lo que el puerto de destino puede enviar; se descartan copias, nunca el tráfico original",
+  "Un puerto es origen o destino, nunca ambos, y un destino pertenece a una sola sesión"
+ ],
+ "steps": [
+  "Lleva Wireshark al laboratorio: en este PC ejecuta winlab wireshark fetch (descarga el instalador de Windows de wireshark.org y lo comprueba), luego winlab wireshark stick ad-ds-basics. Conecta la memoria de Wireshark a pc01 desde la estantería de medios e instálalo allí, con el Npcap que ofrece: sin Npcap, Wireshark en Windows no puede capturar.",
+  "Encuentra los puertos. En la consola del switch de corp: enable, show interfaces status. Anota el puerto de dc01 y el puerto de pc01 (la columna Name; show mac address-table dice qué dirección está dónde).",
+  "Demuestra primero el problema: en pc01, inicia una captura en Wireshark en la tarjeta Ethernet, y en fs01 abre \\\\dc01\\NETLOGON en Explorer y ejecuta gpupdate /force. Detén la captura: ninguna trama entre fs01 (10.10.10.20) y dc01 (10.10.10.10), solo difusiones y las propias de pc01.",
+  "Refleja el puerto de dc01 en el de pc01: configure terminal, monitor session 1 source interface fa0/N both (el puerto de dc01), monitor session 1 destination interface fa0/M (el de pc01). Luego show monitor: Source Ports Both: el puerto de dc01, Destination Ports el de pc01, Ingress Disabled.",
+  "Captura de nuevo en pc01 y repite Explorer y gpupdate en fs01. Ahora Wireshark muestra la conversación: filtra por ip.addr == 10.10.10.20 y verás SMB2, Kerberos, LDAP y DNS entre fs01 y dc01, nada de ello dirigido a pc01. Guarda la captura como span.pcapng en Documents.",
+  "Fíjate en lo que perdió pc01: no tiene red mientras escucha (ping 10.10.10.10 desde él falla, y su dirección no se renovará). El puerto de destino está fuera de su VLAN, como en un switch real.",
+  "Prueba una sola dirección: no monitor session 1 source interface fa0/N, luego monitor session 1 source interface fa0/N rx. Captura de nuevo: solo lo que envía dc01 (las tramas que llegan al switch desde dc01). tx es la otra mitad.",
+  "Refleja una VLAN entera en lugar de un puerto: no monitor session 1, luego monitor session 1 source vlan 1 y el mismo destino. Una sesión refleja interfaces o VLAN, no ambas; el switch se niega a mezclarlas.",
+  "Termina: no monitor session 1. El puerto de pc01 vuelve a su VLAN y pc01 recupera la red. show monitor dice No SPAN configured. Deja configurada una sesión del puerto de dc01 al puerto de pc01 cuando vayas al ejercicio."
+ ],
+ "pitfalls": [
+  "Dejar una sesión SPAN en un puerto que alguien usa: el PC conectado ahí pierde la red mientras el puerto sea destino.",
+  "Capturar sin modo promiscuo: las copias llegan, y la tarjeta descarta toda trama que no vaya dirigida a ella.",
+  "Reflejar un enlace ascendente en ambas direcciones en un puerto de 100 Mbit: las copias superan lo que puede enviar el destino y se descartan; refleja una dirección o una VLAN.",
+  "Esperar etiquetas de VLAN: una copia de un puerto de acceso llega sin etiqueta; las copias de un trunk llevan aquí sus etiquetas (encapsulation replicate se conserva y se muestra; el espejo del router siempre copia la trama tal como era)."
+ ],
+ "verify": [
+  "los espejos en el router: los filtros tc de cada puerto que copian al destino"
+ ],
+ "quiz": [
+  {
+   "q": "pc01 ejecuta Wireshark en un puerto normal del switch. ¿Qué ve de una copia de archivos entre fs01 y dc01?",
+   "answer": "Nada: el switch envía esas tramas solo a los puertos de fs01 y dc01",
+   "wrong": [
+    "Todo",
+    "Solo las respuestas",
+    "La primera trama de cada conversación"
+   ],
+   "why": "Un switch reenvía unicast conocido solo por el puerto en el que aprendió la dirección; SPAN es la forma de que otro puerto reciba una copia."
+  },
+  {
+   "q": "¿Qué tramas copia monitor session 1 source interface fa0/3 rx?",
+   "answer": "Las tramas que el switch recibe en fa0/3, es decir, lo que envía la máquina conectada a fa0/3",
+   "wrong": [
+    "Las tramas que el switch envía por fa0/3",
+    "Ambas direcciones",
+    "Solo las difusiones"
+   ],
+   "why": "rx y tx son desde el punto de vista del puerto del switch; both es el valor por defecto."
+  },
+  {
+   "q": "¿Por qué pierde la red el PC en un puerto de destino SPAN?",
+   "answer": "El puerto de destino sale de su VLAN y descarta lo que entra por él, así que solo lleva las copias",
+   "wrong": [
+    "La tarjeta del PC está en modo promiscuo",
+    "Spanning tree bloquea el puerto",
+    "Las copias llenan el puerto"
+   ],
+   "why": "Por defecto un destino SPAN no acepta tráfico de entrada y no está en ninguna VLAN; en un switch real se puede habilitar ingress para un IDS que deba responder."
+  }
+ ]
+}

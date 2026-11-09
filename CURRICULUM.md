@@ -8,7 +8,7 @@ winlab trial: the lessons of its three labs, in order.
 
 ## Identity
 
-- **Promote the first domain controller** (45 min): Turn a plain server into the forest root domain controller with DNS.
+- **Promote the first domain controller** (60 min): Turn a plain server into the forest root domain controller with DNS.
 - **Join a member server to the domain** (30 min): Point a server's DNS at the domain controller, join it, and prove the secure channel.
 - **Create an OU, a user and a global group** (35 min): Give a department a home in the directory and the group that permissions flow through.
 - **Onboard the new starters** (60 min): Turn HR's new-starter sheet into accounts, groups, folders and home drives, then watch the staff sign in and work.
@@ -64,4 +64,3 @@ winlab trial: the lessons of its three labs, in order.
 ## Operations
 
 - **Who is hammering the file server?** (45 min): The file server is slow and the office is busy: read the load with Resource Monitor, Get-SmbSession, Get-SmbOpenFile and performance counters, then find the person and the job behind it.
-- **Work the helpdesk queue: priorities, SLAs and a fix that holds** (50 min): Take calls from the office's staff as they come in, answer them inside their SLA, ask the right question, fix what is really broken and write it down.

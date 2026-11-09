@@ -31,9 +31,11 @@ protocol.
 In this lab the switches' cables are veth pairs between kernel bridges on the
 router. A channel that forms is a real Linux bond on each side (802.3ad for
 LACP, balance-xor for on), so the kernel's LACP runs between them for real
-and spanning tree sees one port. Linux has no PAgP: winlab applies PAgP's
-rules to decide whether a channel forms, and the bundle then runs LACP on the
-wire; the console says so.
+and spanning tree sees one port. Linux bonding has no PAgP, so winlab runs
+its own small PAgP speaker on the router (winlab-pagpd): desirable and auto
+ports send and answer real PAgP frames, and the router bundles them (a
+balance-xor bond) only once both ends agree. It was tested against itself,
+not against a Cisco switch; the console says so.
 '''
 concepts = [
   "A port-channel is one logical link made of up to eight member ports; spanning tree, the MAC table and the trunk settings see the port-channel, not the members",
@@ -61,7 +63,7 @@ pitfalls = [
   "passive with passive (or auto with auto) never forms: one end must ask.",
   "Changing a member's trunk settings by hand so it differs from the others suspends it (s): configure interface port-channel instead.",
   "Expecting one big copy to go twice as fast: a conversation always uses one member; the bundle helps many conversations, not one.",
-  "In this lab PAgP's desirable and auto follow PAgP's rules, but the bond on the router runs LACP on the wire, as Linux has no PAgP. A real 2960 speaks PAgP itself.",
+  "In this lab PAgP is spoken by winlab's own speaker on the router (Linux bonding has no PAgP), and show pagp neighbor reads it; a real 2960 speaks PAgP itself, and winlab's speaker was only ever tested against itself.",
 ]
 further = [
   "IEEE 802.1AX: link aggregation (LACP), formerly 802.3ad",

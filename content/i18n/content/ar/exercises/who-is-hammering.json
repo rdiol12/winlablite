@@ -1,0 +1,16 @@
+{
+ "Who is hammering the file server?": "من يُثقل خادم الملفات؟",
+ "The office says the file server is slow this afternoon. With the staff at\nwork (the Office window: workday on, a busy day, the clock at the end-of-day\nsaves), keep a counter log of fs01's SMB load, read who is connected and\nwhat they hold open, and find the person whose big copies are hammering the\nserver and the job behind them. Write it down in C:\\winlab\\hammering.txt on\nfs01: account, pc, file and job, one per line.": "يقول المكتب إن خادم الملفات بطيء بعد ظهر اليوم. والموظفون في العمل (نافذة المكتب: يوم العمل مفعّل، يوم مزدحم، والساعة عند حفظ نهاية اليوم)، احتفظ بسجل عدادات لحمل SMB على fs01، واقرأ من المتصل وما يُبقيه مفتوحًا، وابحث عن الشخص الذي تُثقل نسخه الكبيرة الخادم والمهمة التي وراءها. دوّن ذلك في C:\\winlab\\hammering.txt على fs01: الحساب، وpc، والملف، والمهمة، كل منها في سطر.",
+ "On fs01, a counter log named FileServerLoad (logman) with the SMB Server Shares counters, started": "على fs01، سجل عدادات باسم FileServerLoad (logman) بعدادات SMB Server Shares، قيد التشغيل",
+ "It has written samples to a .blg file under C:\\PerfLogs": "كتب عينات في ملف .blg ضمن C:\\PerfLogs",
+ "C:\\winlab\\hammering.txt on fs01 names the account and the big file it wrote on the share (account <name>, file <path>)": "يذكر C:\\winlab\\hammering.txt على fs01 الحساب والملف الكبير الذي كتبه على المشاركة (account <name>، file <path>)",
+ "The note names the PC they work from (pc <computer>) and what the job was (job <what>)": "تذكر الملاحظة الحاسوب الذي يعمل منه (pc <computer>) وما كانت المهمة (job <what>)",
+ "a counter log of the SMB load on fs01": "سجل عدادات لحمل SMB على fs01",
+ "logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, then logman start FileServerLoad": "logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad، ثم logman start FileServerLoad",
+ "the log has samples in a .blg file": "في السجل عينات ضمن ملف .blg",
+ "logman start FileServerLoad and let it run through the busy minutes; logman stop FileServerLoad closes the file": "logman start FileServerLoad ودعه يعمل خلال الدقائق المزدحمة؛ ويغلق logman stop FileServerLoad الملف",
+ "the note names the account and the big file it wrote": "تذكر الملاحظة الحساب والملف الكبير الذي كتبه",
+ "Get-ChildItem D:\\Shares -Recurse -File | Sort-Object Length -Descending, then (Get-Acl -LiteralPath <file>).Owner names who wrote it; lines 'account <name>' and 'file <full path>'": "Get-ChildItem D:\\Shares -Recurse -File | Sort-Object Length -Descending، ثم يذكر (Get-Acl -LiteralPath <file>).Owner من كتبه؛ والسطران 'account <name>' و'file <full path>'",
+ "the note names their PC and the job": "تذكر الملاحظة حاسوبه والمهمة",
+ "Get-SmbSession shows ClientComputerName (an address: Resolve-DnsName it); the Office window's feed says what they were doing; lines 'pc <computer>' and 'job <what>'": "يُظهر Get-SmbSession القيمة ClientComputerName (عنوان: طبّق عليه Resolve-DnsName)؛ وتذكر تغذية نافذة المكتب ما كانوا يفعلونه؛ والسطران 'pc <computer>' و'job <what>'"
+}

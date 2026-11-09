@@ -1,0 +1,57 @@
+{
+ "title": "Server Manager no puede obtener datos",
+ "summary": "La comunicación remota de PowerShell y Server Manager dejan de llegar a un servidor que responde a ping y acepta RDP.",
+ "why": "Server Manager, Enter-PSSession, Invoke-Command y Windows Admin Center\nfuncionan todos sobre un mismo servicio: WinRM, que escucha en TCP 5985. Cuando se detiene, todos\nellos fallan a la vez mientras Escritorio remoto y los recursos compartidos siguen funcionando, y esa es\nla pista. Test-WSMan pregunta al propio servicio, y una conexión rechazada te dice\nque la máquina respondió y que nada escucha, lo cual no es un firewall.",
+ "concepts": [
+  "Test-WSMan: si un servicio WS-Management responde en esa máquina",
+  "Rechazado frente a tiempo agotado: nada escuchando frente a algo filtrando",
+  "Tipo de inicio del servicio: Disabled sobrevive a un reinicio, Stopped no",
+  "Enable-PSRemoting: el servicio, el agente de escucha y la regla de firewall en un solo comando"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 winrm-stopped). No leas las pistas todavía.",
+  "Reproduce el síntoma desde pc01, como lo encontraría un administrador: Enter-PSSession -ComputerName fs01, y Server Manager en dc01 mostrando fs01 con cannot get data.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Corrige la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra la evidencia que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ],
+ "pitfalls": [
+  "Reiniciar el servicio sin cambiar su tipo de inicio lo recupera hasta el próximo reinicio.",
+  "Añadir una regla de firewall para el 5985 no cambia nada cuando nada escucha en él."
+ ],
+ "verify": [
+  "el servicio WinRM y su agente de escucha"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué te dice Test-WSMan?",
+   "answer": "Si el servicio WinRM de esa máquina responde",
+   "wrong": [
+    "Si la máquina responde a ping",
+    "Si RDP está permitido",
+    "Si el DNS resuelve el nombre"
+   ],
+   "why": "Pregunta al servicio, no a la red."
+  },
+  {
+   "q": "Una prueba de puerto se rechaza al instante. ¿Qué significa?",
+   "answer": "La máquina respondió y nada escucha en el puerto",
+   "wrong": [
+    "Un firewall descarta los paquetes",
+    "La máquina está apagada",
+    "El DNS es incorrecto"
+   ],
+   "why": "Un descarte del firewall parece un tiempo agotado."
+  },
+  {
+   "q": "¿Por qué reiniciar WinRM sin cambiar su tipo de inicio no basta?",
+   "answer": "Un tipo de inicio Deshabilitado lo deja parado tras el siguiente reinicio",
+   "wrong": [
+    "WinRM solo arranca al iniciar el equipo",
+    "Reiniciarlo quita el agente de escucha",
+    "Además hay que apagar el firewall"
+   ],
+   "why": "Vuelve a poner el tipo de inicio en Automático, o ejecuta Enable-PSRemoting."
+  }
+ ]
+}

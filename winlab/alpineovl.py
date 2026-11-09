@@ -59,7 +59,22 @@ APPLIANCE_PACKAGES = ["net-snmp", "busybox-extras", "e2fsprogs",
                       "perl", "perl-net-ssleay", "perl-io-tty", "openssl", "scsi-tgt-scripts", "lvm2",
                       "nginx",  # the lab Internet's web sites (role inet-sites, winlab/webproxy.py)
                       # the router's OSPF, BGP and VRRP when its console asks for them (winlab/iosrouting.py)
-                      "frr"]
+                      "frr",
+                      # CDP and LLDP on the router and the switches (winlab/lldp.py), and the IP phones'
+                      # LLDP-MED (content/roles/ipphone.sh): installed where they are needed
+                      "lldpd",
+                      # the entra-hybrid lab's cloud: Lab Cloud's service (content/roles/cloud-tenant.sh)
+                      # Python 3 for winlab's own HSRP speaker on the router when its console
+                      # configures standby (winlab/ioshsrp.py, winlab/hsrpd.py)
+                      "python3",
+                      # copy running-config ftp: and scp: on the router's and switches' consoles
+                      # (winlab/ftpscp.py): curl for FTP, Dropbear's scp and its client for SCP
+                      "curl", "dropbear-scp", "dropbear-dbclient",
+                      # mtr for the network tools lessons on the lab's Alpine machines (apk add iperf3 mtr:
+                      # iperf3 is on the volume already, with the fabric's packages)
+                      "mtr",
+                      # the azure-hybrid lab's Azure Files on cloud01 (content/roles/cloud-azure.sh)
+                      "samba-server", "samba-common-tools"]
 # the IP phones' softphone (content/roles/ipphone.sh)
 APPLIANCE_PACKAGES += [p for p in PHONE_PACKAGES if p not in APPLIANCE_PACKAGES]
 

@@ -39,6 +39,30 @@ if [ -n "$WINLAB_NIC0_TRUNK_VIDS" ]; then
     done
 fi
 
+# Termshark (MIT), Wireshark's packet view in a terminal, from the repository
+# volume when it was fetched (winlab/termshark.py). It drives the tshark above.
+ts=$(for f in /media/*/termshark/termshark; do [ -f "$f" ] && echo "$f"; done | head -n 1)
+if [ -z "$ts" ] && d=$(blkid -L WLAPK 2>/dev/null) && [ -n "$d" ]; then
+    mkdir -p /media/wlapk
+    mountpoint -q /media/wlapk || mount -o ro "$d" /media/wlapk 2>/dev/null
+    ts=$(for f in /media/*/termshark/termshark; do [ -f "$f" ] && echo "$f"; done | head -n 1)
+fi
+if [ -n "$ts" ]; then
+    install -m 755 "$ts" /usr/local/bin/termshark.bin
+    mkdir -p /usr/share/licenses/termshark
+    cp "$(dirname "$ts")/LICENSE" /usr/share/licenses/termshark/LICENSE 2>/dev/null
+    # The serial console says vt100; Termshark draws its panes with colour.
+    cat > /usr/local/bin/termshark <<'EOF'
+#!/bin/sh
+case "$TERM" in ''|vt100|vt102|linux|dumb) export TERM=xterm-256color ;; esac
+exec /usr/local/bin/termshark.bin "$@"
+EOF
+    chmod 755 /usr/local/bin/termshark
+    log 'termshark ready: termshark -i <interface>, or termshark -r <file>'
+else
+    log 'termshark not on the repository volume (winlab images prepare fabric fetches it)'
+fi
+
 mkdir -p /var/lib/winlab/captures "$done_dir"
 date -Iseconds > "$done_dir/$role"
 log 'done; captures go in /var/lib/winlab/captures'

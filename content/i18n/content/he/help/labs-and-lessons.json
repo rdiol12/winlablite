@@ -1,0 +1,16 @@
+{
+ "Labs and lessons": "מעבדות ושיעורים",
+ "Using winlab": "שימוש ב-winlab",
+ "lab": "מעבדה",
+ "lesson": "שיעור",
+ "exercise": "תרגיל",
+ "check my work": "בדוק את העבודה שלי",
+ "grade": "ציון",
+ "guide": "מדריך",
+ "module": "מודול",
+ "progress": "התקדמות",
+ "foundation": "יסודות",
+ "quiz": "בוחן",
+ "How labs, lessons and Check my work fit together.": "איך מעבדות, שיעורים ו\"בדוק את העבודה שלי\" משתלבים יחד.",
+ "A **lab** is a whole network: its machines, its switches and the lab router. The Start menu lists the labs. Switching the desktop to another lab leaves running machines running.\n\nA **lesson** is one job inside a lab. Open the Lab guide to see the lessons in order. Each one says why it matters, what to do, which machines it needs and how much memory they take.\n\n- **Start these machines** boots only the machines the lesson uses, plus the domain controller they depend on.\n- Every lab has a **foundation** lesson first: its machines are fresh installs, and you give them addresses, build the domain and join the members yourself.\n- **Check my work** runs small checks inside the machines and says which parts pass. It never changes anything.\n- Lessons end with a few recall questions, and your progress is kept on this PC.\n\nFrom a command prompt: `winlab learn list`, `winlab learn show <lesson>`, `winlab learn start <lesson>` and `winlab exercise grade <exercise>`.": "**מעבדה** היא רשת שלמה: המכונות שלה, המתגים שלה ונתב המעבדה. תפריט התחל מציג את המעבדות. העברת שולחן העבודה למעבדה אחרת משאירה מכונות פועלות במצב פעיל.\n\n**שיעור** הוא משימה אחת בתוך מעבדה. פתח את מדריך המעבדה כדי לראות את השיעורים לפי הסדר. כל אחד מסביר למה הוא חשוב, מה לעשות, אילו מכונות הוא צריך וכמה זיכרון הן תופסות.\n\n- **הפעל את המכונות האלה** מאתחל רק את המכונות שהשיעור משתמש בהן, ואת בקר התחום שהן תלויות בו.\n- לכל מעבדה יש קודם שיעור **foundation** (יסודות): המכונות שלו הן התקנות חדשות, ואתה בעצמך נותן להן כתובות, בונה את התחום ומצרף את החברים.\n- **בדוק את העבודה שלי** מריץ בדיקות קטנות בתוך המכונות ואומר אילו חלקים עוברים. הוא לעולם לא משנה דבר.\n- שיעורים מסתיימים בכמה שאלות חזרה, וההתקדמות שלך נשמרת במחשב הזה.\n\nמשורת פקודה: `winlab learn list`, `winlab learn show <lesson>`, `winlab learn start <lesson>` ו-`winlab exercise grade <exercise>`."
+}

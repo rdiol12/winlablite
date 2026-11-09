@@ -1,0 +1,80 @@
+{
+ "title": "من يُثقل خادم الملفات؟",
+ "summary": "خادم الملفات بطيء والمكتب مشغول: اقرأ الحمل باستخدام Resource Monitor وGet-SmbSession وGet-SmbOpenFile وعدّادات الأداء، ثم اعثر على الشخص والمهمة وراءه.",
+ "why": "\"محرك K: بطيء اليوم\" من الاتصالات التي يتلقاها كل مسؤول، والجواب لا يكون تقريباً أبداً \"اشترِ خادماً أكبر\". شيء ما\nأو شخص ما يستخدمه أكثر من المعتاد: ماسح ضوئي يحفظ كل صفحة كملف جديد، أو اجتماع مسجّل نُسخ إلى مجلد القسم ثم إلى مجلد\nشخصي، أو أداة مزامنة عالقة في حلقة. المهمة هي الانتقال من \"بطيء\" إلى اسم وسبب، مع أدلة، قبل أن يلمس أحد أي إعداد.\n\nلدى Windows كل ما يلزم لذلك على الخادم نفسه. يُظهر Resource Monitor الملفات التي تُقرأ وتُكتب الآن ومن المتصل بالمنفذ\n445. ويسرد Get-SmbSession كل جلسة عميل مع حسابها وجهازها، وGet-SmbOpenFile كل ملف مفتوح ومن يفتحه. وتقيس عدّادات أداء\nSMB Server البايتات لكل مشاركة ولكل جلسة، ويحفظها سجل العدّادات لتتمكن من إظهار شكل فترة ما بعد الظهر. والملفات نفسها\nتقول الباقي: حجمها، ومتى كُتبت، ومالكها، أي الحساب الذي أنشأها.\n\nفي هذا المختبر الحمل حقيقي: الموظفون الذين أدخلتهم يعملون على خادم الملفات طوال اليوم (نافذة المكتب)، وفي فترة ما بعد\nظهر مزدحمة ينسخ بعضهم ملفات مسح ضوئي وتسجيلات كبيرة إلى مجلد قسمهم ومنه إلى مجلدهم الشخصي. تكتشف من، من الخادم، كما\nكنت ستفعل في العمل.",
+ "concepts": [
+  "Resource Monitor (resmon): تسمّي علامة التبويب Disk الملفات التي تُقرأ وتُكتب (تظهر كتابات SMB تحت System)، وتُظهر قائمة TCP Connections في علامة التبويب Network من المتصل بالمنفذ 445",
+  "Get-SmbSession: صف لكل جلسة عميل مع ClientUserName وClientComputerName وNumOpens ومدة وجودها",
+  "Get-SmbOpenFile: كل ملف يبقيه عميل مفتوحاً على الخادم، مع Path وClientUserName؛ ويغلق Close-SmbOpenFile واحداً منها، ونادراً ما يكون ذلك الخطوة الأولى الصحيحة",
+  "مجموعتا العدّادات SMB Server Shares وSMB Server Sessions: Data Bytes/sec وRead Bytes/sec وWrite Bytes/sec لكل مشاركة ولكل جلسة",
+  "سجل العدّادات (Data Collector Set) المُنشأ بـ logman يحفظ العيّنات في ملف .blg: دليل على شكل الحمل، يُقرأ مجدداً بـ Import-Counter أو Performance Monitor",
+  "مالك الملف (Get-Acl ... .Owner) هو الحساب الذي أنشأه: الملفات الكبيرة الحديثة ومالكوها يشيرون إلى الشخص؛ واسم الملف ومجلده يشيران إلى المهمة"
+ ],
+ "steps": [
+  "قبل أن تبدأ: يجب أن يكون الموظفون يعملون على fs01 (الدرس onboard-new-starters: الحسابات، ومجلدات الأقسام في مشاركة Company، والمجلدات الشخصية، وكلمات المرور الأولى المكتوبة في المكتب > قائمة الموظفين). في نافذة المكتب فعّل يوم العمل واجعله فترة ما بعد ظهر مزدحمة: يوم مزدحم مفعّل، وساعة المختبر عند حفظ نهاية اليوم (winlab clock jump 16:30 في يوم عمل). تصل النسخ الكبيرة حينها.",
+  "على fs01، ابدأ بالدليل أولاً، سجل عدّادات لحمل خادم الملفات كل 15 ثانية: logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" \"\\PhysicalDisk(*)\\Disk Bytes/sec\" \"\\Processor(_Total)\\% Processor Time\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad، ثم logman start FileServerLoad. ويُظهره logman query FileServerLoad بحالة Running.",
+  "انظر مباشرة: Get-Counter -Counter '\\SMB Server Shares(*)\\Data Bytes/sec' -SampleInterval 5 -MaxSamples 6. النسخة الأكثر انشغالاً هي المشاركة التي يُثقل عليها (Company، أو Home$ حين تستمر النسخ إلى المجلدات الشخصية).",
+  "من المتصل: Get-SmbSession | Sort-Object NumOpens -Descending | Format-Table ClientUserName, ClientComputerName, NumOpens, SecondsExists. شغّله عدة مرات خلال الدقائق المزدحمة: تأتي الجلسات وتذهب بينما يعمل الناس.",
+  "ما الذي يبقونه مفتوحاً: Get-SmbOpenFile | Format-Table ClientUserName, Path -AutoSize. تظهر عملية النسخ الكبيرة الجارية كشخص واحد يفتح ملفاً كبيراً واحداً في مجلد قسمه.",
+  "Resource Monitor: شغّل resmon على fs01. في علامة التبويب Disk، يسمّي Disk Activity مرتباً حسب Write (B/sec) الملفات التي تُكتب الآن؛ وفي علامة التبويب Network، تسرد TCP Connections على المنفذ المحلي 445 العملاء ومقدار ما يرسله كل منهم.",
+  "دع الملفات تتكلم: Get-ChildItem -Path D:\\Shares -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round($_.Length / 1MB, 1)}}, LastWriteTime, @{n='Owner';e={(Get-Acl -LiteralPath $_.FullName).Owner}}. الملفات الكبيرة الحديثة ومالكها هم الشخص الذي تبحث عنه؛ واسم الملف يقول ما هي المهمة.",
+  "طابق بينها: حساب المالك موجود في ClientUserName في Get-SmbSession، وجهاز العميل هو الكمبيوتر الذي يجلس إليه (Resolve-DnsName على عنوانه إن أظهرت الجلسة عنواناً)، ويقول سجل نافذة المكتب ما كان يفعله في تلك الدقيقة.",
+  "دوّن ذلك على fs01 في C:\\winlab\\hammering.txt، حقيقة واحدة في كل سطر: account <their sAMAccountName>, pc <the computer they work from>, file <the full path of the big file on fs01>, job <what they were doing, in a few words>.",
+  "أوقف السجل واقرأه مجدداً: logman stop FileServerLoad; Import-Counter -Path (Get-ChildItem C:\\PerfLogs -Recurse -Filter 'FileServerLoad*.blg' | Select-Object -First 1).FullName | ForEach-Object CounterSamples | Where-Object Path -like '*smb server shares*' | Sort-Object CookedValue -Descending | Select-Object -First 5 Timestamp, InstanceName, CookedValue. أو افتح ملف .blg في Performance Monitor. ثم اضغط تحقق من عملي."
+ ],
+ "pitfalls": [
+  "إغلاق الجلسات أو الملفات المفتوحة ليعود الخادم سريعاً: يفقد الشخص عمله ويعيده بعد خمس دقائق. اكتشف أولاً؛ فالإصلاح كلمة معه، أو حصة، أو نقل المهمة، لا Close-SmbSession.",
+  "نظرة واحدة ليست دليلاً. تتغير الجلسات والملفات المفتوحة كل بضع ثوانٍ؛ وسجل العدّادات خلال الفترة المزدحمة هو ما تعرضه على المدير.",
+  "Get-SmbSession المشغَّل مرة واحدة، في اللحظة الخطأ، لا يُظهر شيئاً: نسخ بضعة ميغابايتات ينتهي في ثوانٍ. راقب خلال الدقائق المزدحمة، واستخدم مالكي الملفات وأوقاتها لما حدث بالفعل.",
+  "مالك الملف الذي كتبه مسؤول هو Administrators، لا الشخص: الملفات التي كتبها الموظفون بأنفسهم هي وحدها التي تسمّيهم.",
+  "نسخ العدّادات لا توجد إلا ما دام شيء يستخدمها: تظهر نسخة SMB Server Sessions مع الجلسة وتذهب معها."
+ ],
+ "verify": [
+  "من المتصل بخادم الملفات الآن",
+  "الملفات المفتوحة",
+  "أكبر الملفات على المشاركات ومالكوها",
+  "سجل العدّادات"
+ ],
+ "quiz": [
+  {
+   "q": "على خادم الملفات، أي cmdlet يسرد كل جلسة عميل مع حسابها وجهازها؟",
+   "answer": "Get-SmbSession",
+   "wrong": [
+    "Get-SmbShare",
+    "Get-NetTCPConnection -LocalPort 3389",
+    "Get-SmbMapping"
+   ],
+   "why": "يُظهر Get-SmbSession ClientUserName وClientComputerName لكل جلسة؛ أما Get-SmbMapping فهو نظرة العميل إلى محركاته."
+  },
+  {
+   "q": "أي مجموعة عدّادات تقيس البايتات لكل مشاركة على خادم ملفات SMB؟",
+   "answer": "SMB Server Shares (Data Bytes/sec لكل مشاركة)",
+   "wrong": [
+    "SMB Client Shares",
+    "Network Adapter(*)\\Bytes Total/sec",
+    "LogicalDisk(*)\\% Free Space"
+   ],
+   "why": "لـ SMB Server Shares نسخة لكل مشاركة؛ وSMB Client Shares هو جانب العميل، وعدّادات المحوّل لا تُقسَّم حسب المشاركة."
+  },
+  {
+   "q": "ظهر ملف بحجم 12 MB في مجلد Finance قبل عشر دقائق. ما الذي يسمّي الحساب الذي كتبه؟",
+   "answer": "مالكه: (Get-Acl -LiteralPath <file>).Owner",
+   "wrong": [
+    "قيمة LastAccessTime الخاصة به",
+    "أذونات المشاركة",
+    "Get-SmbShare -Name Finance"
+   ],
+   "why": "يصبح الحساب الذي ينشئ الملف مالكه، إلا إذا كان مسؤولاً، فملفاته مملوكة لـ Administrators."
+  },
+  {
+   "q": "لماذا تبدأ سجل عدّادات قبل أن تبدأ البحث؟",
+   "answer": "تتغير الجلسات والملفات المفتوحة كل ثانية؛ والسجل هو الدليل على الفترة المزدحمة كلها",
+   "wrong": [
+    "لا يعمل Get-SmbSession إلا أثناء تشغيل سجل",
+    "دونه تُصفَّر العدّادات",
+    "يحتاج إليه Resource Monitor"
+   ],
+   "why": "يحفظ السجل المُنشأ بـ logman العيّنات في ملف .blg يمكنك قراءته مجدداً بـ Import-Counter أو عرضه في Performance Monitor."
+  }
+ ]
+}

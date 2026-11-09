@@ -62,6 +62,30 @@ def pinned_ports(lab_name: str) -> dict[str, dict]:
     return dict(_load(lab_name).get("ports", {}))
 
 
+def last_ports(lab_name: str) -> dict[str, int]:
+    """The port each machine's card dials, from the router's last record,
+    running or not: what a restarted router must listen on again for the
+    machines still running to find it."""
+    try:
+        data = json.loads(pins_path(lab_name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {label: int(p["port"]) for label, p in (data.get("ports") or {}).items() if "port" in p}
+
+
+def keep_ports(plan, ports: dict[str, int]) -> None:
+    """Puts a new router's ports on the numbers the running machines dial
+    (last_ports); a card none of them has gets a number none of them uses."""
+    used = {ports[l.label] for l in plan.ports if l.label in ports}
+    for link in plan.ports:
+        if link.label in ports:
+            link.port = ports[link.label]
+            continue
+        while link.port in used:
+            link.port = 29000 + ((link.port - 29000 + 1) % 2000)
+        used.add(link.port)
+
+
 def pinned_vids(lab_name: str) -> dict[str, int]:
     return {k: int(v) for k, v in _load(lab_name).get("vids", {}).items()}
 
@@ -118,6 +142,11 @@ def _wlan_hash(plan) -> str:
     return render_hash(plan)
 
 
+def _dark(plan) -> dict:
+    from .netplan import dark_svis
+    return dark_svis(plan)
+
+
 def snapshot(plan, pid: int, slots: int = 0) -> dict:
     return {
         "pid": pid,
@@ -134,8 +163,15 @@ def snapshot(plan, pid: int, slots: int = 0) -> dict:
         "rt": _rt_hash(plan),
 
         "pol": _pol_hash(plan),
+        "routers": _routers_hash(plan),
+        "dark": _dark(plan),
         "slots": slots,
     }
+
+
+def _routers_hash(plan) -> dict:
+    from . import routers
+    return {rid: routers.hashes(plan, rid) for rid in routers.extra(plan.lab)}
 
 
 def record(plan, pid: int) -> None:
@@ -247,8 +283,18 @@ def changes(plan, pins: dict) -> dict:
     # when an interface under them was built again or the WAN lines reset its queues.
     ph = _pol_hash(plan)
     pol = ph != pins.get("pol", ph) or bool((svis or gone or wan) and ph != hashlib.sha256(b"").hexdigest())
+    # The other routers (winlab/routers.py), each on its own hashes.
+    had = pins.get("routers", {})
+    now = _routers_hash(plan)
+    rts = [rid for rid, h in now.items() if had.get(rid) != h]
+    rts_gone = [rid for rid in had if rid not in now]
+    # A switch powered off or on: the router's interface toward it loses or
+    # gets back its link; static routes over it are set again when it does.
+    dark = _dark(plan) != pins.get("dark", {})
+    l3 = l3 or (dark and lh != hashlib.sha256(b"").hexdigest())
     return {"new": new, "moved": moved, "svis": svis, "gone": gone, "dhcp": dhcp, "links": links, "wan": wan,
-            "stp": stp, "psec": psec, "wlan": wlan, "l3": l3, "l2": l2, "rt": rt, "pol": pol}
+            "stp": stp, "psec": psec, "wlan": wlan, "l3": l3, "l2": l2, "rt": rt, "pol": pol, "dark": dark,
+            "routers": rts, "routers_gone": rts_gone}
 
 
 # ------------------------------------------------------------------ applying
@@ -256,11 +302,13 @@ def _hot_add(qmp_port: int, link, slot: int, qmp=None) -> None:
     from .qmp import Qmp
     qmp = qmp or Qmp
     from .qmp import QmpError
+    from .providers.qemu import link_qmp_args
     with qmp(qmp_port) as mon:
         # Either half may be there from an attempt that stopped short (the
-        # router never named the new port): adding it again is a no-op.
-        for cmd, args in (("netdev_add", dict(type="socket", id=f"hp{link.port}",
-                                              listen=f"127.0.0.1:{link.port}")),
+        # router never named the new port): adding it again is a no-op. The
+        # port is the same kind of cable as the router's others, so the
+        # machine's card redials it after a router restart as well.
+        for cmd, args in (("netdev_add", link_qmp_args(f"hp{link.port}", link.port)),
                           ("device_add", dict(driver="virtio-net-pci", id=f"hpd{link.port}",
                                               netdev=f"hp{link.port}", bus=f"hp{slot}",
                                               mac=fabric_mac(link.port)))):
@@ -371,6 +419,15 @@ def sync(lab, emit=lambda _l: None, runner=None, qmp=None) -> dict:
                                   e["vid"], e["tagged"])
             if link in ch["moved"]:
                 done.append(f"{link.label} -> {link.network_id or 'no cable'}")
+        # The other routers (winlab/routers.py): each brought in line on its own.
+        from . import routers
+        for rid in ch.get("routers_gone", []):
+            script += routers.gone_lines(rid)
+            done.append(f"router {rid} gone")
+        for rid in ch.get("routers", []):
+            lines, _new = routers.live_lines(plan, rid, pins.get("routers", {}).get(rid), runner)
+            script += lines
+            done.append(f"router {rid} set")
         if ch["dhcp"]:
             text = _dhcp_text(plan)
             script += (text.splitlines() if text else [
@@ -413,6 +470,12 @@ def sync(lab, emit=lambda _l: None, runner=None, qmp=None) -> dict:
             from .routerpolicy import render as pol_render
             script += pol_render(plan, reset=True)
             done.append("router tunnels, zone firewall and QoS set")
+        if script or ch.get("dark"):
+            # Last, so nothing above brings a dead switch's interface back up.
+            script += netplan.dark_lines(plan, pins.get("dark", {}))
+        if ch.get("dark"):
+            done.append("router interfaces toward switches that are off set down"
+                        if netplan.dark_svis(plan) else "router interfaces back up")
         if script:
             runner("\n".join(script), timeout=60)
     finally:

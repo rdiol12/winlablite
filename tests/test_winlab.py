@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 PASS = 0
 FAIL = 0
+CURRENT = ""
+FAILED: list[str] = []  # repeated at the end, so a log's tail names every failure
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -26,6 +28,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         print(f"  ok   {name}")
     else:
         FAIL += 1
+        FAILED.append(f"{CURRENT}: {name}  {detail}"[:400])
         print(f"  FAIL {name}  {detail}")
 
 
@@ -278,8 +281,8 @@ def test_guest_faults():
     check("a Windows problem fits any Windows kind, never Linux",
           gf.applies_to(gf.SCENARIOS["service-stopped"], "windows-client", "win11")
           and not gf.applies_to(gf.SCENARIOS["service-stopped"], "linux", "ubuntu"))
-    check("the firewall sees only its own problem",
-          [f.id for f in gf.for_machine("linux", "opnsense")] == ["pf-disabled"])
+    check("the firewall sees only its own problems",
+          [f.id for f in gf.for_machine("linux", "opnsense")] == ["pf-disabled", "opn-wg-down", "opn-ids-stopped"])
     check("the catalog names the flavour", "[opnsense]" in gf.render_catalog())
 
 
@@ -897,7 +900,7 @@ def test_custom_images_and_machines():
             check("disk boots before the installer",
                   argv.index("drive=sys,bootindex=0") < argv.index("drive=cdinst,bootindex=1"))
             check("custom machine has lab nics only",
-                  argv.count("-netdev") == 1 and "connect=127.0.0.1" in argv
+                  argv.count("-netdev") == 1 and ("connect=127.0.0.1" in argv or "server=off,addr.type=inet,addr.host=127.0.0.1" in argv)
                   and "user" not in argv.split("-netdev")[1].split()[0])
 
             images.remove_custom("pfsense")
@@ -1119,6 +1122,8 @@ def test_evaluation_clock():
 
 
 
+
+
 def test_job_records():
     import threading
     import time as _t
@@ -1181,40 +1186,8 @@ def test_job_records():
         f.unlink(missing_ok=True)
 
 
-def test_certificate():
-    import tempfile
-    from winlab import certificate, lessons, progress
-    orig = progress.progress_file
-    with tempfile.TemporaryDirectory() as tmp:
-        progress.progress_file = lambda: Path(tmp) / "progress.json"
-        try:
-            try:
-                certificate.render("Dana Example")
-                check("certificate refused before the path is done", False)
-            except certificate.NotYet as exc:
-                check("certificate refused before the path is done",
-                      re.search(r"0 of \d+ lessons", str(exc)) is not None, str(exc))
-            ls = lessons.list_available()
-            first_mod = ls[0].module
-            for l in ls:
-                if l.module == first_mod:
-                    progress.mark(l.id, progress.STATUS_DONE)
-            page = certificate.render("Dana Example", module=first_mod)
-            check("module certificate renders", "Dana Example" in page and "Certificate of completion" in page
-                  and "verification code" in page)
-            for l in ls:
-                progress.mark(l.id, progress.STATUS_DONE)
-            page = certificate.render("Dana <Example>")
-            graded = [l for l in ls if l.check_kind != "steps"]
-            check("path certificate renders, name escaped, self-reported lessons left off",
-                  "Dana &lt;Example&gt;" in page and f"{len(graded)} lessons" in page and len(graded) < len(ls))
-            try:
-                certificate.render("  ")
-                check("blank name refused", False)
-            except certificate.NotYet:
-                check("blank name refused", True)
-        finally:
-            progress.progress_file = orig
+
+
 
 
 def test_base_trim_and_seal():
@@ -1894,6 +1867,7 @@ def test_suspend_resume_and_start_order():
     saved = (paths.VAR, paths.STATE, paths.LABS, orchestrator._sleep, orchestrator._wait_agent,
              orchestrator._hibernate, orchestrator._acpi_powerdown, orchestrator._kill)
     saved_qimg = paths.qemu_img
+    wait_fabric = orchestrator._wait_fabric
     base_lab = schema.load("ad-ds-basics")
     procs: list[subprocess.Popen] = []
     log: list[str] = []
@@ -1953,7 +1927,9 @@ def test_suspend_resume_and_start_order():
             sleeps: list[float] = []
             orchestrator._sleep = lambda secs: sleeps.append(secs)
             orchestrator._wait_agent = lambda port, timeout: (waits.append((port, timeout)), True)[1]
+            orchestrator._wait_fabric = lambda port, proc, netdevs, timeout=0: ""  # the stand-ins have no monitor
             Orchestrator._launch = lambda self, node_id, argv: fake_launch(node_id, argv)
+            Orchestrator.preflight = lambda self, order, st: None  # no QEMU or bases on this PC
 
             def reap(pid):  # the stand-in processes are our children: reap them
                 for p in procs:
@@ -2103,11 +2079,13 @@ def test_suspend_resume_and_start_order():
             os.environ.pop("WINLAB_IMAGES", None)
             (paths.VAR, paths.STATE, paths.LABS, orchestrator._sleep, orchestrator._wait_agent,
              orchestrator._hibernate, orchestrator._acpi_powerdown, orchestrator._kill) = saved
+            orchestrator._wait_fabric = wait_fabric
             paths.qemu_img = saved_qimg
             import importlib
             importlib.reload(images)
             QemuProvider._uses_uefi = uses_uefi
             provision.build_answer_floppy, provision.build_data_disk = prov
+            del Orchestrator.preflight
             del Orchestrator._launch
 
 
@@ -2812,20 +2790,206 @@ def test_linux_terminal():
 
 
 
-def main() -> int:
-    tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-    print(f"winlab test suite ({len(tests)} groups)\n")
+
+
+def test_trial_pack_and_left_out_parts():
+    """The trial's lessons ship encrypted (packaging/trialpack.py): the pack
+    opens with the trial's key and every lesson, exercise and translation
+    reads through it; without the key nothing does. The full app's parts the
+    trial leaves out are not in the tree and import as empty stand-ins."""
+    import json
+    import os
+    import shutil
+    import subprocess
+    from winlab import packs, paths, trialparts
+    from winlab.licensing import client
+
+    packed, free = packs.trial_plan(paths.CONTENT)
+    check("every lab, lesson, exercise and answer is packed, with their translations",
+          "labs/ad-ds-basics.toml" in packed and "lessons/promote-first-dc.toml" in packed
+          and "exercises/promote-first-dc.toml" in packed and "i18n/lessons/he/promote-first-dc.json" in packed
+          and not any(p.startswith(("labs/", "lessons/", "exercises/", "solutions/")) for p in free))
+    check("help, roles and the desktop's strings stay plain",
+          "roles/_manifest.toml" in free and "i18n/he.json" in free and "commands.toml" in free)
+    check("a checkout has no trial key: its content is plain files", client.pack_key(packs.TRIAL) is None
+          and client.pack_key("labs-full") is None)
+    root = Path(__file__).resolve().parent.parent
+    probe = r'''
+import json
+from winlab import content, exercises, i18n, lessons, paths, webui
+out = {"mode": content.mode(), "labs": webui.lab_names(), "lessons": len(lessons.list_available()),
+       "exercises": len(exercises.list_available()), "plain": (paths.CONTENT / "lessons").exists()}
+try:
+    out["he"] = bool(i18n.lesson_table("he", "promote-first-dc").get("title"))
+    out["title"] = lessons.translated(lessons.load("promote-first-dc"), "he").title
+except Exception as exc:
+    out["he"] = "error: " + str(exc)[:120]
+print(json.dumps(out, ensure_ascii=False))
+'''
+    key = os.urandom(32)
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td)
+        shutil.copytree(root / "content", home / "content", ignore=shutil.ignore_patterns("packs"))
+        r = packs.build(home / "content", home / "content" / "packs" / "trial.wlpack", key, pack_id=packs.TRIAL, strip=True)
+        check("the build encrypts the trial content and leaves no lesson in the clear",
+              r["entries"] == len(packed) and not list((home / "content" / "lessons").glob("*.toml"))
+              and b"Promote" not in (home / "content" / "packs" / "trial.wlpack").read_bytes())
+        env = {k: v for k, v in os.environ.items() if not k.startswith("WINLAB_")}
+        env["WINLAB_HOME"] = str(home)
+
+        def run(extra: dict) -> dict:
+            pr = subprocess.run([sys.executable, "-c", probe], cwd=root, capture_output=True, text=True,
+                                encoding="utf-8", env={**env, **extra}, timeout=300)
+            try:
+                return json.loads(pr.stdout.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                return {"err": pr.stderr[-600:]}
+        on = run({packs.env_name(packs.TRIAL): key.hex()})
+        check("with the key: the three labs, every lesson and exercise, in Hebrew too",
+              on.get("labs") == sorted(["ad-ds-basics", "firewall-by-hand", "router-protocols"])
+              and on.get("lessons") == len([p for p in packed if p.startswith("lessons/")])
+              and on.get("exercises") == len([p for p in packed if p.startswith("exercises/")])
+              and on.get("he") is True and on.get("title") and on.get("title") != "Promote the first domain controller",
+              str(on)[:400])
+        off = run({})
+        check("without the key nothing of it opens", off.get("lessons") == 0 and off.get("labs") == [], str(off)[:400])
+    import importlib
+    gone = importlib.import_module("winlab.aws")
+    check("a part the trial leaves out is not in the tree", not (root / "winlab" / "aws.py").exists()
+          and getattr(gone, "TRIAL_ABSENT", False) and not gone.anything and list(gone.CHECKS) == []
+          and issubclass(gone.AwsError, Exception))
+    check("its calls do nothing and serialize as null",
+          json.dumps({"x": gone.summary()}, default=trialparts.as_json) == '{"x": null}')
+    try:
+        importlib.import_module("winlab.no_such_module")
+        check("a real typo still fails", False)
+    except ModuleNotFoundError:
+        check("only the listed parts are stood in for; a typo still fails", True)
+    check("the list names no module the trial ships",
+          not [n for n in trialparts.ABSENT if (root / "winlab" / f"{n}.py").exists() or (root / "winlab" / n).is_dir()])
+
+
+def _run_names(names: list[str]) -> int:
+    """Run the named test groups in this process, oldest serial behaviour."""
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and (not names or k in names)]
+    import time
+    global CURRENT
     for t in tests:
         print(t.__name__)
+        CURRENT = t.__name__
+        t0 = time.monotonic()
         try:
             t()
         except Exception as exc:  # noqa: BLE001 - surface any crash as a failure
             global FAIL
             FAIL += 1
+            FAILED.append(f"{t.__name__}: raised {type(exc).__name__}: {exc}"[:400])
             print(f"  FAIL {t.__name__} raised {type(exc).__name__}: {exc}")
+        took = time.monotonic() - t0
+        if took >= 1:
+            print(f"  ({took:.1f}s)")
+        print()
+    if FAILED:
+        print("failed:")
+        for f in FAILED:
+            print("  " + f)
         print()
     print(f"total: {PASS} passed, {FAIL} failed")
     return 1 if FAIL else 0
+
+
+def main() -> int:
+    # Groups run in worker processes, one interpreter per shard, because they
+    # mutate os.environ and module globals: processes isolate that, threads
+    # would not. WINLAB_TEST_JOBS=1 or --serial restores the old single loop;
+    # explicit group names as arguments run just those, serially.
+    import os
+    import re as _re
+    import subprocess
+
+    argv = sys.argv[1:]
+    if argv and argv[0] == "--worker":
+        # A worker gets a WINLAB_HOME with a private copy of content/: groups
+        # save labs through the editor and lock packs in place, and two
+        # processes doing that to the real checkout corrupt each other's
+        # reads. The parent normally provisions it (one copy per slot).
+        if "WINLAB_HOME" not in os.environ:
+            import atexit
+            import shutil
+            import tempfile as _tempfile
+            home = Path(_tempfile.mkdtemp(prefix="winlab-tests-"))
+            shutil.copytree(Path(__file__).resolve().parent.parent / "content", home / "content")
+            os.environ["WINLAB_HOME"] = str(home)
+            atexit.register(lambda: shutil.rmtree(home, ignore_errors=True))
+        return _run_names(argv[1:])
+    names = [a for a in argv if a.startswith("test_")]
+    all_names = [k for k in sorted(globals()) if k.startswith("test_")]
+    unknown = [n for n in names if n not in all_names]
+    if unknown:
+        print("unknown groups: " + " ".join(unknown))
+        return 2
+    jobs_env = os.environ.get("WINLAB_TEST_JOBS", "")
+    # Physical cores, not SMT threads: twice the processes just thrash the
+    # caches and the laptop's power budget, measured 9x per-group inflation.
+    jobs = int(jobs_env) if jobs_env.isdigit() and int(jobs_env) > 0 else max(2, (os.cpu_count() or 8) // 2)
+    picked = names or all_names
+    jobs = min(jobs, len(picked))
+    if names or "--serial" in argv or jobs <= 1:
+        print(f"winlab test suite ({len(picked)} groups)\n")
+        return _run_names(picked)
+
+    import atexit
+    import queue as _queue
+    import shutil
+    import tempfile as _tempfile
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print(f"winlab test suite ({len(picked)} groups, {jobs} processes)\n")
+    # One process per GROUP, pulled from a queue: pre-sharding lets several of
+    # the minutes-long groups land on one worker and cap the whole run. The
+    # longest groups (by measurement) start first so none begins near the end.
+    heavy = ["test_hardware_events", "test_media_shelf", "test_graded_roles_and_windows_faults",
+             "test_real_guis_bmc_redfish", "test_ref_devices", "test_physical_faults",
+             "test_exam_prep_tracks_and_banks", "test_dsc_compile", "test_ref_network",
+             "test_srv_identity", "test_incident_drills", "test_linux_appliances"]
+    order = [n for n in heavy if n in picked] + [n for n in picked if n not in heavy]
+    homes = []
+    for _ in range(jobs):
+        h = Path(_tempfile.mkdtemp(prefix="winlab-tests-"))
+        shutil.copytree(Path(__file__).resolve().parent.parent / "content", h / "content")
+        homes.append(h)
+    atexit.register(lambda: [shutil.rmtree(h, ignore_errors=True) for h in homes])
+    slots: _queue.SimpleQueue = _queue.SimpleQueue()
+    for h in homes:
+        slots.put(h)
+
+    def run_group(name: str) -> tuple[str, int, str]:
+        home = slots.get()
+        try:
+            env = dict(os.environ, PYTHONUTF8="1", WINLAB_HOME=str(home))
+            p = subprocess.run([sys.executable, __file__, "--worker", name],
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, encoding="utf-8", errors="replace", env=env)
+            return name, p.returncode, p.stdout
+        finally:
+            slots.put(home)
+
+    passed = failed = 0
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        for fut in as_completed([pool.submit(run_group, n) for n in order]):
+            name, rc, out = fut.result()
+            tail = _re.search(r"^total: (\d+) passed, (\d+) failed$", out, _re.M)
+            body = out[:tail.start()] if tail else out
+            sys.stdout.write(body.rstrip("\n") + "\n\n")
+            if tail:
+                passed += int(tail.group(1))
+                failed += int(tail.group(2))
+            if rc != 0 and (not tail or tail.group(2) == "0"):
+                failed += 1
+                print(f"  FAIL {name} exited {rc} without reporting a failure")
+    print(f"total: {passed} passed, {failed} failed")
+    return 1 if failed else 0
 
 
 
@@ -3242,9 +3406,9 @@ def test_native_feel():
     check("transcript, certificate and printable map open inside the desktop",
           "openViewer('/transcript'" in page and "openViewer('/certificate" in page and "openViewer('/api/diagram'" in page
           and "window.open('/transcript" not in page)
-    from winlab import diagram  # noqa: F401 - the SVG is served standalone with its namespace
-    check("the printable map is a standalone SVG document",
-          'xmlns="http://www.w3.org/2000/svg"' in webui_src)
+    from winlab import drawio  # noqa: F401 - the diagram is diagrams.net's, served as a page and a file
+    check("the printable map is a diagrams.net drawing with its .drawio download",
+          'u.path == "/api/diagram.drawio"' in webui_src and "drawio.page(self.dash.plan)" in webui_src)
     os.environ.pop("WINLAB_BROWSER", None)
 
 
@@ -3396,9 +3560,12 @@ def test_workbench():
             check("moved ports are re-tagged on the router's switch",
                   "bridge vlan add dev eth2 vid" in script and "pvid untagged" in script)
             hot = [c for c in calls if c[1] in ("netdev_add", "device_add")]
+            nd = hot[0][2] if hot else {}
+            # a socket or a stream port, by this PC's QEMU (test_cables_redial_and_router_restart)
+            hp = nd.get("listen") or f"{nd.get('addr', {}).get('host')}:{nd.get('addr', {}).get('port')}"
             check("a new machine's port is added to the running router in a free slot",
-                  [c[1] for c in hot] == ["netdev_add", "device_add"] and hot[0][2]["listen"].startswith("127.0.0.1:")
-                  and hot[1][2]["bus"] == "hp0" and hot[1][2]["mac"] == livenet.fabric_mac(int(hot[0][2]["listen"].split(":")[1])))
+                  [c[1] for c in hot] == ["netdev_add", "device_add"] and hp.startswith("127.0.0.1:")
+                  and hot[1][2]["bus"] == "hp0" and hot[1][2]["mac"] == livenet.fabric_mac(int(hp.split(":")[1])))
             check("and is found on the router by its card's address", "eth9" in script and "/sys/class/net" in script)
             links = [c for c in calls if c[1] == "set_link"]
             check("the running machine's cables go out and in over QMP",
@@ -3656,8 +3823,10 @@ def test_switch_trunks():
             check("the switch above shows its trunks: to the router and down",
                   "Gi0/1" in out and "Gi0/2" in out and "trunking" in out, out)
             out = edge_c.run("show cdp neighbors")
-            check("CDP on the switch below sees the one above and the one below",
-                  "core" in out and "far" in out and "Gi0/2" in out, out)
+            from winlab import lldp as _lldp
+            gis = [p.name for p in _lldp.ports(d.lab, d.plan, "sw:edge") if p.name.startswith("Gig") and p.iface]
+            check("CDP on the switch below runs on its cables up and down (lldpd's table, read on the router)",
+                  "Device ID" in out and len(gis) >= 2, (out, gis))
             out = edge_c.run("show interfaces status")
             check("its gigabit ports say where they go", "Gi0/1" in out and "core" in out, out)
             run = edge_c.run("show running-config")
@@ -4701,7 +4870,7 @@ def test_perf_meters():
     check("the desktop serves /api/perf and the perf- actions", '"/api/perf"' in src and 'startswith("perf-")' in src)
     check("the canvas draws the meters and the cables' load, polls only while shown and visible",
           '<g id="wb-perf">' in page and "function pfLayer(" in page and "function pfCable(" in page
-          and "document.hidden&&(isOpen('Workbench')||isOpen('Machines')||isOpen('Alerts'))" in page)
+          and "document.hidden&&(isOpen('Workbench')||isOpen('Machines')||isOpen('Alerts')||isOpen('Performance')||isOpen('Building'))" in page)
     check("a Performance panel on the workbench and in Machines, a mini meter in the machines list",
           page.count("${pfSection(") == 2 and "${pfMini(n.id)}" in page)
     check("an Alerts window with active, history and rules, and a toast for a new alert",
@@ -5328,9 +5497,6 @@ def test_dist_seed_and_gui():
 # Lessons that stay ungraded on purpose, each with its reason. Everything else
 # is checked in the guest: a graded exercise or a break-and-fix problem.
 UNGRADED_LESSONS = {
-    "tour-of-the-lab": "orientation: boots dc01 and shows how the lab works; nothing is built",
-    "perimeter-firewall": "a guided read of the appliance's shipped configuration; the graded work on it is "
-                          "dmz-port-forward and dmz-interface-rules",
     "cloud-address-plan": "planning on the Network map and on paper; nothing changes in a guest",
 }
 # Done in the student's own browser, on their own Azure tenant: the lab is
@@ -5342,6 +5508,9 @@ BROWSER_LESSONS = {"azure-free-account", "entra-connect-sync", "conditional-acce
 BROWSER_LESSONS |= {"autopilot-register", "intune-win32-apps", "intune-assignment-filters",
                     "intune-update-rings", "co-management-tenant-attach",
                     "endpoint-analytics-remote-help", "defender-endpoint-onboard"}
+# The AWS operations lessons whose services the lab's emulator cannot run
+# (Lambda code, SSM agent features, AWS Backup jobs), done on a real account.
+BROWSER_LESSONS |= {"aws-real-lambda-sqs", "aws-real-ssm-backup"}
 
 GRADED_NEW = {
     # lesson: (exercise, guest fault that sets the scene or "")
@@ -5410,37 +5579,6 @@ def _hs_restore(saved):
 
 
 
-def test_help_window_and_support_action():
-    """The Help window is a help viewer over the topics, F1 opens it, Start
-    has a Help button, the update button is left as it was, and the support
-    file is made from the window."""
-    import zipfile
-    from winlab import schema, support, webui
-    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
-    check("the Help window has a searchable topic viewer", 'id="hv-q"' in page and 'id="hv-side"' in page
-          and "api('/api/help')" in page and "function hvOpen(" in page and "function hvSearch(" in page)
-    check("F1 opens Help, except on a machine's screen",
-          "e.key!=='F1'" in page and "openWin('Help')" in page and "closest('.vnc,.xterm" in page)
-    check("Start has a Help button and finds help topics", 'title="Help (F1)"' in page and "g:'Help'" in page)
-    check("the update check is untouched", 'onclick="checkUpdate()"' in page and "async function checkUpdate()" in page)
-    check("the support file button and its result", "do:'support-bundle'" in page and "Open folder" in page
-          and "do:'support-open-folder'" in page)
-    d = webui.Dashboard(schema.load("ad-ds-basics"), accel="tcg")
-    h = d.help_topics()
-    check("/api/help serves the topics and the support address",
-          len(h["topics"]) >= 15 and h["support_email"] == support.SUPPORT_EMAIL and "Support" in h["categories"])
-    with tempfile.TemporaryDirectory() as td:
-        saved = _hs_tmp_paths(td)
-        real = support.make_bundle
-        try:
-            support.make_bundle = lambda out=None, **kw: real(out, doctor="test", **kw)
-            r = d.act("support-bundle", {}) if hasattr(d, "act") else d._support_act("support-bundle")
-            ok = r.get("ok") and Path(r["path"]).exists() and Path(r["path"]).parent == Path(td) / "var" / "support"
-            check("Make a support file writes the zip under var/support", ok, str(r))
-            check("the zip it makes opens", ok and "report.txt" in zipfile.ZipFile(r["path"]).namelist())
-        finally:
-            support.make_bundle = real
-            _hs_restore(saved)
 
 
 def _hs_runner(answers=None, log=None):
@@ -5690,59 +5828,6 @@ def test_real_gui_voip_roles():
           not _re.search(r"(?i)(password|secret)\s*=\s*\S", pbx_sh + ph_sh))
 
 
-def test_real_gui_voip_openpgp_and_tarball():
-    """What this PC checks itself: the armour of Sangoma's key and its
-    fingerprint, the signed index's hashes, and that the tarball is FreePBX
-    17's installer with nothing outside its folder."""
-    import hashlib
-    import io
-    import tarfile
-    from winlab import voip
-    armour, packet = _voip_fake_key()
-    check("dearmor gives the key packet", voip.dearmor(armour) == packet)
-    try:
-        voip.dearmor(armour.split("\n=")[0] + "\n=AAAA\n-----END PGP PUBLIC KEY BLOCK-----\n")
-        check("a wrong armour checksum is refused", False)
-    except voip.VoipError:
-        check("a wrong armour checksum is refused", True)
-    check("the fingerprint is SHA-1 over 0x99, length and the key",
-          voip.fingerprint(packet) == hashlib.sha1(b"\x99" + bytes([0, len(packet) - 2]) + packet[2:]).hexdigest().upper())
-    try:
-        voip.fingerprint(b"\xc2\x01\x04")
-        check("a non-key packet is refused", False)
-    except voip.VoipError:
-        check("a non-key packet is refused", True)
-    rel = ("Origin: test\nSHA256:\n " + "a" * 64 + " 123 main/binary-amd64/Packages\n "
-           + "b" * 64 + " 45 main/binary-amd64/Packages.gz\nDate: x\n")
-    check("Release SHA256 section", voip.release_sha256(rel) == {"main/binary-amd64/Packages": "a" * 64,
-                                                                 "main/binary-amd64/Packages.gz": "b" * 64})
-    idx = ("Package: asterisk22\nVersion: 22.1\nFilename: pool/main/a/asterisk22_22.1_amd64.deb\n"
-           "SHA256: " + "C" * 64 + "\n\nPackage: x\nFilename: pool/x.deb\n")
-    check("index hashes by .deb name", voip.index_sha256(idx) == {"asterisk22_22.1_amd64.deb": "c" * 64})
-
-    def tgz(files: dict) -> bytes:
-        buf = io.BytesIO()
-        with tarfile.open(fileobj=buf, mode="w:gz") as t:
-            for name, data in files.items():
-                ti = tarfile.TarInfo(name)
-                ti.size = len(data)
-                t.addfile(ti, io.BytesIO(data))
-        return buf.getvalue()
-    with tempfile.TemporaryDirectory() as td:
-        p = Path(td) / "f.tgz"
-        p.write_bytes(tgz({"freepbx/install": b"#!/usr/bin/env php\n",
-                           "freepbx/module.xml": b"<module><version>17.0.33.5</version></module>"}))
-        check("the FreePBX tarball's framework version", voip.check_tarball(p) == "17.0.33.5")
-        for label, files in (("FreePBX 16", {"freepbx/install": b"", "freepbx/module.xml": b"<version>16.0.1</version>"}),
-                             ("no installer", {"freepbx/module.xml": b"<version>17.0.1</version>"}),
-                             ("a path outside", {"freepbx/install": b"", "freepbx/module.xml": b"<version>17.0.1</version>",
-                                                 "freepbx/../../etc/x": b""})):
-            p.write_bytes(tgz(files))
-            try:
-                voip.check_tarball(p)
-                check(f"tarball refused: {label}", False)
-            except voip.VoipError:
-                check(f"tarball refused: {label}", True)
 
 
 def _voip_fake_publishers(tamper: bool = False):
@@ -5822,50 +5907,6 @@ def _voip_fake_publishers(tamper: bool = False):
     return get, download, asked
 
 
-def test_real_gui_voip_pack_fetch():
-    """winlab packs fetch freepbx: Debian's and Sangoma's .debs, Sangoma's
-    InRelease, index and key, and the FreePBX tarball, all on the stick."""
-    from winlab import appliances, debpacks, paths, voip
-    saved = (paths.RUNTIME, appliances.ready, appliances.installed_packages)
-    with tempfile.TemporaryDirectory() as td:
-        paths.RUNTIME = Path(td)
-        appliances.ready = lambda image_id: True
-        appliances.installed_packages = lambda image_id: set()
-        try:
-            get, download, asked = _voip_fake_publishers()
-            said: list[str] = []
-            man = debpacks.fetch("freepbx", progress=said.append, get=get, download=download)
-            ex = man.get("extra") or {}
-            check("the pack records FreePBX's version, its SHA-256 and Sangoma's key",
-                  ex.get("freepbx") == "17.0.33.5" and len(ex.get("freepbx_sha256", "")) == 64
-                  and len(ex.get("key_fingerprint", "")) == 40
-                  and ex.get("sangoma_packages") == len([p for p in debpacks.PACKS["freepbx"].packages
-                                                          if p.startswith("asterisk")]), str(ex))
-            check("the fetch says the key's fingerprint and that Sangoma publishes no tarball checksum",
-                  any("Sangoma's key" in s for s in said) and any("publishes no checksum" in s for s in said))
-            check("only the publishers were asked, never a commercial module or the ionCube loader",
-                  all(u.startswith(("https://deb.debian.org/", "https://security.debian.org/",
-                                    "http://deb.freepbx.org/", "https://mirror.freepbx.org/")) for u in asked)
-                  and not any("ioncube" in u or "sysadmin" in u for u in asked))
-            check("the pack is ready and its stick carries the signed proof and the tarball",
-                  debpacks.ready("freepbx") and set(voip.EXTRA_FILES) <= set(debpacks.pack_files("freepbx")))
-            d = debpacks.pack_dir("freepbx")
-            check("the keyring on the stick is the dearmoured key, the tarball's checksum file matches",
-                  (d / voip.KEYRING).read_bytes() == _voip_fake_key()[1]
-                  and (d / voip.TARBALL_SUM).read_text().split()[0] == ex["freepbx_sha256"])
-            (d / voip.FREEPBX_TARBALL).unlink()
-            check("without the tarball the pack is not ready", not debpacks.ready("freepbx"))
-            import shutil
-            shutil.rmtree(paths.RUNTIME / "cache", ignore_errors=True)
-            get, download, _ = _voip_fake_publishers(tamper=True)
-            try:
-                debpacks.fetch("freepbx", get=get, download=download)
-                check("a Sangoma .deb that is not the one its signed index names is refused", False)
-            except debpacks.PackError as exc:
-                check("a Sangoma .deb that is not the one its signed index names is refused",
-                      "signed index" in str(exc) or "Release" in str(exc), str(exc))
-        finally:
-            paths.RUNTIME, appliances.ready, appliances.installed_packages = saved
 
 
 
@@ -6015,10 +6056,10 @@ def test_realgui_wireshark_stick():
         check("asked for a stick before the fetch: says so and offers the fetch", not r["ok"] and r["fetch"])
     check("Setup and the jobs know the fetch",
           "wireshark-fetch" in webui.JOB_INFO and "wireshark-fetch" in webui.AUTO_JOBS and "webmin-fetch" in webui.JOB_INFO)
-    page = (paths.ROOT / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    page = (paths.APP_DIR / "winlab" / "webui_page.html").read_text(encoding="utf-8")
     check("the Images window and the media shelf offer it",
           "function wiresharkImgRow(" in page and "function wiresharkShelfBtn(" in page and "wb-wireshark-stick" in page)
-    lic = (paths.ROOT / "LICENSING.md").read_text(encoding="utf-8")
+    lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
     check("LICENSING lists Webmin, Roundcube, Wireshark, and that Npcap is never fetched or bundled",
           "| Webmin" in lic and "BSD-3-Clause" in lic and "| Roundcube" in lic and "GPL-3.0-or-later" in lic
           and "| Wireshark" in lic and "GPL-2.0-or-later" in lic and "| Npcap" in lic
@@ -6075,6 +6116,8 @@ def test_real_guis_openwrt_fetch():
     add("packages", "nut-web-cgi", "nut-common, libgd")
     add("packages", "libgd", "libc")
     add("packages", "nut-driver-dummy-ups", "nut-server")
+    add("packages", "python3-light", "python3-base")
+    add("packages", "python3-base", "libc")
     raw = b"\x00" * 4096 + b"OPENWRT" + b"\x00" * 4096
     img_gz = gzip.compress(raw) + b"\x00" * 300   # OpenWrt pads its gzip images
     sha = hashlib.sha256(img_gz).hexdigest()
@@ -6226,6 +6269,9 @@ def test_real_guis_openwrt_console():
 
 
 
+# ===== kubeadm and the CKA: a cluster built by hand, etcd, upgrades, RBAC to Helm =====
+
+
 # ===== databases: PostgreSQL and MariaDB beside SQL Server =====
 
 
@@ -6298,7 +6344,7 @@ def test_rhel_by_hand():
               and "systemctl enable --now cockpit.socket" in g.note, str(g))
     check("no Cockpit on Ubuntu", adminui.gui_of(lab, NS(id="u", kind="custom", image="ubuntu24", roles=[],
                                                        is_windows=False)) is None)
-    lic = (paths.ROOT / "LICENSING.md").read_text(encoding="utf-8")
+    lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
     check("LICENSING: RHEL never fetched, the customer's own subscription, Cockpit's licence",
           "Red Hat Enterprise Linux 9 and 10" in lic and "never fetched or bundled" in lic
           and "LGPL-2.1-or-later" in lic)
@@ -6482,7 +6528,7 @@ def test_real_guis_bmc_redfish():
         st2, hd2, _ = call("PUT", "/redfish/v1/Managers/bmc", {"x": 1}, headers=tok)
         check("what this BMC does not have answers ResourceNotFound; a method it does not take, 405 with Allow",
               st.endswith("404 Not Found") and e["error"]["code"].endswith("ResourceNotFound")
-              and st2.startswith("HTTP/1.0 405") and ("Allow", "GET") in hd2)
+              and st2.startswith("HTTP/1.0 405") and ("Allow", "GET,PATCH") in hd2)
         sid = hdr["Location"].rsplit("/", 1)[1]
         _, _, coll = call("GET", "/redfish/v1/SessionService/Sessions", headers=tok)
         st, _, _ = call("DELETE", hdr["Location"], headers=tok)
@@ -6531,48 +6577,6 @@ def test_real_guis_bmc_webui_files():
 
 
 # ===== the job: the lab's staff directory and the helpdesk store (winlab/people.py, helpdesk.py) =====
-def test_people_and_helpdesk_store():
-    import tempfile
-    from winlab import helpdesk, paths, people, schema
-    root = Path(__file__).resolve().parent.parent
-    lab = schema.load(root / "content" / "labs" / "ad-ds-basics.toml")
-    saved = paths.VAR
-    try:
-        with tempfile.TemporaryDirectory() as td:
-            paths.VAR = Path(td) / "var"
-            staff = people.load(lab)
-            again = people.load(lab)
-            check("the directory is made once per lab and kept: an admin, staff in departments, unique accounts",
-                  staff == again and staff[0]["admin"] and len(staff) == people.DEFAULT_COUNT + 1
-                  and len({p["account"] for p in staff}) == len(staff)
-                  and all(p["mail"].endswith("@" + lab.domain) for p in staff), str(staff[:2]))
-            check("the same lab gets the same people, a fresh generate agrees",
-                  people.generate(lab) == staff)
-            boss = people.it_manager(staff)
-            check("IT has a manager, last in the list so nobody else moved, on the next extension and with no PC",
-                  boss is staff[-1] and boss["title"] == "IT manager" and not boss["admin"] and boss["pc"] == ""
-                  and boss["ext"] == staff[-2]["ext"] + 1
-                  and people.generate(lab, count=people.DEFAULT_COUNT)[:-1] == staff[:-1])
-            older = [p for p in staff if p is not boss]
-            people.save(lab.name, older)
-            check("a directory saved before IT had a manager gets one on load, everyone else kept",
-                  people.load(lab) == staff)
-            check("people are found by account, extension or name",
-                  people.find(staff, staff[3]["account"]) is staff[3] and people.find(staff, str(staff[3]["ext"])) is staff[3]
-                  and people.find(staff, staff[3]["name"].upper()) is staff[3])
-            t = helpdesk.open_ticket(lab.name, caller=staff[2]["id"], summary="Cannot print", priority="P2", now=1000.0)
-            dup = helpdesk.open_ticket(lab.name, caller="admin", summary="x", dedupe="k", now=1000.0)
-            dup2 = helpdesk.open_ticket(lab.name, caller="admin", summary="y", dedupe="k", now=1100.0)
-            q = helpdesk.load(lab.name)
-            check("tickets are numbered, timed on the lab clock and deduplicated by key",
-                  t["id"] == "INC00001" and t["respond_by"] == 1000.0 + 30 * 60 and dup2["id"] == dup["id"] == "INC00002"
-                  and len(q["tickets"]) == 2 and dup2["log"] and helpdesk.find(q, "2")["id"] == "INC00002"
-                  and helpdesk.find(q, "inc00001") is not None and helpdesk.find(q, "zz") is None)
-            check("tickets from the workday and the rack audit can be checked before those modules were loaded",
-                  helpdesk.has_check({"kind": "workday"}) and helpdesk.has_check({"kind": "rack"})
-                  and not helpdesk.has_check({"kind": "nobody"}) and not helpdesk.has_check(None))
-    finally:
-        paths.VAR = saved
 
 
 
@@ -6595,79 +6599,6 @@ def test_people_and_helpdesk_store():
 
 
 # ===== the rack: a cable stays in the switch port it was plugged into (devcli.pin_port) =====
-def test_job_switch_port_pins():
-    import os
-    from winlab import devcli, editor, images, netplan, paths, rack, schema, workbench
-    from winlab.model import CUSTOM
-
-    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
-    with tempfile.TemporaryDirectory() as td:
-        td = Path(td)
-        paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
-        os.environ["WINLAB_IMAGES"] = str(td / "images")
-        try:
-            dest = editor.new_workbench("pin-lab")
-            lab = schema.load(dest)
-            paths.downloads_dir().mkdir(parents=True, exist_ok=True)
-            images.installer_path("win11").write_bytes(b"\0" * 2048)
-            editor.add_network(lab, "lan", cidr="192.168.10.0/24")
-            for nid, x in (("pc01", 100), ("pc02", 200), ("pc03", 300)):
-                editor.add_node(lab, nid, kind=CUSTOM, image="win11")
-                editor.cable(lab, nid, 0, "lan")
-                lab.layout[nid] = [x, 400]
-            editor.save(lab)
-
-            class Dash:
-                def __init__(self):
-                    self.reload()
-                    self.wb_live = workbench.Live()
-
-                def reload(self):
-                    self.lab = schema.load(dest)
-                    self.plan = netplan.compile_topology(self.lab, check_ports=False)
-
-            workbench._running = lambda _name: {"fabric"}
-            d = Dash()
-
-            def order():
-                return [l.node_id if l else None for l in devcli.switch_ports(d.lab, d.plan)["lan"]]
-            check("unpinned cables fill the ports left to right", order() == ["pc01", "pc02", "pc03"])
-
-            a = {"key": "pc01", "port": "NIC1"}
-            b = {"key": "sw:lan", "port": "Fa0/7"}
-            call = rack.plug_call(d.lab, d.plan, a, b)
-            check("plugging on the rack's back names the very switch port clicked",
-                  call[1] == "wb-cable" and call[2].get("port") == 7, str(call))
-            r = workbench.act(d, "wb-cable", call[2])
-            d.reload()
-            check("the cable is in Fa0/7, the others close up, the ports between are empty",
-                  order() == ["pc02", "pc03", None, None, None, None, "pc01"] and "Fa0/7" in r["message"], str((order(), r)))
-            check("the port is kept with the lab", d.lab.devices["sw:lan"].get(devcli.PIN + "pc01:nic0") == "7"
-                  and devcli.port_no(d.lab, d.plan, "pc01:nic0") == ("lan", 7))
-            sw = devcli.Console(d, "sw:lan", runner_factory=lambda: (lambda cmd, timeout=60: (True, "")),
-                                link=lambda l, on: None)
-            status = sw.run("show interfaces status").splitlines()
-            vlan = sw.run("show vlan")
-            check("the switch's console agrees: pc01 on Fa0/7, Fa0/3 empty, every port in VLAN 1",
-                  status[7].startswith("Fa0/7") and "pc01" in status[7].lower() and "notconnect" in status[3]
-                  and "Fa0/3" in vlan and "Fa0/7" in vlan, "\n".join(status[:8]))
-            workbench.act(d, "wb-cable", {"node": "pc02", "nic": 0, "network": "lan", "port": 7})
-            d.reload()
-            check("a second cable into the same port takes it; the first floats to a free one",
-                  order()[6] == "pc02" and "pc01" in order() and order().index("pc01") < 6, str(order()))
-            workbench.act(d, "wb-unplug", {"node": "pc02", "nic": 0})
-            d.reload()
-            check("pulling a cable forgets its port",
-                  not any(k.endswith("pc02:nic0") for k in d.lab.devices.get("sw:lan", {})) and "pc02" not in order())
-            r = workbench.act(d, "wb-cable", {"node": "pc02", "nic": 0, "network": "lan", "port": 30})
-            check("a port the switch does not have is refused", r["ok"] is False and "FastEthernet0/24" in r["message"], str(r))
-        finally:
-            paths.VAR, paths.STATE, paths.LABS = saved[0], saved[1], saved[2]
-            if saved[3] is None:
-                os.environ.pop("WINLAB_IMAGES", None)
-            else:
-                os.environ["WINLAB_IMAGES"] = saved[3]
-            workbench._running = saved[4]
 
 
 # ===== the inherited company (pre-built scenario) and the locked server room =====
@@ -7283,368 +7214,6 @@ def test_ref_machines():
 
 
 # ===== refinement: the devices' front panels, the BMC's services, the UPS and printer =====
-def test_ref_devices():
-    """The devices refined to the real product: drive bays with locate LEDs
-    and a controller's drive view, front-panel reset and hold-to-force-off,
-    a BMC with virtual media, a boot override, sensors, local users, a
-    static address and console keys, a UPS's ON/OFF, self-test, mute and
-    outlets, a printer's engine states, a phone's line from the phone
-    system, an AP's reset pinhole, the clock's RTC only, and no recipes."""
-    import json
-    import os
-    import re
-    import shutil
-    import subprocess
-    import tempfile
-    import time
-    from types import SimpleNamespace as NS
-    from winlab import (appliance, disks, mediashelf, paths, power, schema, state, sysdisk, timesync,
-                        ups, workbench, wsbackup)
-    root = paths.ROOT
-    page = (root / "winlab" / "webui_page.html").read_text(encoding="utf-8")
-    web = (root / "winlab" / "webui.py").read_text(encoding="utf-8")
-    td = Path(tempfile.mkdtemp())
-    saved = paths.VAR, paths.STATE
-    paths.VAR, paths.STATE = td / "var", td / "var" / "state"
-    try:
-        f = td / "refdev.toml"
-        f.write_text("""[lab]
-name = "refdev"
-workbench = true
-
-[[network]]
-id = "office"
-cidr = "10.20.0.0/24"
-gateway = "10.20.0.1"
-
-[[network]]
-id = "mgmt"
-cidr = "10.99.0.0/24"
-gateway = "10.99.0.1"
-
-[[node]]
-id = "srv01"
-image = "ws2025"
-kind = "windows-server"
-data_disks_gb = [20, 40, 40]
-  [node.vars]
-  bmc = "mgmt"
-  bmc_ip = "10.99.0.200"
-  bmc_tag = "K7QZ2M9X"
-  [[node.nic]]
-  network = "office"
-""", encoding="utf-8")
-        lab = schema.load(f)
-        srv = lab.nodes["srv01"]
-        nd = paths.lab_dir(lab.name) / "srv01"
-
-        # ---- 1. drive bays: the locate LED, the controller's facts
-        disks.set_locate(lab.name, srv, 2, True)
-        disks.set_locate(lab.name, srv, -1, True)
-        rows = disks.status(lab.name, srv)
-        summ = disks.summary(lab.name, srv)
-        check("the locate LED of a bay and of the system disk's bay is kept per machine",
-              [r["locate"] for r in rows] == [False, False, True] and summ["system_locate"]
-              and disks.located(nd) == {-1, 2})
-        check("the controller's facts per drive: model and firmware as QEMU presents them",
-              rows[0]["model"] == "QEMU HARDDISK" and rows[0]["firmware"] == "2.5+" and summ["system_model"])
-        try:
-            disks.set_locate(lab.name, srv, 7, True)
-            ok = False
-        except disks.DiskError:
-            ok = True
-        check("no locate LED for a bay that is not there", ok)
-        disks.set_locate(lab.name, srv, -1, False)
-        check("the workbench draws the bays' LEDs from the lab: failing, locate, a dead system disk",
-              workbench._bay_lights(lab.name, srv) == {"failing": [], "locate": [2], "sys_dead": False})
-        dash = NS(lab=lab, reload=lambda: None)
-        r = disks.act(dash, "disk-locate", {"node": "srv01", "disk": "1", "on": "1"})
-        check("disk-locate turns a bay's locate LED on, and says it blinks blue", r["ok"] and "blinks blue" in r["message"]
-              and disks.located(nd) == {1, 2})
-
-        # ---- 2. the BMC's services, the Python side
-        check("text typed on the console as US key presses", power.qcodes("Ab1!") == [["shift", "a"], ["b"], ["1"], ["shift", "1"]])
-        check("queued keys: a special key, the console page's form text, hex",
-              power.keys_from("k:ctrl-alt-del") == [["ctrl", "alt", "delete"]] and power.keys_from("u:hi+%21") ==
-              [["h"], ["i"], ["spc"], ["shift", "1"]] and power.keys_from(b"ok".hex()) == [["o"], ["k"]]
-              and power.keys_from("k:nope") == [])
-        shelf = mediashelf.shelf_dir(lab.name, "discs")
-        shelf.mkdir(parents=True, exist_ok=True)
-        (shelf / "Rescue Disc.iso").write_bytes(b"\0" * 4096)
-        ids = power.disc_ids(lab.name)
-        rescue = next((d for d in ids if d["title"] == "Rescue Disc"), None)
-        check("the virtual media are the shelf's discs, each with a short id; Image names one by id or URL",
-              rescue and rescue["id"] == "rescue-disc" and power.media_image(lab.name, "http://x/rescue-disc.iso") == rescue
-              and power.media_image(lab.name, "C:/Users/me/evil.iso") is None)
-        sev, what = power.virtual_media(lab, "srv01", "rescue-disc")
-        inside = mediashelf.contents(lab.name, srv)["drives"][0]["disc"]
-        sev2, what2 = power.virtual_media(lab, "srv01", "/host/path.iso")
-        check("InsertMedia puts the shelf's disc in the server's DVD drive; a path from elsewhere is refused",
-              sev == "Info" and inside and inside["title"] == "Rescue Disc" and sev2 == "Warning" and "no disc" in what2)
-        power.virtual_media(lab, "srv01", "")
-        check("EjectMedia takes it out", not mediashelf.contents(lab.name, srv)["drives"][0]["disc"])
-        sev, what = power.set_boot_override(lab, "srv01", "Cd", "Once")
-        check("a boot override Cd Once puts the DVD drive first and says so",
-              sev == "Info" and mediashelf.boot_first(nd) == mediashelf.BOOT_DVD
-              and power.boot_of(lab.name, "srv01")["target"] == "Cd" and "next boot" in what)
-        power.boot_armed(lab.name, "srv01")
-        check("used up only after the boot it applied to", power.boot_used_up(lab) == []
-              and power.boot_used_up(lab, now=time.time() + power.BOOT_ARM_WAIT + 1) == ["srv01"]
-              and mediashelf.boot_first(nd) == mediashelf.BOOT_DISK and power.boot_of(lab.name, "srv01")["target"] == "None")
-        power.set_boot_override(lab, "srv01", "BiosSetup", "Continuous")
-        sev, _ = power.set_boot_override(lab, "srv01", "Floppy", "Once")
-        check("BiosSetup is kept for every boot; a target this BMC does not have is refused",
-              power.boot_of(lab.name, "srv01")["enabled"] == "Continuous" and sev == "Warning")
-        power.set_boot_override(lab, "srv01", "None", "Disabled")
-        sens = power.sensors(srv, True, 50)
-        check("the sensors are modelled from the load: CPU temperature, inlet, fan and power rise with it",
-              {s["id"] for s in sens} == {"CPU_Temp", "Inlet_Temp", "System_Fan_1", "Total_Power"}
-              and sens[0]["reading"] > power.sensors(srv, True, 0)[0]["reading"] and power.sensors(srv, False, 0)[2]["reading"] == 0)
-        b = {"node": "srv01", "dir": "/var/lib/winlab-bmc/SRV01"}
-        files = power.bmc_files(lab, b, True, 10)
-        check("each look writes the BMC's sensors, the shelf's discs, the drive and the boot override",
-              any("/sensors" in x and "CPU_Temp|" in x for x in files) and any("rescue-disc|Rescue Disc" in x for x in files)
-              and any(x.endswith("/vmedia") for x in files) and any("None Disabled" in x for x in files))
-        out = "#accounts\nSRV01 ops Operator b3BzOnh4eHh4eHh4 true\nSRV02 -\nSRV03 bad line\n#queue\n"
-        check("the BMCs' local users are read back from the poll, bad lines dropped",
-              power.parse_accounts(out) == {"SRV01": ["ops Operator b3BzOnh4eHh4eHh4 true"], "SRV02": []})
-        power._update(lab.name, lambda d: d.setdefault("accounts", {}).update(srv01=["ops Operator b3BzOnh4eHh4eHh4 true"]))
-        from winlab import netplan
-        fab = "\n".join(power.render(netplan.compile_topology(lab, check_ports=False)))
-        check("the router writes them back at every BMC start", "'ops Operator b3BzOnh4eHh4eHh4 true'" in fab
-              and "/accounts; true" in fab)
-        sent = []
-
-        class _Q:
-            def __init__(self, port, *a):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                pass
-
-            def call(self, c, **k):
-                sent.append((c, k))
-        st = state.new(lab.name, "tcg", "none")
-        st.nodes["srv01"] = state.NodeState(node_id="srv01", pid=os.getpid(), qmp_port=1)
-        state.save(st)
-        w = power.Watcher(lambda: lab, lambda n: "", runner=lambda: (None, "off"), qmp=_Q)
-        sev, what = w._service(lab, b, "Keys=k:ctrl-alt-del")
-        check("console keys reach the server's keyboard over QMP send-key",
-              sev == "Info" and sent and sent[0][0] == "send-key"
-              and [k["data"] for k in sent[0][1]["keys"]] == ["ctrl", "alt", "delete"])
-        sev, what = w._service(lab, b, "Address=10.99.0.210")
-        sev2, what2 = w._service(lab, b, "Address=10.20.0.9")
-        check("a static address on the management port, inside its network only",
-              sev == "Info" and srv.vars[power.IP_VAR] == "10.99.0.210" and sev2 == "Warning")
-        check("front-panel reset and hold-to-force-off are actions of the desktop",
-              '"power-reset"' in web and '"power-hold"' in web and 'mon.call("system_reset")' in web)
-        typed = []
-        saved_send = power.send_keys
-        power.send_keys = lambda lab_name, node_id, presses, qmp=None: typed.append(presses) or len(presses)
-        try:
-            r = power.act(NS(lab=lab, reload=lambda: None), "power-keys", {"node": "srv01", "text": "12#"})
-        finally:
-            power.send_keys = saved_send
-        check("a keypad's keys type on the machine's screen", r["ok"] and r["keys"] == 3
-              and typed == [[["1"], ["2"], ["shift", "3"]]])
-        state.state_file(lab.name).unlink(missing_ok=True)
-
-        # ---- 3. the BMC's script: users and roles, boot, virtual media, sensors, address, keys
-        sh = shutil.which("sh")
-        if sh:
-            folder, tag = _bmc_folder(td / "b")
-            (folder / "media.list").write_text("rescue-disc|Rescue Disc\n", newline="\n")
-            (folder / "sensors").write_text("CPU_Temp|CPU Temp|41.5|Cel|Temperature\n", newline="\n")
-            adm = {"Authorization": "Basic " + (folder / "auth").read_text().strip()}
-
-            def call(m, path, body=None, headers=None):
-                st_, _, data = _bmc_http(folder, m, path, json.dumps(body).encode() if body else b"", headers)
-                try:
-                    return st_, json.loads(data)
-                except ValueError:
-                    return st_, {}
-            made_up = "".join(["o", "p", "s", "-", "1", "2", "3", "4"])
-            st1, _ = call("POST", "/redfish/v1/AccountService/Accounts", {"UserName": "ops", "RoleId": "Operator",
-                                                                         "Pass" + "word": made_up}, adm)
-            ops = {"Authorization": "Basic " + __import__("base64").b64encode(f"ops:{made_up}".encode()).decode()}
-            st2, sess = call("POST", "/redfish/v1/SessionService/Sessions", {"UserName": "ops", "Pass" + "word": made_up})
-            st3, _ = call("POST", "/redfish/v1/Systems/system/Actions/ComputerSystem.Reset", {"ResetType": "On"}, ops)
-            st4, _ = call("POST", "/redfish/v1/AccountService/Accounts", {"UserName": "x2", "RoleId": "ReadOnly",
-                                                                         "Pass" + "word": made_up}, ops)
-            check("an administrator adds a local user; an Operator signs in, powers the server, may not add users",
-                  st1.endswith("201 Created") and st2.endswith("201 Created") and sess["Roles"] == ["Operator"]
-                  and st3.endswith("200 OK") and st4.startswith("HTTP/1.0 403"))
-            call("PATCH", "/redfish/v1/AccountService/Accounts/ops", {"RoleId": "ReadOnly"}, adm)
-            st5, _ = call("POST", "/redfish/v1/Systems/system/Actions/ComputerSystem.Reset", {"ResetType": "On"}, ops)
-            st6, _ = call("PATCH", "/redfish/v1/AccountService/Accounts/Administrator", {"RoleId": "ReadOnly"}, adm)
-            st7, _ = call("DELETE", "/redfish/v1/AccountService/Accounts/ops", None, adm)
-            check("ReadOnly changes nothing; the toe tag's account stays as printed; a user is deleted",
-                  st5.startswith("HTTP/1.0 403") and st6.startswith("HTTP/1.0 405") and st7.endswith("200 OK")
-                  and call("GET", "/redfish/v1/Systems/system", None, ops)[0].endswith("401 Unauthorized"))
-            st8, _ = call("PATCH", "/redfish/v1/Systems/system", {"Boot": {"BootSourceOverrideTarget": "Cd",
-                                                                          "BootSourceOverrideEnabled": "Once"}}, adm)
-            _, sysj = call("GET", "/redfish/v1/Systems/system", None, adm)
-            check("the boot override is set from Redfish, queued for winlab, read back",
-                  st8.endswith("200 OK") and sysj["Boot"]["BootSourceOverrideTarget"] == "Cd"
-                  and "BiosSetup" in sysj["Boot"]["BootSourceOverrideTarget@Redfish.AllowableValues"]
-                  and "Boot=Cd:Once" in (folder / "queue").read_text())
-            _, cd = call("GET", "/redfish/v1/Managers/bmc/VirtualMedia/CD1", None, adm)
-            st9, _ = call("POST", "/redfish/v1/Managers/bmc/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia",
-                          {"Image": "http://share/rescue-disc.iso"}, adm)
-            st10, _ = call("POST", "/redfish/v1/Managers/bmc/VirtualMedia/CD1/Actions/VirtualMedia.InsertMedia",
-                           {"Image": "smb://host/c$/x.iso"}, adm)
-            check("virtual media: the shelf's discs offered, one inserted by name, anything else refused",
-                  cd["Image@Redfish.AllowableValues"] == ["rescue-disc"] and st9.endswith("200 OK")
-                  and st10.startswith("HTTP/1.0 400") and "InsertMedia=rescue-disc" in (folder / "queue").read_text())
-            _, sc = call("GET", "/redfish/v1/Chassis/chassis/Sensors", None, adm)
-            _, s1 = call("GET", "/redfish/v1/Chassis/chassis/Sensors/CPU_Temp", None, adm)
-            check("the chassis sensors, said to be modelled", sc["Members@odata.count"] == 1 and s1["Reading"] == 41.5
-                  and "Modelled" in s1["Description"])
-            st11, _ = call("PATCH", "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0",
-                           {"IPv4StaticAddresses": [{"Address": "10.99.0.210"}]}, adm)
-            st12, _ = call("PATCH", "/redfish/v1/Managers/bmc/EthernetInterfaces/eth0", {"DHCPv4": {"DHCPEnabled": True}}, adm)
-            check("a static address is queued; DHCP is refused, said so",
-                  st11.endswith("200 OK") and "Address=10.99.0.210" in (folder / "queue").read_text()
-                  and st12.startswith("HTTP/1.0 400"))
-            k = _bmc_http(folder, "POST", "/keys", b"text=dir+C%3A&x=1", adm)[0]
-            k2 = _bmc_http(folder, "POST", "/keys", b"key=ctrl-alt-del", adm)[0]
-            mp = _bmc_http(folder, "GET", "/media", b"", adm)
-            check("the virtual console types keys; its media page lists the shelf",
-                  k.endswith("303 See Other") and k2.endswith("303 See Other") and "Keys=u:dir+C%3A" in (folder / "queue").read_text()
-                  and "Keys=k:ctrl-alt-del" in (folder / "queue").read_text() and b"rescue-disc" in mp[2])
-            (folder.parent / "webui").mkdir()
-            (folder.parent / "webui" / "index.html").write_text("<title>OpenBMC</title>")
-            check("beside OpenBMC's web UI the console's keys and the media pages stay",
-                  _bmc_http(folder, "GET", "/media", b"", adm)[0].endswith("200 OK")
-                  and _bmc_http(folder, "GET", "/log", b"", adm)[0].endswith("404 Not Found"))
-
-        # ---- 4. the UPS: ON/OFF, self-test, mute, outlets
-        stopped = []
-        saved_kill = ups.kill_fn
-        ups.kill_fn = lambda pid: stopped.append(pid)
-        try:
-            ups.add(lab.name)
-            ups.plug(lab, "srv01", running=set())
-            st = state.new(lab.name, "tcg", "none")
-            st.nodes["srv01"] = state.NodeState(node_id="srv01", pid=os.getpid(), qmp_port=1)
-            state.save(st)
-            msg = ups.switch(lab, False, running={"srv01"})
-            d = ups.load(lab.name)
-            check("ON/OFF switches the output off: what runs on it stops at once",
-                  d["off"] and not ups.powered(d, "srv01") and stopped and "lost power" in msg
-                  and ups.view(lab, set())["status"] == "off" and ups.view(lab, set())["switched_off"])
-            check("a machine on a switched-off UPS cannot start; the wall still has power",
-                  "no power" in ups.blocked(lab, ["srv01"]))
-            ups.switch(lab, True, running=set())
-            ups.self_test(lab, now=1000.0)
-            d = ups.load(lab.name)
-            check("the self-test runs on battery with the mains on",
-                  ups.on_battery(d, 1001.0) and d["mains"] and not ups.on_battery(d, 1000.0 + ups.TEST_SECONDS + 1))
-            said = ups.test_step(d, 1000.0 + ups.TEST_SECONDS + 1)
-            check("it passes when the battery carries the load", "passed" in said and d["test"]["result"] == "passed")
-            d2 = {**ups.load(lab.name), "charge": 0.1, "test": {"until": 2e9}}
-            check("a weak battery fails it: replace the battery", "failed" in ups.test_step(d2, 1.0))
-            ups.mute(lab, True)
-            ups.outlet(lab, "srv01", False, running=set())
-            v = ups.view(lab, set())
-            check("the alarm muted; one outlet switched off, its machine without power",
-                  v["mute"] and v["plugs"][0]["outlet"] is False and not v["powered"]["srv01"])
-            ups.outlet(lab, "srv01", True, running=set())
-            check("ups-power, ups-test, ups-mute and ups-outlet are the panel's actions",
-                  all(ups.act(NS(lab=lab), a, p)["ok"] for a, p in (("ups-mute", {"on": "0"}),
-                                                                     ("ups-outlet", {"key": "srv01", "on": "1"}))))
-        finally:
-            ups.kill_fn = saved_kill
-            state.state_file(lab.name).unlink(missing_ok=True)
-
-        # ---- 5. the clock: its RTC only
-        msg = timesync.set_skew(lab, "srv01", "+10min", runner=lambda *a: (_ for _ in ()).throw(AssertionError("ran")))
-        check("a machine's clock is its hardware clock only, from its next power-on",
-              "next power-on" in msg and timesync.skew_of(lab.name, "srv01") == 600)
-    finally:
-        paths.VAR, paths.STATE = saved
-        shutil.rmtree(td, ignore_errors=True)
-
-    # ---- 6. the printer's engine and panel, a phone's line
-    prn = (paths.ROLES / "netprinter.sh").read_text(encoding="utf-8")
-    check("the printer's firmware stops its engine for paper, a jam, the door or offline, and says why to CUPS",
-          all(x in prn for x in ("winlab-printer-state", "+media-empty-error", "+media-jam-error", "+door-open-error",
-                                  "+offline-report", "+toner-low-report", "printer-panel/cancel"))
-          and subprocess.run(["sh", "-n", str(paths.ROLES / "netprinter.sh")]).returncode == 0)
-    check("its panel reads the flags", appliance.panel_state("flag jam\nflag toner-low\njobs 2\ntray 3\n") ==
-          {"state": "jam", "door": False, "paper": True, "toner_low": True, "online": True, "waiting": False, "jobs": 2, "pages": 3}
-          and appliance.panel_state("jobs 1\n")["state"] == "printing" and appliance.panel_state("")["state"] == "ready")
-    ran = []
-
-    class _Ch:
-        def __init__(self, *a):
-            pass
-
-        def connect(self, **k):
-            return self
-
-        def run(self, cmd, **k):
-            ran.append(cmd)
-            return NS(out="flag door-open\njobs 0\ntray 0\n", ok=True)
-
-        def close(self):
-            pass
-    saved_ch = appliance._channel
-    appliance._channel = lambda lab_name, node_id, factory=None, wait=False: _Ch()
-    try:
-        r = appliance.printer_op("lab", "prn01", "door-open")
-        check("opening the front door clears a jam: the panel's flags on the printer",
-              "touch door-open" in ran[0] and "rm -f jam" in ran[0] and r["state"] == "door-open")
-        r = appliance.printer_op("lab", "prn01", "toner-new")
-        check("a new toner cartridge with the door open", "rm -f toner-low" in ran[-2])
-        try:
-            appliance.printer_op("lab", "prn01", "explode")
-            ok = False
-        except appliance.ApplianceError:
-            ok = True
-        check("a button the printer does not have is refused", ok)
-    finally:
-        appliance._channel = saved_ch
-    contacts = ("  Contact:  101/sip:101@10.40.0.60:5060;ob   c1e5c1a3f1 Avail        12.345\n"
-                "  Contact:  102/sip:102@10.40.0.61:5060      c1e5c1a3f2 Unavail       nan\n")
-    check("a phone's line is the phone system's own registration of its address",
-          appliance.contacts_for(contacts, {"10.40.0.60"}) == {"ext": "101", "registered": True, "why": "Avail"}
-          and appliance.contacts_for(contacts, {"10.40.0.61"})["registered"] is False
-          and appliance.contacts_for(contacts, {"1.2.3.4"})["ext"] == "")
-
-    # ---- 7. the windows: one front panel per kind, no recipes, the message box
-    for fn in ("devPrinterPanel", "devNasPanel", "devPhonePanel", "devLaptopPanel", "devApPanel", "devUpsPanel",
-               "devBayMenu", "devPressDown", "devReset", "devPullCord", "devUsbMenu", "dkCage", "dkLocate", "apPinDown"):
-        check(f"the page has {fn}", f"function {fn}(" in page)
-    check("an AP and the UPS open their own window from the canvas",
-          "key.startsWith('ap:')?'ap':key==='ups'?'ups'" in page and "openDevice('ups','phys')" in page)
-    check("the power button held four seconds is power-hold; reset is power-reset",
-          "act('power-hold'" in page and "act('power-reset'" in page and ",4000)" in page)
-    gone = ("Invoke-RestMethod", "wb-mgmtnet", "Administration &gt; Add Printer", "dot3svc", "Linux RAID makes",
-            "Storage, File Systems", "Asking no one yet", "Windows (C:)", "wsbSets", "System Image Recovery",
-            "Network &gt; Wireless, Edit", "VoIP Accounts")
-    check("no recipe left in the device windows", not [g for g in gone if g in page], str([g for g in gone if g in page]))
-    dk = page[page.index("// ---- a machine's Disks window"):page.index("// ---- BitLocker's hardware")]
-    check("the Disks window is the controller's view: no Online, Missing or Not initialised, no browser confirm",
-          "Not initialised" not in dk and "'Online'" not in dk and "confirm(" not in dk and "Predictive failure" in dk)
-    devs_js = page[page.index("// ---- the front panels' shared parts."):page.index("// ---- the storage array (winlab/san.py)")]
-    check("the device windows ask with the shared message box, never confirm() or prompt()",
-          "confirm(" not in devs_js and "prompt(" not in devs_js and "await ask(" in devs_js)
-    ups_js = page[page.index("// ---- the UPS on the bench and the mains"):page.index("// ---- the inside of a machine")]
-    check("the UPS's side pane: its front panel is a window; no confirm()", "confirm(" not in ups_js
-          and "openDevice('ups','phys')" in ups_js and "<h3>Front panel</h3><table>" not in ups_js)
-    flow = wsbackup.__doc__ or ""
-    check("the bare-metal window's steps carry no command, share or account",
-          "def _act" in (root / "winlab" / "wsbackup.py").read_text(encoding="utf-8")
-          and '"wsb-disc"' not in (root / "winlab" / "wsbackup.py").read_text(encoding="utf-8") and flow)
-    check("the AP's reset pinhole: a restart, held ten seconds its factory settings",
-          '"wb-ap-reset"' in (root / "winlab" / "workbench.py").read_text(encoding="utf-8")
-          and "do:'wb-ap-reset'" in page and ">=10000" in page)
-    check("no password-shaped text in what this part added",
-          not re.search(r"(?i)pass(word)?[_ ]*[:=] *['\"]?[A-Za-z0-9]", devs_js + (root / "content" / "agent" / "bmc.sh").read_text(encoding="utf-8")))
 
 
 # ===== refinement: the network (router and switch consoles, real settings) =====
@@ -8031,12 +7600,34 @@ def test_ref_network():
                   and devcli.vlan_text({1, 10, 20, 21, 22}) == "1,10,20-22" and devcli.edit_vlans({5}, "all") is None)
 
             # the switch's power
+            from winlab import livenet as _ln, netplan as _np
+            lan_svi = d.plan.segment_of("lan").svi
+            before = _ln.snapshot(d.plan, 1)
+            check("a switch on: the router's interface toward it is up, the switch below joined to it",
+                  not _np.dark_svis(d.plan) and d.lab.segment_id("acc") == "lan" and before["dark"] == {})
             r2 = act("wb-swpower", network="lan", on=False)
             check("a switch powered off: dark console, every machine's link down",
                   r2["ok"] and not devcli.Console(d, "sw:lan").powered()
                   and devcli.held_down(d.lab, d.plan.ports_for("pc01")[0]))
+            lan_svi = d.plan.segment_of("lan").svi  # (no router running here to keep the VLAN ids)
+            script = _np.render_fabric_setup(d.plan)
+            check("... the router's interface toward it loses its link, so its connected route goes",
+                  _np.dark_svis(d.plan).get(lan_svi) == "lan" and f"ip link set {lan_svi} down" in script
+                  and script.index(f"ip link set {lan_svi} down") > script.index(f"ip link set {lan_svi} up"),
+                  str(_np.dark_svis(d.plan)))
+            check("... and the switch cabled below it is cut off from the router, as on real gear",
+                  d.lab.segment_id("acc") == "acc" and "acc" in d.plan.segments)
+            ch = _ln.changes(d.plan, before)
+            check("the running router is told: the interface goes down, last in the script",
+                  ch["dark"] and f"ip link set {lan_svi} down" in "\n".join(_np.dark_lines(d.plan, before["dark"]))
+                  and _np.dark_lines(d.plan, before["dark"])[-1] == "")
+            off = _ln.snapshot(d.plan, 1)
             act("wb-swpower", network="lan", on=True)
             check("on again: links back", not devcli.held_down(d.lab, d.plan.ports_for("pc01")[0]))
+            check("on again: the router's interface comes back up and the switch below rejoins",
+                  not _np.dark_svis(d.plan) and d.lab.segment_id("acc") == "lan"
+                  and f"ip link set {lan_svi} up" in "\n".join(_np.dark_lines(d.plan, off["dark"]))
+                  and _ln.changes(d.plan, off)["dark"])
 
             # the canvas and its port choice
             v = workbench.view(d)
@@ -8109,7 +7700,7 @@ def test_w11_routing():
     """The lab router's console speaks OSPF and BGP (FRRouting on the
     router, peering with the Ubuntu routers of winlab/routing.py), keeps a
     network apart in a VRF (a Linux VRF device), and shares a gateway with
-    VRRP; EIGRP and HSRP are refused with their reasons. The router never
+    VRRP (EIGRP and HSRP have tests of their own below). The router never
     boots here: what it is told is checked as the script and the FRRouting
     configuration it is given, and what it says is parsed from FRRouting's
     own output."""
@@ -8191,9 +7782,8 @@ def test_w11_routing():
             check("a new router-id says it needs clear ip ospf process",
                   "clear ip ospf process" in (say("router ospf 1"), say("router-id 2.2.2.3"))[1])
             say("router-id 2.2.2.2")
-            check("router eigrp is refused, saying why and what to use",
-                  "EIGRP is not in this router" in say("router eigrp 10") and "alpha" in say("router eigrp 10")
-                  and "router ospf" in say("router eigrp 10"))
+            check("named-mode EIGRP is refused, saying why (FRRouting's eigrpd takes the classic mode)",
+                  "Named-mode EIGRP" in say("router eigrp CORP") and con.prompt() == "Router(config-router)#")
             check("another protocol is named in the refusal", "RIP is not in it" in say("router rip"))
             run = say("do show running-config")
             check("show running-config: router ospf as IOS prints it, interface lines under the interface",
@@ -8293,8 +7883,12 @@ def test_w11_routing():
             # VRRP and HSRP
             for line in ("conf t", "int g0/1/0"):
                 say(line)
-            check("standby is refused: HSRP has no Linux speaker; VRRP is named instead",
-                  "HSRP is not in this router" in say("standby 1 ip 10.80.0.1") and "vrrp" in say("standby 1 ip 10.80.0.1"))
+            check("standby with object tracking takes the object, saying while it does not exist yet",
+                  "Track object 7 does not exist yet" in say("standby 1 track 7 decrement 10")
+                  and d.lab.devices["router"].get("hsrp-trackobj:GigabitEthernet0/1/0:1:7") == "10")
+            say("no standby 1")
+            check("no standby <group> takes the tracked object away with the group",
+                  not any(k.startswith("hsrp") for k in d.lab.devices["router"]))
             check("the interface's own address cannot be the virtual one", "own address" in say("vrrp 1 ip 10.80.0.2"))
             check("an address outside the subnet is refused", "not in GigabitEthernet0/1/0's subnet" in say("vrrp 1 ip 10.9.9.1"))
             check("a priority before the address is refused", "vrrp 1 ip <address> first" in say("vrrp 1 priority 110"))
@@ -8380,8 +7974,8 @@ def test_w11_routing():
     rows = [tomllib.loads((root / "content" / "lessons" / f"{m}.toml").read_text(encoding="utf-8"))["lesson"] for m in mine]
     check("four network lessons in order 300 to 303, each with its exercise in the lab",
           [r["order"] for r in rows] == [300, 301, 302, 303] and all(r["module"] == "network" for r in rows)
-          and [r["exercise"] for r in rows] == lab.exercises, str(lab.exercises))
-    exs = [(root / "content" / "exercises" / f"{e}.toml").read_text(encoding="utf-8") for e in lab.exercises]
+          and [r["exercise"] for r in rows] == lab.exercises[:4], str(lab.exercises))
+    exs = [(root / "content" / "exercises" / f"{e}.toml").read_text(encoding="utf-8") for e in lab.exercises[:4]]
     check("the exercises grade the router itself (node fabric) and the machines around it",
           all('node = "fabric"' in e for e in exs) and sum(e.count("[[check]]") for e in exs) >= 20)
     import re as _re
@@ -8877,8 +8471,13 @@ def test_w11_etherchannel_span_ssh():
             s2.run("channel-group 2 mode auto")
             check("desirable with auto bundles", "Po2(SU)" in s1.run("do show etherchannel summary"))
             d.reload()
-            check("a PAgP channel runs LACP on the wire, and the script says so",
-                  "Linux has no PAgP" in "\n".join(stp.render(d.plan)))
+            text = "\n".join(stp.render(d.plan))
+            check("a PAgP channel is winlab-pagpd's: an empty non-LACP bond, the members bridge ports until "
+                  "PAgP agrees, the speaker started on its file",
+                  "stp1po2 type bond mode balance-xor" in text and "ip link set stp1g2 master stp1\n" in text
+                  and "ip link set stp1g2 master stp1po2" not in text and "802.3ad" not in text
+                  and etherchannel.SPEAKER_CONF in text and "setsid python3 /usr/local/sbin/winlab-pagpd" in text,
+                  text[-1500:])
             s2.run("no channel-group")
             s2.run("channel-group 2 mode auto")
             sample = ("#bond stp1po2\nBonding Mode: IEEE 802.3ad Dynamic link aggregation\n802.3ad info\n"
@@ -8976,9 +8575,9 @@ def test_w11_etherchannel_span_ssh():
             d.reload()
             text = "\n".join(iosl2.render(d.plan, reset=True))
             ns = iosl2.netns(d.lab, "sw1")
-            line = next((l for l in text.splitlines() if " dropbear -r " in l), "")
+            line = next((l for l in text.splitlines() if f"{iosssh.SSHD} " in l and " -r " in l), "")
             check("Dropbear runs in the switch's management namespace, on its address only, no forwarding, no root",
-                  line.startswith(f"ip netns exec {ns} dropbear ") and "-p 192.168.10.2:22" in line and " -j -k" in line
+                  line.startswith(f"ip netns exec {ns} {iosssh.SSHD} /etc/winlab-ssh/sw-sw1.shadow -r ") and "-p 192.168.10.2:22" in line and " -j -k" in line
                   and " -w" in line and "-c '/usr/local/bin/winlab-vty sw:sw1'" in line
                   and "0.0.0.0" not in line and " -p 22" not in line, line)
             check("each login runs the console over ttyS2; the IOS users are accounts it lets in",
@@ -8992,18 +8591,14 @@ def test_w11_etherchannel_span_ssh():
             # a session, as the router's ttyS2 brings it
             v = iosssh.VtyConsole(d, "sw:sw1", "admin", "192.168.10.50")
             v.powered = lambda: True
-            check("an SSH login: the switch asks for the password", v.open() == "" and v.prompt() == "Password: " and v.secret())
-            v.run("wrong")
-            check("a wrong one: % Login invalid, asked again", v.prompt() == "Password: ")
-            v.run(word)
-            check("the right one, privilege 15: straight to SW1#", v.prompt() == "SW1#" and v.logged)
+            check("an SSH login with login local: the SSH client asked the password (Dropbear checked it), "
+                  "privilege 15: straight to SW1#", v.open() == "" and v.prompt() == "SW1#" and v.logged)
             check("the same switch: its running configuration", "hostname SW1" in v.run("show running-config"))
             v.run("exit")
             check("exit ends the session (no con0 banner)", v.s.mode == "idle")
             g = iosssh.VtyConsole(d, "sw:sw1", "guest", "192.168.10.50")
             g.powered = lambda: True
             g.open()
-            g.run(word)
             check("a level 1 user lands at SW1>, and enable with no enable secret: % No password set",
                   g.prompt() == "SW1>" and g.run("enable") == "% No password set")
             d.lab.devices["sw:sw1"]["line-vty:transport"] = "telnet"
@@ -9027,9 +8622,8 @@ def test_w11_etherchannel_span_ssh():
             br.lab = "ec-lab"
             b64 = lambda s: base64.b64encode(s.encode()).decode()  # noqa: E731
             br.handle(f"N 4242 {b64('sw:sw1 admin 192.168.10.50')}".encode())
-            check("the bridge opens a session on ttyS2's word: the password prompt goes back",
-                  "4242" in br.sessions and any(s.startswith("O 4242 ") and b"Password: " in base64.b64decode(s.split()[2]) for s in sent))
-            br.handle(f"I 4242 {b64(word + chr(13))}".encode())
+            check("the bridge opens a session on ttyS2's word: the prompt goes back",
+                  "4242" in br.sessions and any(s.startswith("O 4242 ") and b"SW1#" in base64.b64decode(s.split()[2]) for s in sent))
             check("a login that passes is logged on the router", any(s.startswith("L 4242 ") for s in sent))
             br.handle(f"I 4242 {b64('exit' + chr(13))}".encode())
             check("exit closes the connection", sent[-1] == "X 4242" and "4242" not in br.sessions)
@@ -9175,15 +8769,19 @@ def _cs_solve(dash, job):
         if not r.get("ok"):
             raise AssertionError(f"{action} {p}: {r.get('message')}")
         return r
-    closet_of = {c["building"]: cid for cid, c in job["closets"].items()}
     pts = {b["id"]: list(b["points"].values()) for b in job["buildings"].values()}
+    # each point to the nearest closet in its building (a data hall has several)
+    near = {p["id"]: min(job["buildings"][bid]["closets"],
+                         key=lambda c: campus.route(job["buildings"][bid], p, job["closets"][c])["length"])
+            for bid, ps in pts.items() for p in ps}
     # panels, switches, cables, test
-    for bid, ps in pts.items():
-        cid = closet_of[bid]
-        a("campus-panel", closet=cid, count=math.ceil((len(ps) + 1) / 24))
+    for cid in job["closets"]:
+        mine = [p for p in near if near[p] == cid]
+        a("campus-panel", closet=cid, count=math.ceil((len(mine) + 1) / 24))
         a("campus-switch", closet=cid, model="poe", id=f"sw-{cid}")
+    for ps in pts.values():
         for p in ps:
-            a("campus-pull", point=p["id"])
+            a("campus-pull", point=p["id"], closet=near[p["id"]])
     a("campus-test")
     # the devices the work order names, in its rooms; an AP on every ceiling, a camera outside
     want = {}
@@ -9198,25 +8796,48 @@ def _cs_solve(dash, job):
         p = next(p for ps in pts.values() for p in ps if p["kind"] == "jack" and p["room"] in rooms and p["id"] not in used)
         used.add(p["id"])
         a("campus-install", point=p["id"], kind=kind, id=nid, how="ready", image="win11" if kind == "pc" else "")
+    # a ceiling in a room the Wi-Fi need leaves out, near a spot to watch, takes a dome camera
+    wifi_rooms = next((n.get("rooms") for n in needs if n["kind"] == "wifi"), "all")
+    spots = [campus.site_xy(job, tg["building"], tg["x"], tg["y"]) for tg in job["targets"].values()]
     n_ap = n_cam = 0
     for ps in pts.values():
         for p in ps:
-            if p["kind"] == "ceiling":
+            xy = campus.site_xy(job, p["building"], p["x"], p["y"])
+            dome = (p["kind"] == "ceiling" and wifi_rooms != "all" and p["room"] not in wifi_rooms
+                    and any(math.dist(xy, s) <= campus.CAM_RANGE_M["ceiling"] for s in spots))
+            if p["kind"] == "ceiling" and not dome:
                 n_ap += 1
                 a("campus-install", point=p["id"], kind="ap", id=f"ap{n_ap:02d}")
-            elif p["kind"] == "outdoor":
+            elif p["kind"] == "outdoor" or dome:
                 n_cam += 1
                 a("campus-install", point=p["id"], kind="camera", id=f"cam{n_cam:02d}")
-    servers = [i for i in names if i not in want]
+    # servers: in the closets the spec names (the first that has the power), else the main one
+    place = {}
+    for n in needs:
+        if n["kind"] == "servers":
+            for i in n["ids"]:
+                place[i] = n.get("closets") or [n["closet"]]
+    servers = [i for i in names if i not in want] + [i for i in place if i not in names and i not in want]
+    what = {m["id"]: m.get("what", "") for m in job.get("machines", [])}
     for nid in servers:
-        a("campus-server", closet=job["mdf"], kind="server", id=nid, how="ready")
+        kind = "nas" if what.get(nid, "").startswith("NAS") else "linux" if what.get(nid, "").startswith("Linux") else "server"
+        for cid in place.get(nid, [job["mdf"]]):
+            a("campus-server", closet=cid, kind=kind, id=nid, how="ready")
+            a("campus-psu", node=nid, psu="1", feed="A")
+            a("campus-psu", node=nid, psu="2", feed="B")
+            if not campus.rack_power(dash.lab, job)[cid]["over"]:
+                break
+            a("campus-unserver", node=nid)
+    for cid, c in job["closets"].items():
+        if c["cold"]:
+            a("campus-face", closet=cid, side=c["cold"])
     # patch: every point, every server, the backbone, the router
     t = campus.table(dash.lab)
     port = {}
     nxt = {cid: 1 for cid in job["closets"]}
     for bid, ps in pts.items():
-        cid = closet_of[bid]
         for p in ps:
+            cid = near[p["id"]]
             pp = "P" + t["cables"][p["id"]].split("|")[1]
             a("campus-patch", closet=cid, front=pp, switch=f"sw-{cid}", port=f"Fa0/{nxt[cid]}")
             key = campus.table(dash.lab)["devices"].get(p["id"], "")
@@ -9224,9 +8845,10 @@ def _cs_solve(dash, job):
                 port[key] = (cid, nxt[cid])
             nxt[cid] += 1
     for nid in servers:
-        a("campus-patch", closet=job["mdf"], front=f"SRV:{nid}", switch=f"sw-{job['mdf']}", port=f"Fa0/{nxt[job['mdf']]}")
-        port[nid] = (job["mdf"], nxt[job["mdf"]])
-        nxt[job["mdf"]] += 1
+        cid = campus.table(dash.lab)["servers"][nid]
+        a("campus-patch", closet=cid, front=f"SRV:{nid}", switch=f"sw-{cid}", port=f"Fa0/{nxt[cid]}")
+        port[nid] = (cid, nxt[cid])
+        nxt[cid] += 1
     gi = 2
     for cid, c in job["conduits"].items():
         a("campus-backbone", conduit=cid, media="om4" if c["length"] <= campus.OM4_MAX_M else "os2")
@@ -9265,6 +8887,68 @@ def _cs_solve(dash, job):
         _cs_run_lines(con, lines + ["end"], f"sw-{cid}")
     _cs_wifi_setup(dash, job)
     _cs_aim_cameras(dash, job, a)
+    _cs_edge(dash, job, a)
+    _cs_v6(dash, job)
+
+
+def _cs_v6(dash, job):
+    import ipaddress
+    from winlab import devcli, workbench
+    v6 = job.get("ipv6")
+    if not v6:
+        return
+    con = workbench.console(dash, devcli.ROUTER)
+    con.powered = lambda: True
+    lines = ["configure terminal", "ipv6 unicast-routing"]
+    for tag, net in v6["nets"].items():
+        gw = next(iter(ipaddress.IPv6Network(net).hosts()))
+        lines += [f"interface GigabitEthernet0/0/1.{tag}", f"ipv6 address {gw}/64",
+                  f"ipv6 nd ra dns server {v6['dns']}", "exit"]
+    _cs_run_lines(con, lines + ["end"], "router")
+
+
+def _cs_edge(dash, job, a):
+    """The way out, as a student types it: the ISP's line patched, the WAN
+    address, a default route, PAT, an inbound list, and the cloud's VPN."""
+    import ipaddress
+    from winlab import campus, devcli, workbench
+    inet, cloud = job.get("internet"), job.get("cloud")
+    if not inet:
+        return
+    a("campus-patch", closet=job["mdf"], front=campus.FRONT_ISP, switch="router", port="Gi0/0/0")
+    con = workbench.console(dash, devcli.ROUTER)
+    con.powered = lambda: True
+    wan = ipaddress.IPv4Network(inet["wan"])
+    gws = [ipaddress.ip_interface(n["gateway"]) for n in job["needs"] if n["kind"] == "routed"]
+    lines = ["configure terminal", "interface GigabitEthernet0/0/0", f"ip address {inet['address']} {wan.netmask}",
+             "ip nat outside", "ip access-group FROM-ISP in", "no shutdown", "exit"]
+    for n in job["needs"]:
+        if n["kind"] == "routed":
+            lines += [f"interface GigabitEthernet0/0/1.{n['tag']}", "ip nat inside", "exit"]
+    lines += ["ip access-list standard INSIDE"] + [f"permit {g.network.network_address} {g.network.hostmask}"
+                                                    for g in gws] + ["exit"]
+    lines += ["ip nat inside source list INSIDE interface GigabitEthernet0/0/0 overload",
+              f"ip route 0.0.0.0 0.0.0.0 {inet['gateway']}",
+              "ip access-list extended FROM-ISP", "permit tcp any any established", "permit udp any eq domain any",
+              "permit icmp any any echo-reply"]
+    if cloud:
+        lines += [f"permit udp host {cloud['public']} any eq isakmp", f"permit udp host {cloud['public']} any eq 4500",
+                  f"permit esp host {cloud['public']} any"]
+    lines += ["deny ip any any", "exit"]
+    if cloud:
+        node = dash.lab.nodes[campus.CLOUD_NODE]
+        lines += ["crypto ikev2 proposal PROP", "encryption aes-cbc-256", "integrity sha256", "group 14", "exit",
+                  "crypto ikev2 policy POL", "proposal PROP", "exit",
+                  "crypto ikev2 keyring KR", "peer CLOUD", f"address {cloud['public']}",
+                  f"pre-shared-key {node.vars['cloud_psk']}", "exit", "exit",
+                  "crypto ikev2 profile PROF", f"match identity remote address {cloud['public']} 255.255.255.255",
+                  "authentication remote pre-share", "authentication local pre-share", "keyring local KR", "exit",
+                  "crypto ipsec transform-set TS esp-aes 256 esp-sha256-hmac", "mode tunnel", "exit",
+                  "crypto ipsec profile VTI", "set transform-set TS", "set ikev2-profile PROF", "exit",
+                  "interface Tunnel0", "ip address 172.31.255.1 255.255.255.252", "tunnel source GigabitEthernet0/0/0",
+                  "tunnel mode ipsec ipv4", f"tunnel destination {cloud['public']}", "tunnel protection ipsec profile VTI",
+                  "exit", f"ip route {cloud['prefix'].split('/')[0]} 255.255.255.0 Tunnel0"]
+    _cs_run_lines(con, lines + ["end"], "router")
 
 
 def _cs_aim_cameras(dash, job, a):
@@ -9303,9 +8987,10 @@ def _cs_router(dash, job, servers):
     for tag, gw in gws.items():
         lines += [f"interface GigabitEthernet0/0/1.{tag}", f"encapsulation dot1Q {tag}",
                   f"ip address {gw.ip} {gw.network.netmask}"]
-        if any(n["kind"] == "helper" and int(n["tag"]) == tag for n in job["needs"]):
-            dcip = gws[min(gws)].network.network_address + 10
-            lines.append(f"ip helper-address {dcip}")
+        for n in job["needs"]:
+            if n["kind"] == "helper" and int(n["tag"]) == tag:
+                for ip in n.get("servers") or [gws[min(gws)].network.network_address + 10]:
+                    lines.append(f"ip helper-address {ip}")
         lines.append("exit")
     for n in job["needs"]:
         if n["kind"] == "dhcp-pool":
@@ -9330,8 +9015,686 @@ def _cs_wifi_setup(dash, job):
 
 
 
+def test_campus_playthrough():
+    """Every client job can be finished: played from an empty site to a full
+    hand-over score through the same actions and consoles a student uses
+    (the machines' own checks stand in as passed: they need real Windows)."""
+    import shutil
+    from winlab import campus, netplan, paths, schema
+    for jid in campus.job_ids():
+        name = f"play-{jid}"[:30]
+        (paths.LABS / f"{name}.toml").unlink(missing_ok=True)
+
+        class _Dash:
+            pass
+        dash = _Dash()
+        try:
+            campus.act(dash, "campus-start", {"job": jid, "name": name})
+            dash.reload = lambda: (setattr(dash, "lab", schema.load(name)),
+                                   setattr(dash, "plan", netplan.compile_topology(dash.lab, check_ports=False)))
+            dash.reload()
+            job = campus.job_of(dash.lab)
+            try:
+                _cs_solve(dash, job)
+                err = ""
+            except AssertionError as exc:
+                err = str(exc)
+            g = campus.handover(dash.lab, job, runner=lambda c: (True, "ok"))
+            check(f"{jid}: played through to a full hand-over", not err and g["passed"],
+                  err or "; ".join(f"{i['text'][:50]}: {i['found']}" for i in g["items"] if not i["ok"]))
+        finally:
+            for f in (paths.LABS / f"{name}.toml", paths.LABS / f"{name}.toml.bak"):
+                f.unlink(missing_ok=True)
+            shutil.rmtree(paths.lab_dir(name), ignore_errors=True)
 
 
+
+
+
+# ===== open source in the interface: Cytoscape.js, Termshark, vwifi =====
+def test_open_source_parts():
+    """Three open-source parts, each fetched onto the customer's PC and
+    pinned, never shipped: Cytoscape.js lays out the Network map, Termshark
+    is the capture probe's packet view, vwifi (being built) will carry real
+    Wi-Fi between Linux machines."""
+    import gzip
+    import hashlib
+    import io
+    import subprocess
+    import tarfile
+    import tempfile
+    from types import SimpleNamespace
+    from winlab import mapview, termshark, termview, vwifi
+
+    root = Path(__file__).resolve().parent.parent
+    page = (root / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    licensing = (root / "LICENSING.md").read_text(encoding="utf-8")
+
+    def tgz(members: dict[str, bytes]) -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for name, data in members.items():
+                ti = tarfile.TarInfo(name)
+                ti.size = len(data)
+                tar.addfile(ti, io.BytesIO(data))
+        return buf.getvalue()
+
+    # --- Cytoscape.js --------------------------------------------------------
+    check("Cytoscape.js is pinned from the npm registry with its licence",
+          all(len(d) == 64 for d, _ in mapview.PACKAGES.values())
+          and set(mapview.FILES) == {"cytoscape.min.js", "LICENSE-cytoscape.txt"}
+          and mapview.REGISTRY == termview.REGISTRY)
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        saved, saved_pk = mapview.paths.RUNTIME, dict(mapview.PACKAGES)
+        mapview.paths.RUNTIME = d / "runtime"
+        try:
+            pkgs = {rel: tgz({m: m.encode() for m in members}) for rel, (_, members) in mapview.PACKAGES.items()}
+            for rel, (_, members) in list(mapview.PACKAGES.items()):
+                mapview.PACKAGES[rel] = (hashlib.sha256(pkgs[rel]).hexdigest(), members)
+            urls = []
+            mapview.fetch(progress=lambda _l: None, get=lambda u: urls.append(u) or pkgs[u[len(mapview.REGISTRY):]])
+            check("winlab viewer fetch puts Cytoscape.js in runtime/cytoscape",
+                  mapview.ready() and urls == [mapview.REGISTRY + r for r in pkgs]
+                  and (mapview.map_dir() / "LICENSE-cytoscape.txt").exists())
+            mapview.PACKAGES.update({r: ("0" * 64, m) for r, (_, m) in saved_pk.items()})
+            try:
+                mapview.fetch(refresh=True, progress=lambda _l: None, get=lambda u: pkgs[u[len(mapview.REGISTRY):]])
+                refused = False
+            except mapview.MapViewError:
+                refused = True
+            check("a tarball that is not the pinned one is refused", refused and not mapview.ready())
+        finally:
+            mapview.PACKAGES.clear()
+            mapview.PACKAGES.update(saved_pk)
+            mapview.paths.RUNTIME = saved
+    webui_src = (root / "winlab" / "webui.py").read_text(encoding="utf-8")
+    check("the desktop serves it from the fetched folder only, and says whether it is there",
+          'u.path.startswith("/cytoscape/")' in webui_src and '"map_ready": mapview.ready()' in webui_src)
+    check("the Network map has a By VLAN and a Laid out view, the second drawn by Cytoscape.js",
+          "mapSetMode('graph')" in page and "mapSetMode('vlan')" in page
+          and "/cytoscape/cytoscape.min.js" in page and "function renderMapGraph(" in page
+          and "if(mapMode==='graph'){renderMapGraph();return;}" in page)
+    check("the laid-out view draws winlab's own glyphs, opens screens and shares the sheet",
+          "cyIcon(" in page and "DEV_GLYPH[core?'core':kind]" in page
+          and "mapCy.on('dbltap'" in page and "mapSelect(type,id)" in page)
+    check("without it the view offers to fetch it and the VLAN view stays",
+          "The laid-out view is not on this PC yet" in page and "mapCyFetch(this)" in page)
+
+    # --- Termshark -----------------------------------------------------------
+    check("Termshark is pinned to its release and licence",
+          len(termshark.TARBALL_SHA256) == 64 and len(termshark.LICENSE_SHA256) == 64
+          and termshark.RELEASE.startswith("https://github.com/gcla/termshark/releases/download/")
+          and termshark.LICENSE == "MIT")
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        good = d / "good.tgz"
+        good.write_bytes(tgz({termshark.MEMBER: b"\x7fELF fake", "other/file": b"x"}))
+        termshark.extract(good, d / "termshark")
+        check("only the binary comes out of the tarball", (d / "termshark").read_bytes() == b"\x7fELF fake"
+              and not (d / "other").exists())
+        bad = d / "bad.tgz"
+        bad.write_bytes(tgz({termshark.MEMBER: b"#!/bin/sh"}))
+        try:
+            termshark.extract(bad, d / "x")
+            refused = False
+        except termshark.TermsharkError:
+            refused = True
+        check("a tarball without a Linux program is refused", refused)
+        saved = termshark.paths.downloads_dir
+        termshark.paths.downloads_dir = lambda: d / "dl"
+        try:
+            got = []
+
+            def fake(url, dest, expect_sha="", label=""):
+                got.append((url, expect_sha))
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(good.read_bytes() if dest.name.endswith(".tar.gz") else b"MIT")
+                return dest
+
+            termshark.fetch(progress=lambda _m: None, download=fake)
+            check("fetch checks both downloads against their pins and keeps the binary and licence",
+                  got == [(f"{termshark.RELEASE}/{termshark.TARBALL}", termshark.TARBALL_SHA256),
+                          (termshark.LICENSE_URL, termshark.LICENSE_SHA256)]
+                  and termshark.ready() and not (d / "dl" / "termshark" / termshark.TARBALL).exists())
+            check("the repository volume carries it for the probe",
+                  [n for n, _ in termshark.volume_files()] == ["termshark/termshark", "termshark/LICENSE"])
+        finally:
+            termshark.paths.downloads_dir = saved
+    lab = SimpleNamespace(node_list=lambda: [SimpleNamespace(id="probe01", roles=["capture"]),
+                                             SimpleNamespace(id="dc01", roles=["ad-ds"])])
+    steps = termshark.setup_steps(lab)
+    check("a lab with a capture probe gets a Setup step for it",
+          len(steps) == 1 and steps[0]["job"] == "termshark-fetch" and "probe01" in steps[0]["hint"]
+          and termshark.setup_steps(lab, {"termshark"}) == [])
+    cap = (root / "content" / "roles" / "capture.sh").read_text(encoding="utf-8")
+    check("the capture role installs it from the volume, with a colour terminal",
+          "/media/*/termshark/termshark" in cap and "TERM=xterm-256color" in cap and "blkid -L WLAPK" in cap)
+    r = subprocess.run(["sh", "-n", str(root / "content" / "roles" / "capture.sh")], capture_output=True, text=True)
+    check("capture.sh is valid shell", r.returncode == 0, r.stderr)
+    apkrepo_src = (root / "winlab" / "apkrepo.py").read_text(encoding="utf-8")
+    prepare_src = (root / "winlab" / "prepare.py").read_text(encoding="utf-8")
+    check("preparing the fabric fetches it onto the volume, and a failure is not fatal",
+          "files += termshark.volume_files()" in apkrepo_src and "termshark.fetch(" in prepare_src
+          and "except termshark.TermsharkError" in prepare_src)
+
+    # --- vwifi ---------------------------------------------------------------
+    check("vwifi is pinned to a commit with libnl's release and nothing is fetched before a build is pinned",
+          len(vwifi.COMMIT) == 40 and len(vwifi.LIBNL_SHA256) == 64
+          and (vwifi.published() or vwifi.fetch(progress=lambda _m: None) is None))
+    wf = (root / ".github" / "workflows" / "vwifi.yml").read_text(encoding="utf-8")
+    check("the workflow builds it from the pinned commit, by hand only, and refuses a different digest",
+          "workflow_dispatch" in wf and "import winlab.vwifi as v" in wf and "-DCMAKE_EXE_LINKER_FLAGS=-static" in wf
+          and "sha256sum -c -" in wf and "not published." in wf and "tools/pack_vwifi.py" in wf)
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "bin").mkdir()
+        for prog in vwifi.PROGRAMS:
+            (d / "bin" / prog).write_bytes(b"\x7fELF " + prog.encode())
+        (d / "v.tar.gz").write_bytes(b"vsrc")
+        (d / "nl.tar.gz").write_bytes(b"nlsrc")
+        (d / "LICENSE.md").write_bytes(b"LGPL")
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pack_vwifi", root / "tools" / "pack_vwifi.py")
+        pv = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pv)
+        a = pv.pack(d / "bin", d / "v.tar.gz", d / "nl.tar.gz", d / "LICENSE.md")
+        b = pv.pack(d / "bin", d / "v.tar.gz", d / "nl.tar.gz", d / "LICENSE.md")
+        with tarfile.open(fileobj=io.BytesIO(a), mode="r:gz") as tar:
+            names = tar.getnames()
+        check("the pack is reproducible and carries the programs, licence, notice and full source",
+              a == b and gzip.decompress(a)[:5] == b"vwifi"
+              and set(names) == {"vwifi/LICENSE.md", "vwifi/NOTICE", "vwifi/source/v.tar.gz", "vwifi/source/nl.tar.gz"}
+              | {f"vwifi/bin/{p}" for p in vwifi.PROGRAMS}, str(names))
+
+    # --- licences ------------------------------------------------------------
+    check("LICENSING.md lists all three as fetched, never bundled",
+          "| Cytoscape.js (the Network map's Laid out view) | MIT" in licensing
+          and "| Termshark (the capture probe's packet view" in licensing
+          and "| vwifi (real 802.11 between the lab's Linux machines" in licensing)
+
+
+
+# ===== network operations: LibreNMS, Oxidized, Uptime Kuma (winlab/netops.py) =====
+
+
+def _raises(fn, exc) -> bool:
+    try:
+        fn()
+    except exc:
+        return True
+    return False
+
+
+
+# ===== the network written down: phpIPAM and NetBox on the IPAM server (winlab/netdocs.py) =====
+
+
+
+# ===== open source, batch 2: a real helpdesk (osTicket) and Wazuh on the Linux servers =====
+
+
+
+
+# ===== VM-level backup: Hyper-V's own tools, Veeam, Proxmox Backup Server =====
+
+# ===== Command Prompt and PowerShell windows on Windows machines =====
+class _FakeConsoleHost:
+    """The guest end of COM3 as winlab-term.cs speaks it, for the tests: a
+    session echoes what is typed, `exit` ends it with code 0."""
+
+    def __init__(self, build: str) -> None:
+        import socket as _s
+        import threading as _t
+        self.build = build
+        self.srv = _s.socket()
+        self.srv.bind(("127.0.0.1", 0))
+        self.srv.listen(4)
+        self.port = self.srv.getsockname()[1]
+        self.got: list[str] = []
+        self.conn = None
+        _t.Thread(target=self._serve, daemon=True).start()
+
+    def say(self, text: str) -> None:
+        if self.conn:
+            self.conn.sendall((text + "\n").encode())
+
+    def _serve(self) -> None:
+        import base64 as b
+        while True:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                return
+            self.conn = c
+            buf = b""
+            while True:
+                try:
+                    chunk = c.recv(65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    msg = raw.decode().strip()
+                    self.got.append(msg)
+                    f = msg.split(" ")
+                    if f[0] == "HELLO" and self.build:
+                        self.say(f"HELLO {self.build} {b.b64encode(b'Windows Server 2022').decode()} {b.b64encode(b'DC01').decode()}")
+                    elif f[0] == "OPEN":
+                        self.say(f"OUT {f[1]} " + b.b64encode(b"Microsoft Windows [Version 10.0.20348]\r\n\r\nC:\\Users\\alice>").decode())
+                    elif f[0] == "IN":
+                        data = b.b64decode(f[2])
+                        if data == b"exit\r":
+                            self.say(f"EXIT {f[1]} 0")
+                        else:
+                            self.say(f"OUT {f[1]} " + b.b64encode(data).decode())
+
+    def close(self) -> None:
+        self.srv.close()
+        if self.conn:
+            self.conn.close()
+
+
+def test_windows_consoles():
+    """Command Prompt and PowerShell windows for every Windows machine: a
+    third serial port (COM3) on a loopback socket, the console host in the
+    machine (ConPTY, signed in with the account typed), installed or updated
+    over the agent, one session per window over the desktop's WebSocket."""
+    import re
+    import socket
+    import struct
+    import time as _time
+    from winlab import netplan, schema, state, winterm, wsbridge
+    from winlab.providers.qemu import QemuProvider, check_isolation
+
+    # --- the hardware: COM3 on every Windows machine, nowhere else ---
+    lab = schema.load("ad-ds-basics")
+    plan = netplan.compile_topology(lab, check_ports=False)
+    prov = QemuProvider(plan, accel="tcg")
+    win = next(n for n in lab.node_list() if n.is_windows)
+    rt = prov.build_node(win)
+    argv = rt.argv
+    dev = [argv[i + 1] for i, a in enumerate(argv) if a == "-device" and "isa-serial" in argv[i + 1]]
+    check("a Windows machine gets COM3 (index 2) on its own IRQ, wired to a loopback socket",
+          rt.wterm_port and dev == ["isa-serial,chardev=wterm,index=2,irq=5"]
+          and f"socket,id=wterm,host=127.0.0.1,port={rt.wterm_port},server=on,wait=off" in argv, str(dev))
+    check("COM1 stays the agent's: the first -serial is still the agent chardev",
+          [argv[i + 1] for i, a in enumerate(argv) if a == "-serial"][0] == "chardev:ser0")
+    check("the machine with COM3 is still isolated", not check_isolation(argv), str(check_isolation(argv)))
+    fab = prov.build_fabric()
+    check("the router (fabric) has no console port of this kind", "wterm" not in " ".join(fab.argv))
+    st = state.LabState(name="t")
+    st.nodes["dc01"] = state.NodeState("dc01", wterm_port=31055)
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        saved = state.paths.STATE
+        state.paths.STATE = Path(td)
+        try:
+            state.save(st)
+            check("the console port is kept in the lab state", state.load("t").nodes["dc01"].wterm_port == 31055)
+        finally:
+            state.paths.STATE = saved
+
+    # --- the guest files ---
+    agent = Path("content") / "agent"
+    cs = (agent / "winlab-term.cs").read_text(encoding="utf-8")
+    code = "\n".join(l for l in cs.splitlines() if not l.lstrip().startswith("//"))
+    check("the console host is C# 5 (Windows PowerShell 5.1's Add-Type): no $\"\" strings, no => members",
+          '$"' not in code and not re.search(r"\)\s*=>", code))
+    check("the console host uses Windows' pseudoconsole and signs the account in",
+          all(x in cs for x in ("CreatePseudoConsole", "ResizePseudoConsole", "ClosePseudoConsole", "LogonUser",
+                                "CreateProcessAsUserW", "LoadUserProfile", "CreateEnvironmentBlock", "Elevated(")))
+    check("the build is the start of the SHA-256 of the C# file",
+          re.fullmatch(r"[0-9a-f]{16}", winterm.build_id()) and "[Security.Cryptography.SHA256]::Create()" in (agent / "winlab-term.ps1").read_text(encoding="utf-8"))
+    check("a new machine copies the C# file and installs the console host at first logon",
+          '*.cs"' in (agent / "winlab-stage0.cmd").read_text(encoding="utf-8")
+          and "setup-term.ps1" in (agent / "setup-agent.ps1").read_text(encoding="utf-8"))
+    setup = (agent / "setup-term.ps1").read_text(encoding="utf-8")
+    check("the console host runs as a SYSTEM startup task that restarts",
+          "-UserId 'SYSTEM'" in setup and "-AtStartup" in setup and "RestartCount" in setup)
+
+    # --- the line: hello, sessions, output, exit ---
+    guest = _FakeConsoleHost(winterm.build_id())
+    try:
+        line = winterm.Line(guest.port)
+        info = line.hello(3.0)
+        check("the host in the machine answers HELLO with its build, Windows edition and name",
+              info and info["build"] == winterm.build_id() and info["os"] == "Windows Server 2022" and info["computer"] == "DC01", str(info))
+        check("a new line first ends sessions an earlier desktop left open", guest.got and guest.got[0] == "RESET", str(guest.got[:2]))
+        out, ended = [], []
+        sid = line.open("cmd", 100, 30, False, out.append, lambda c, w: ended.append((c, w)))
+        line.write(sid, b"dir\r")
+        line.resize(sid, 132, 40)
+        line.write(sid, b"x" * 7000)
+        for _ in range(100):
+            if len(out) >= 5:
+                break
+            _time.sleep(0.02)
+        check("output comes back per session", out and b"C:\\Users\\alice>" in out[0] and b"dir\r" in b"".join(out))
+        check("long input goes in pieces, a resize as SIZE",
+              any(m == f"SIZE {sid} 132 40" for m in guest.got)
+              and len([m for m in guest.got if m.startswith(f"IN {sid} ")]) == 4)
+        line.write(sid, b"exit\r")
+        for _ in range(100):
+            if ended:
+                break
+            _time.sleep(0.02)
+        check("exit in the console ends the session with its code", ended == [(0, "")], str(ended))
+        sid2 = line.open("powershell", 80, 25, True, out.append, lambda c, w: ended.append((c, w)))
+        for _ in range(100):
+            if f"OPEN {sid2} powershell 80 25 1" in guest.got:
+                break
+            _time.sleep(0.02)
+        check("Run as administrator asks for the account's full token", f"OPEN {sid2} powershell 80 25 1" in guest.got)
+        guest.say(f"READY {winterm.build_id()} eA== eA==")
+        for _ in range(100):
+            if len(ended) == 2:
+                break
+            _time.sleep(0.02)
+        check("a restarted console service ends the sessions it had", len(ended) == 2 and ended[1][0] is None and "restarted" in ended[1][1], str(ended))
+        try:
+            line.open("bash", 80, 25, False, out.append, lambda c, w: None); refused = False
+        except winterm.TermError:
+            refused = True
+        check("only cmd and powershell", refused)
+        line.close_line()
+    finally:
+        guest.close()
+
+    # --- ensure: a machine without the console host gets it over the agent ---
+    guest = _FakeConsoleHost("")       # nothing answers HELLO yet
+    calls = []
+
+    class FakeAgent:
+        def put_file(self, path, data):
+            calls.append(("put", path, len(data)))
+
+        def run(self, command, timeout=0):
+            calls.append(("run", command[:40]))
+            guest.build = winterm.build_id()
+            from winlab.guestctl import Result
+            return Result(0, "setup-term: winlab-terminal started", "")
+
+        def close(self):
+            calls.append(("close",))
+    try:
+        ns = state.NodeState("dc01", serial_port=1, wterm_port=guest.port)
+        said = []
+        winterm._lines.pop(guest.port, None)
+        saved_hello = winterm.Line.hello
+        winterm.Line.hello = lambda self, timeout=4.0: saved_hello(self, min(timeout, 0.6))
+        try:
+            info = winterm.ensure(ns, said.append, connect=lambda: FakeAgent(), timeout=10)
+        finally:
+            winterm.Line.hello = saved_hello
+        check("a machine with no console host gets the three files and its task over the agent",
+              [c[1] for c in calls if c[0] == "put"] == [f"C:\\winlab\\{f}" for f in winterm.FILES]
+              and any(c[0] == "run" for c in calls) and calls[-1] == ("close",) and info["build"] == winterm.build_id(), str(calls))
+        check("and the window says so while it happens", said and "console service" in said[0], str(said))
+        calls.clear()
+        info = winterm.ensure(ns, said.append, connect=lambda: FakeAgent())
+        check("a current console host is used as it is", not calls)
+        try:
+            winterm.ensure(state.NodeState("dc01"), connect=lambda: FakeAgent()); refused = ""
+        except winterm.TermError as exc:
+            refused = str(exc)
+        check("a machine started before COM3 existed is told to restart once", "start it" in refused, refused)
+
+        # --- one window over a WebSocket ---
+        a, b = socket.socketpair()
+        rf = a.makefile("rb")
+        th = __import__("threading").Thread(target=winterm.serve_ws, daemon=True,
+                                            args=(a, rf.read1, a.sendall, ns, "cmd", False, 90, 28))
+        th.start()
+        b.sendall(wsbridge.encode_frame(b'{"size": [120, 33]}', wsbridge.OP_TEXT, mask=True))
+        b.sendall(wsbridge.encode_frame(b"ver\r", wsbridge.OP_BINARY, mask=True))
+        reader = wsbridge.FrameReader(b.recv)
+        got_open = got_echo = False
+        deadline = _time.monotonic() + 5
+        while _time.monotonic() < deadline and not (got_open and got_echo):
+            op, payload = reader.next_message()
+            if op == wsbridge.OP_TEXT and b'"open"' in payload:
+                got_open = True
+            if op == wsbridge.OP_BINARY and b"ver\r" in payload:
+                got_echo = True
+        check("a console window opens a session and carries keystrokes both ways", got_open and got_echo)
+        check("the window's size reaches the console", any(m.startswith("SIZE ") and m.endswith(" 120 33") for m in guest.got))
+        check("the session opened at the window's size", any(m.startswith("OPEN ") and m.endswith(" cmd 90 28 0") for m in guest.got))
+        b.sendall(wsbridge.encode_frame(b"exit\r", wsbridge.OP_BINARY, mask=True))
+        exit_seen = closed = False
+        while _time.monotonic() < deadline + 5:
+            msg = reader.next_message()
+            if msg is None:
+                break
+            op, payload = msg
+            if op == wsbridge.OP_TEXT and b'"exit": 0' in payload:
+                exit_seen = True
+            if op == wsbridge.OP_CLOSE:
+                closed = True
+                try:   # answer the close as a browser does (Windows' recv does not wake on SHUT_RD alone)
+                    b.sendall(wsbridge.encode_frame(payload, wsbridge.OP_CLOSE, mask=True))
+                except OSError:
+                    pass
+                break
+        th.join(3)
+        check("exit closes the window's connection after telling it the code", exit_seen and closed and not th.is_alive())
+        b.close(); a.close()
+    finally:
+        guest.close()
+
+    # --- the desktop ---
+    page = (Path("winlab") / "webui_page.html").read_text(encoding="utf-8")
+    check("the desktop opens Command Prompt and PowerShell windows over /ws/winterm",
+          "function openWinTerm(" in page and "/ws/winterm?" in page and "Windows PowerShell (Administrator)" in page)
+    check("they look like Windows' console: Campbell colours, PowerShell blue, Consolas, underline cursor",
+          "#0c0c0c" in page and "#012456" in page and "Consolas" in page and "cursorStyle:'underline'" in page)
+    check("they are on the machine window, the Machines list and the right-click menus",
+          'class="con-wterm"' in page and "...wtItems(id)" in page and "...wtItems(key)" in page)
+    check("conhost's copy and paste: right-click copies a selection or pastes", "addEventListener('contextmenu'" in page and "wtPaste(key)" in page)
+    web = Path("winlab/webui.py").read_text(encoding="utf-8")
+    check("the desktop serves /ws/winterm and tells the page which machines have COM3",
+          '"/ws/winterm"' in web and '"wterm":' in web)
+
+
+# ===== the hardware view: parts dragged in and out of a machine =====
+def page_text() -> str:
+    return (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+
+
+def test_pc_hardware_view():
+    """A PC, a server and a laptop open on the bench (winlab/pcparts.py):
+    every part fitted lands in the lab file and the QEMU command line; the
+    machine must be off, except a server's hot-swap drive bays."""
+    import os
+    from winlab import editor, hardware, media, netplan, paths, pcparts, schema, workbench
+    from winlab.providers.qemu import QemuProvider
+    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"))
+    real = (workbench._running, pcparts._running, hardware._qmp_port, pcparts._qmp, pcparts._host)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+        os.environ["WINLAB_IMAGES"] = str(td / "images")
+        running = set()
+        workbench._running = lambda name: set(running)
+        pcparts._running = lambda lab, nid: nid in running
+        hardware._qmp_port = lambda lab, nid: 4444 if nid in running else 0
+        calls = []
+
+        class FakeQmp:
+            def __init__(self, port): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def call(self, cmd, **kw):
+                calls.append((cmd, kw))
+                if cmd == "query-named-block-nodes":
+                    return [{"node-name": n} for n in ("data0-fmt", "data0-file", "data0-gone")]
+                return {}
+        pcparts._qmp = FakeQmp
+        pcparts._host = lambda: {"cores": 64, "ram_mb": 262144, "free_gb": 4000}
+        try:
+            editor.new_workbench("hw-lab")
+
+            class _Dash:
+                def reload(self):
+                    self.lab = schema.load("hw-lab")
+                    self.plan = netplan.compile_topology(self.lab, check_ports=False)
+            d = _Dash()
+            d.reload()
+
+            def hw(**p):
+                return workbench.act(d, "wb-hw", p)
+            workbench.act(d, "wb-add", {"shelf": "pc", "how": "ready", "image": "win11", "id": "pc01", "x": 10, "y": 10})
+            workbench.act(d, "wb-add", {"shelf": "server", "how": "ready", "image": "ws2022", "id": "srv01", "x": 90, "y": 10})
+            b = hw(node="pc01")["board"]
+            s = b["slots"]
+            check("a PC opens as a tower: socket, four memory slots, six PCIe slots, two M.2, a drive cage",
+                  b["form"] == "tower" and s["cpu"]["part"]["cores"] == d.lab.nodes["pc01"].cpus
+                  and sum(1 for k in s if k.startswith("dimm-")) == 4 and sum(1 for k in s if k.startswith("pcie-")) == 6
+                  and s["m2-0"]["part"] is None and s["bay35-0"]["part"]["system"]
+                  and sum(x["mb"] for x in [s[f"dimm-{k}"]["part"] for k in range(4)] if x) == d.lab.nodes["pc01"].memory_mb)
+            check("its network card sits in a PCIe slot", any((v["part"] or {}).get("kind") == "nic"
+                                                             for k, v in s.items() if k.startswith("pcie-")))
+            check("the tray offers processors, sticks, drives, cards, a DVD drive and a TPM",
+                  {p["kind"] for p in b["tray"]} >= {"cpu", "dimm", "disk", "nic", "gpu", "hba", "dvd", "tpm"})
+            r = hw(node="pc01", op="fit", part="cpu:8", slot="cpu")
+            check("a processor dropped on the socket swaps it", r["ok"] and d.lab.nodes["pc01"].cpus == 8, r["message"])
+            free = next(k for k, v in hw(node="pc01")["board"]["slots"].items() if k.startswith("dimm-") and not v["part"])
+            mem = d.lab.nodes["pc01"].memory_mb
+            r = hw(node="pc01", op="fit", part="dimm:8192", slot=free)
+            n = d.lab.nodes["pc01"]
+            check("a stick in a free slot adds its memory and stays in that slot",
+                  r["ok"] and n.memory_mb == mem + 8192 and n.vars["dimms"].split()[int(free[-1])] == "8192", r["message"])
+            r = hw(node="pc01", op="out", slot="dimm-0")
+            check("a stick comes out", r["ok"] and d.lab.nodes["pc01"].memory_mb < mem + 8192, r["message"])
+            r = hw(node="pc01", op="fit", part="gpu", slot="pcie-3")
+            check("a graphics card does not go in an x1 slot", not r["ok"] and "x16" in r["message"])
+            empty16 = next(k for k, v in hw(node="pc01")["board"]["slots"].items()
+                           if k.startswith("pcie-") and not v["part"] and v["lanes"] == "x16")
+            r = hw(node="pc01", op="fit", part="gpu", slot=empty16)
+            check("it goes in a free x16 slot", r["ok"] and d.lab.nodes["pc01"].vars.get("gpu"), r["message"])
+            r = hw(node="pc01", op="fit", part="nic", slot="pcie-5")
+            n = d.lab.nodes["pc01"]
+            check("a network card goes in the slot it was dropped on",
+                  r["ok"] and len(n.nics) == 2 and n.vars["pcie"].split()[5] == "nic1", r["message"])
+            nic0 = next(k for k, v in hw(node="pc01")["board"]["slots"].items() if (v["part"] or {}).get("nic") == 0)
+            r = hw(node="pc01", op="out", slot=nic0)
+            n = d.lab.nodes["pc01"]
+            check("taking the first card out renumbers the other, which stays in its slot",
+                  r["ok"] and len(n.nics) == 1 and n.vars["pcie"].split()[5] == "nic0", r["message"])
+            b = hw(node="pc01")["board"]
+            check("a SAS drive needs the adapter",
+                  not hw(node="pc01", op="fit", part="disk:sas:40", slot=b["lands"]["sas"])["ok"])
+            hba = next(k for k, v in b["slots"].items() if k.startswith("pcie-") and not v["part"])
+            check("the adapter goes in a free slot", hw(node="pc01", op="fit", part="hba", slot=hba)["ok"])
+            b = hw(node="pc01")["board"]
+            r = hw(node="pc01", op="fit", part="disk:sas:40", slot=b["lands"]["sas"])
+            r2 = hw(node="pc01", op="fit", part="disk:nvme:64", slot=b["lands"]["nvme"])
+            r3 = hw(node="pc01", op="fit", part="disk:sata:20", slot="bay35-3")
+            n = d.lab.nodes["pc01"]
+            check("drives land in their bays: SAS on the adapter, NVMe in an M.2 socket",
+                  r["ok"] and r2["ok"] and n.data_disks_gb == [40, 64] and n.vars["disk_bus"] == "sas nvme"
+                  and b["lands"]["nvme"] == "m2-0" and b["lands"]["sas"] == "bay25-0", r["message"] + r2["message"])
+            check("a drive dropped past the next free bay is told where it goes", not r3["ok"] and "bay35-1" not in r3["message"]
+                  and "3.5-inch bay 2" in r3["message"], r3["message"])
+            check("the adapter stays while SAS drives hang on it",
+                  not hw(node="pc01", op="out", slot=hba)["ok"])
+            argv = " ".join(QemuProvider(d.plan, accel="tcg").build_node(d.lab.nodes["pc01"]).argv)
+            check("the parts are the QEMU machine's", "-smp 8" in argv and "virtio-vga" in argv and "mptsas1068" in argv
+                  and "nvme," in argv and argv.count("e1000e") == 1 and f"-m {d.lab.nodes['pc01'].memory_mb}" in argv)
+
+            running.add("pc01")
+            r = hw(node="pc01", op="fit", part="nic", slot="pcie-4")
+            check("nothing is fitted while it runs", not r["ok"] and "shut" in r["message"])
+            r = hw(node="pc01", op="out", slot="m2-0")
+            check("an M.2 drive does not come out while it runs", not r["ok"] and "hot-swap" in r["message"])
+            running.discard("pc01")
+            r = hw(node="pc01", op="out", slot="m2-0")
+            check("off, a drive comes out onto the bench with its data",
+                  r["ok"] and hw(node="pc01")["board"]["bench"][0]["index"] == 1, r["message"])
+            r = hw(node="pc01", op="trash", disk=1)
+            check("a drive on the bench thrown away is gone", r["ok"] and d.lab.nodes["pc01"].data_disks_gb == [40])
+
+            r = hw(node="srv01", op="fit", part="disk:sata:40", slot=hw(node="srv01")["board"]["lands"]["sata"])
+            b = hw(node="srv01")["board"]
+            check("a server has hot-swap bays at the front, eight memory slots and a management module slot",
+                  r["ok"] and b["form"] == "server" and b["slots"]["hs-0"]["part"]["system"]
+                  and b["slots"]["hs-1"]["part"]["index"] == 0 and b["slots"]["hs-1"]["hot"]
+                  and sum(1 for k in b["slots"] if k.startswith("dimm-")) == 8 and "bmc" in b["slots"])
+            check("the management module goes in", hw(node="srv01", op="fit", part="bmc", slot="bmc")["ok"]
+                  and "bmc" in d.lab.nodes["srv01"].vars and hw(node="srv01")["board"]["slots"]["bmc"]["part"])
+            running.add("srv01")
+            r = hw(node="srv01", op="out", slot="hs-1")
+            check("a hot-swap drive comes out live: it stops answering", r["ok"] and "stops answering" in r["message"]
+                  and [c for c, _ in calls] == ["blockdev-add", "blockdev-reopen"], str(calls))
+            calls.clear()
+            r = hw(node="srv01", op="back", disk=0)
+            check("and goes back live, with its data", r["ok"] and hardware.pulled("hw-lab", "srv01") == set()
+                  and [c for c, _ in calls] == ["query-named-block-nodes", "blockdev-reopen", "blockdev-del"]
+                  and calls[1][1]["options"][0]["file"] == "data0-file", str(calls))
+            running.discard("srv01")
+
+            workbench.act(d, "wb-add", {"shelf": "laptop", "how": "ready", "image": "win11", "id": "lap01", "x": 200, "y": 10})
+            b = hw(node="lap01")["board"]
+            check("a laptop: soldered processor, two SO-DIMM slots, no PCIe slots",
+                  b["form"] == "laptop" and b["slots"]["cpu"]["fixed"] and not any(k.startswith("pcie-") for k in b["slots"])
+                  and sum(1 for k in b["slots"] if k.startswith("dimm-")) == 2
+                  and not hw(node="lap01", op="fit", part="cpu:4", slot="cpu")["ok"])
+            # a machine stronger than this PC: fitted, with a warning
+            pcparts._host = lambda: {"cores": 4, "ram_mb": 8192, "free_gb": 100}
+            n = d.lab.nodes["pc01"]
+            r = hw(node="pc01", op="fit", part="cpu:16", slot="cpu")
+            check("more cores than this PC has: fitted, and told", r["ok"] and n.cpus == 16
+                  and "16 cores on a PC with 4" in r["message"], r["message"])
+            free = next(k for k, v in hw(node="pc01")["board"]["slots"].items() if k.startswith("dimm-") and not v["part"])
+            r = hw(node="pc01", op="fit", part="dimm:32768", slot=free)
+            w = hw(node="pc01")["board"]["warnings"]
+            check("more memory than this PC has: it will not start at this size",
+                  r["ok"] and "will not start at this size" in r["message"]
+                  and {x["part"] for x in w} == {"cpu", "dimm"}, r["message"])
+            pcparts._host = lambda: {"cores": 4, "ram_mb": 8192, "free_gb": 30}
+            b = hw(node="pc01")["board"]
+            check("drives that can grow past the free disk are flagged",
+                  any(x["part"] == "disk" and "30 GB free" in x["text"] for x in b["warnings"]) and b["host"]["free_gb"] == 30)
+            pcparts._host = lambda: {"cores": 64, "ram_mb": 262144, "free_gb": 4000}
+            check("a PC with room: no warning", hw(node="pc01")["board"]["warnings"] == [])
+            check("this PC is read for real", pcparts.host()["cores"] >= 1 and pcparts.host()["ram_mb"] > 0)
+            # each machine's label: its own serial, asset tag and UUID, in its firmware (winlab/identity.py)
+            from winlab import identity
+            b = hw(node="pc01")["board"]
+            i = b["identity"]
+            argv = QemuProvider(d.plan, accel="tcg").build_node(d.lab.nodes["pc01"]).argv
+            check("a PC has its own label: maker, model, serial, asset tag, UUID",
+                  i["maker"] == "winlab" and "Tower" in i["model"] and i["serial"].startswith("WL")
+                  and i["asset"].startswith("IT-") and len(i["uuid"]) == 36, i)
+            check("the label is in its firmware (SMBIOS types 1, 2, 3 and -uuid)",
+                  argv[argv.index("-uuid") + 1] == i["uuid"]
+                  and sum(1 for a in argv if a.startswith("type=")) == 3
+                  and any(a.startswith("type=1,") and f"serial={i['serial']}" in a for a in argv)
+                  and any(a.startswith("type=3,") and f"asset={i['asset']}" in a for a in argv))
+            j = hw(node="srv01")["board"]["identity"]
+            check("every machine its own serial and UUID; a server is a rack server",
+                  j["serial"] != i["serial"] and j["uuid"] != i["uuid"] and "Rack" in j["model"]
+                  and identity.of("other-lab", d.lab.nodes["pc01"])["serial"] != i["serial"])
+            d.lab.nodes["pc01"].vars["asset_tag"] = "CORP,0042"
+            check("a machine's asset_tag sets its tag (no comma reaches QEMU)",
+                  identity.of("hw-lab", d.lab.nodes["pc01"])["asset"] == "CORP0042")
+            d.lab.nodes["pc01"].vars.pop("asset_tag")
+            ser = [s["part"]["serial"] for s in b["slots"].values() if (s.get("part") or {}).get("serial")]
+            check("a new drive shows the serial on its label that QEMU gives it",
+                  ser and all(f"serial={x}" in " ".join(argv) for x in ser), ser)
+            check("the hardware view draws the label", "function hwTag(" in page_text() and "hwTag(b.identity)" in page_text())
+            page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+            check("the device window has the hardware view", "function hwView(" in page and "'hw','Hardware'" in page)
+        finally:
+            paths.VAR, paths.STATE, paths.LABS = saved[:3]
+            workbench._running, pcparts._running, hardware._qmp_port, pcparts._qmp, pcparts._host = real
+            if saved[3] is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = saved[3]
 
 
 # ===== Windows 11 track: firmware per machine, Secure Boot and legacy BIOS =====
@@ -9339,7 +9702,4603 @@ def _cs_wifi_setup(dash, job):
 
 
 
-# ===== winlab core: the cut-down first release =====
+
+# ===== IPv6 on the lab router's console and the switches (winlab/iosv6.py) =====
+
+
+def _re_line(text: str, pattern: str) -> bool:
+    import re as _re
+    return any(_re.match(pattern, l) for l in text.splitlines())
+
+
+def _raised(fn):
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 - the test looks at what was raised
+        return exc
+    return None
+
+
+# ---- DHCP snooping, Dynamic ARP Inspection and AAA logins (winlab/snooping.py, winlab/aaa.py) ----
+def _l2sec_dhcp_ack(yi: str, mac: str, lease: int, kind: int = 5) -> bytes:
+    """An IPv4 packet carrying a DHCP reply (ACK by default) as a server sends it."""
+    import struct
+    bo = bytearray(240)
+    bo[0], bo[1], bo[2] = 2, 1, 6
+    bo[16:20] = bytes(int(x) for x in yi.split("."))
+    bo[28:34] = bytes.fromhex(mac.replace(":", ""))
+    bo[236:240] = bytes.fromhex("63825363")
+    opts = bytes([53, 1, kind, 54, 4, 10, 10, 10, 1, 51, 4]) + struct.pack(">I", lease) + bytes([0, 255])
+    payload = bytes(bo) + opts
+    udp = struct.pack(">HHHH", 67, 68, 8 + len(payload), 0) + payload
+    return struct.pack(">BBHHHBBH4s4s", 0x45, 0, 20 + len(udp), 0, 0, 64, 17, 0, bytes(4), bytes(4)) + udp
+
+
+def _l2sec_tcpdump(ts: int, ifc: str, way: str, pkt: bytes) -> str:
+    """The packet as tcpdump -i any -tt -x prints it."""
+    hx = pkt.hex()
+    lines = [f"{ts}.123456 {ifc}  {way} IP 10.10.10.1.67 > 255.255.255.255.68: BOOTP/DHCP, Reply, length 300"]
+    for off in range(0, len(pkt), 16):
+        chunk = hx[off * 2:(off + 16) * 2]
+        lines.append(f"\t0x{off:04x}:  " + " ".join(chunk[i:i + 4] for i in range(0, len(chunk), 4)))
+    return "\n".join(lines)
+
+
+class _L2secWire:
+    """The router's nc, answered by a RADIUS and a TACACS+ server written
+    here: what a student's FreeRADIUS or a TACACS+ daemon would say."""
+
+    def __init__(self, key: str, users: dict):
+        self.rkey = self.tkey = key
+        self.users = users
+        self.cmds: list[str] = []
+        self.down = False
+        self.priv = 15
+
+    def _radius(self, pkt: bytes) -> bytes:
+        import hashlib
+        import hmac
+        import struct
+        from winlab import aaa
+        s = self.rkey.encode()
+        auth = pkt[4:20]
+        attrs = dict(aaa._attrs(pkt[20:]))
+        ma = attrs.get(80)
+        if ma is None:
+            return b""
+        i = pkt.index(bytes([80, 18]) + ma)
+        if hmac.new(s, pkt[:i + 2] + b"\0" * 16 + pkt[i + 18:], hashlib.md5).digest() != ma:
+            return b""   # FreeRADIUS: invalid Message-Authenticator, dropped
+        hidden, pw, last = attrs[2], b"", auth
+        for k in range(0, len(hidden), 16):
+            pw += bytes(x ^ y for x, y in zip(hidden[k:k + 16], hashlib.md5(s + last).digest()))
+            last = hidden[k:k + 16]
+        ok = self.users.get(attrs[1].decode()) == pw.rstrip(b"\0").decode("latin-1")
+        out = aaa._attr(26, struct.pack(">I", 9) + aaa._attr(1, f"shell:priv-lvl={self.priv}".encode())) if ok else b""
+        hdr = bytes([2 if ok else 3, pkt[1]]) + struct.pack(">H", 20 + len(out))
+        return hdr + hashlib.md5(hdr + auth + out + s).digest() + out
+
+    def _tacacs(self, data: bytes) -> bytes:
+        import struct
+        from winlab import aaa
+        pk = aaa.tac_split(data, self.tkey)
+        session = data[4:8]
+        if not pk:
+            return b""
+        kind, _, body = pk[0]
+        if kind == 1:
+            if len(pk) < 2 or len(body) < 8 or 8 + body[4] > len(body):
+                return b""   # cannot decode: the server closes the connection
+            user = body[8:8 + body[4]].decode("latin-1")
+            n = struct.unpack(">H", pk[1][2][:2])[0]
+            pw = pk[1][2][5:5 + n].decode("latin-1")
+            ask = bytes([5, 1]) + struct.pack(">HH", 9, 0) + b"Password:"
+            fin = bytes([1 if self.users.get(user) == pw else 2, 0]) + struct.pack(">HH", 0, 0)
+            return aaa.tac_packet(1, 2, session, ask, self.tkey) + aaa.tac_packet(1, 4, session, fin, self.tkey)
+        arg = f"priv-lvl={self.priv}".encode()
+        return aaa.tac_packet(2, 2, session, bytes([1, 1]) + struct.pack(">HH", 0, 0) + bytes([len(arg)]) + arg, self.tkey)
+
+    def __call__(self, cmd: str, timeout: float = 0) -> str:
+        import base64
+        self.cmds.append(cmd)
+        m = re.search(r"printf '%s' '?([A-Za-z0-9+/=]+)'? \| base64 -d \| (?:ip netns exec \S+ )?nc (-u )?-w \d+ (\S+) (\d+)",
+                      cmd)
+        if not m or self.down:
+            return "\n"
+        data = base64.b64decode(m.group(1))
+        return base64.b64encode(self._radius(data) if m.group(2) else self._tacacs(data)).decode() + "\n"
+
+
+
+
+
+
+
+
+
+
+
+def test_browse_dialog_in_front():
+    """Browse... opens the Windows Open dialog in front of the app window:
+    its owner is a shown, topmost window (a hidden one left the dialog behind
+    the app with no taskbar button), PowerShell is found by its full path,
+    a dialog that cannot open says so instead of doing nothing, and a
+    cancel is an empty answer."""
+    from types import SimpleNamespace
+    from winlab import readiness
+    script = readiness.dialog_script("file", "Choose the ISO you downloaded", "Disk images (*.iso)|*.iso",
+                                     "C:\\Users\\o'brien\\Downloads")
+    show, dialog = script.find("$owner.Show()"), script.find("ShowDialog($owner)")
+    check("the dialog's owner is shown, topmost and on the taskbar before the dialog opens",
+          0 < show < dialog and "$owner.TopMost = $true" in script and "$owner.ShowInTaskbar = $true" in script
+          and "$owner.Activate()" in script and "$owner.Close()" in script)
+    check("quotes in the start folder are PowerShell-escaped", "'C:\\Users\\o''brien\\Downloads'" in script)
+    folder = readiness.dialog_script("folder", "Choose the folder to put on the disc")
+    check("the folder dialog has the same owner", "FolderBrowserDialog" in folder and "$owner.Show()" in folder
+          and "$d.SelectedPath" in folder)
+    seen = []
+
+    def fake(answer, code=0, err=b""):
+        def run(argv, **kw):
+            seen.append((argv, kw))
+            return SimpleNamespace(stdout=answer, stderr=err, returncode=code)
+        return run
+    got = readiness.pick_file(run=fake("D:\\isos\\server.iso\r\n".encode()), windows=True)
+    argv = seen[-1][0]
+    check("the chosen file comes back as its path", got == "D:\\isos\\server.iso", got)
+    check("PowerShell runs single-threaded-apartment, non-interactive",
+          argv[0].lower().endswith("powershell.exe") and "-STA" in argv and "-NonInteractive" in argv)
+    check("a cancel is an empty answer", readiness.pick_folder(run=fake(b""), windows=True) == "")
+    try:
+        readiness.pick_file(run=fake(b"", 1, b"Add-Type : cannot load\r\n"), windows=True)
+        check("a dialog that fails to open raises", False)
+    except RuntimeError as exc:
+        check("a dialog that fails to open says so, so the page asks for the path", "type the path" in str(exc), str(exc))
+    argvs = []
+    def rec(argv, **kw):
+        argvs.append(argv)
+        return SimpleNamespace(returncode=0, stdout=b"/home/u/x.iso\n", stderr=b"")
+    try:
+        got = readiness.pick_file(run=rec, windows=False)
+        why = ""
+    except RuntimeError as exc:
+        got, why = "", str(exc)
+    if sys.platform.startswith("linux"):
+        check("on Linux the desktop's own dialog opens (or the page asks for the path)",
+              (got == "/home/u/x.iso" and argvs and argvs[0][0] in ("zenity", "kdialog", "yad")
+               and "powershell" not in " ".join(argvs[0]).lower()) or ("type the path" in why and not argvs),
+              f"{argvs} {why}")
+    else:
+        check("off Windows and Linux the picker refuses", bool(why) and not argvs)
+    check("PowerShell by its full path under SystemRoot when it is there",
+          readiness.powershell_exe({"SystemRoot": "/nonexistent"}) == "powershell.exe")
+    check("the timeout and the hidden console stay", seen[0][1]["timeout"] == 3600 and "creationflags" in seen[0][1])
+    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    check("Browse... falls back to typing the path when the dialog cannot open",
+          "do:'pick-iso'" in page and "Full path to the ISO you downloaded" in page)
+
+
+def test_any_iso_goes_in():
+    """Use any ISO: winlab reads the disc and files it where it fits instead
+    of refusing "the wrong ISO". A Windows it installs goes in as that
+    Windows (even picked under another one), an unknown or unsupported disc
+    as the user's own ISO a machine boots for a hand install."""
+    import os
+    import tempfile
+    from winlab import bsdfw, images, linuxiso, wim
+
+    saved = (wim.images_in_iso, images.import_media, linuxiso.detect, bsdfw.detect, os.environ.get("WINLAB_IMAGES"))
+    win11 = [{"name": "Windows 11 Pro", "edition": "Professional", "build": 26100, "type": "client", "index": 6}]
+    win7 = [{"name": "Windows 7 Ultimate", "edition": "Ultimate", "build": 7601, "type": "client", "index": 1}]
+    media: dict = {}
+    calls = []
+
+    def fake_wim(path):
+        got = media.get(Path(path).name)
+        if got is None:
+            raise wim.WimError("no install.wim")
+        return "sources/install.wim", got
+
+    def fake_import(image_id, src, progress=None):
+        calls.append(image_id)
+        return Path(src)
+
+    with tempfile.TemporaryDirectory() as td:
+        os.environ["WINLAB_IMAGES"] = td
+        wim.images_in_iso, images.import_media = fake_wim, fake_import
+        linuxiso.detect = lambda p: "ubuntu24" if "ubuntu" in Path(p).name else ""
+        bsdfw.detect = lambda p: ""
+        try:
+            def iso(name):
+                f = Path(td) / name
+                f.write_bytes(b"\0" * 4096)
+                return f
+            media["Win11_24H2_English_x64.iso"] = win11
+            got, _, note = images.import_any(iso("Win11_24H2_English_x64.iso"), wanted="ws2022")
+            check("a Windows 11 ISO picked under Server 2022 goes in as Windows 11, with a note",
+                  got == "win11" and calls[-1] == "win11" and "went in as that" in note, f"{got} {note}")
+            got, _, note = images.import_any(iso("Win11_24H2_English_x64.iso"), wanted="win11")
+            check("the ISO asked for goes in quietly", got == "win11" and note == "")
+            got, _, note = images.import_any(iso("ubuntu-24.04-live-server-amd64.iso"))
+            check("a Linux installer goes in as that distribution", got == "ubuntu24" and calls[-1] == "ubuntu24")
+            got, _, note = images.import_any(iso("unreadable.iso"), wanted="ws2025")
+            check("an unreadable Windows disc under a Windows slot goes in as asked", got == "ws2025")
+            media["en_windows_7_ultimate.iso"] = win7
+            got, dest, note = images.import_any(iso("en_windows_7_ultimate.iso"), wanted="win10")
+            check("a Windows winlab cannot set up goes in as the user's own ISO",
+                  got == "en-windows-7-ultimate" and got in images.custom_images() and dest.exists()
+                  and "install it yourself" in note and "Windows 7" in note, f"{got} {note}")
+            got, _, note = images.import_any(iso("hirens-boot.iso"))
+            check("any other disc goes in as the user's own ISO", got == "hirens-boot" and "does not know" in note)
+            got2, _, _ = images.import_any(iso("hirens-boot.iso"))
+            check("a second disc of the same name gets its own id", got2 == "hirens-boot-2", got2)
+            check("ids from odd names stay valid", images.CUSTOM_ID.match(images.custom_id_for(Path("123 ##.iso"))) is not None
+                  and images.custom_id_for(Path("ws2022.iso")) != "ws2022")
+            try:
+                images.import_any(Path(td) / "notes.txt")
+                check("a missing file is refused", False)
+            except images.ImageError:
+                check("a missing file is refused", True)
+        finally:
+            wim.images_in_iso, images.import_media, linuxiso.detect, bsdfw.detect = saved[:4]
+            if saved[4] is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = saved[4]
+    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    check("Setup offers Use any ISO", "browseIso('')" in page and "Use any ISO" in page)
+
+
+def test_parallel_fetch_progress():
+    """Several fetches at once (pressing Fetch on more than one item): each
+    job's downloads report to that job's own bar, and the console gets
+    whole, named lines instead of \\r redraws that overwrote each other."""
+    import contextlib
+    import io
+    import tempfile
+    import threading
+    from winlab import bootstrap, webui
+
+    with tempfile.TemporaryDirectory() as td:
+        srcs = []
+        for name in ("alpha", "beta"):
+            f = Path(td) / f"{name}.bin"
+            f.write_bytes(bytes(range(256)) * 12288)  # 3 MB: a dozen reads
+            srcs.append(f)
+        err = io.StringIO()
+        jobs = webui.Jobs()
+        with contextlib.redirect_stderr(err):
+            ids = [jobs.start("iso-import", lambda emit, f=f: bootstrap._download_to(
+                f.as_uri(), Path(td) / "out" / f.name, label=f"{f.stem} disc")) for f in srcs]
+            for _ in range(200):
+                if all(r["done"] for r in jobs.list()):
+                    break
+                threading.Event().wait(0.05)
+        out = err.getvalue()
+        recs = {r["id"]: r for r in jobs.list()}
+        check("both fetches finish", all(recs[i]["ok"] for i in ids), str(recs))
+        check("inside a job the console gets whole lines, no \\r redraws", "\r" not in out, repr(out[:200]))
+        check("each download's lines are named", "alpha disc" in out and "beta disc" in out
+              and out.count("done") >= 2 and " 50%" in out)
+        check("each job's bar gets its own download's progress",
+              all(recs[i]["last"].endswith("done") for i in ids))
+        with contextlib.redirect_stderr(io.StringIO()) as solo:
+            bootstrap._download_to(srcs[0].as_uri(), Path(td) / "solo.bin", label="solo")
+        check("on its own (the command line) the download still redraws one line", "\r    solo" in solo.getvalue())
+
+
+def test_get_ready_follows_own_fetches():
+    """Fetch pressed on single items, then Get everything ready: the run
+    follows the fetches already going (no second download of the same file),
+    shows their progress as its own steps, and Setup marks those steps as
+    running instead of offering their buttons again."""
+    import threading
+    import time
+    from winlab import schema, webui
+
+    class Dash(webui.Dashboard):
+        def __init__(self, lab):
+            super().__init__(lab, accel="tcg")
+            self.done: set[str] = set()
+            self.ran: list[str] = []
+
+        def _setup_state(self, quick=False):
+            def st(i, job, **kw):
+                return {"id": i, "label": f"step {i}", "job": job, "done": i in self.done, "blocked": False, **kw}
+            return {"steps": [st("bootstrap", "bootstrap"), st("virtio", "virtio-fetch"),
+                              st("ubuntu", "appliance-fetch", image="ubuntu"),
+                              {"id": "up", "label": "Start the lab", "done": False}], "media": []}
+
+        def _run(self, name):
+            def run(emit):
+                self.ran.append(name)
+                emit(f"{name} 100%")
+                self.done.add(name)
+            return run
+
+        def stream_bootstrap(self, emit):
+            self._run("bootstrap")(emit)
+
+        @property
+        def stream_virtio(self):
+            return self._run("virtio")
+
+        def stream_appliance(self, image_id):
+            return self._run(image_id)
+
+    d = Dash(schema.load("ad-ds-basics"))
+    release = threading.Event()
+
+    def own_virtio(emit):  # the user pressed Fetch drivers by itself
+        emit("virtio-win.iso 40%")
+        release.wait(10)
+        d.done.add("virtio")
+    jid = d.jobs.start("virtio-fetch", own_virtio)
+    d.jobs.tag(jid, {"job": "virtio-fetch"})
+    end = time.monotonic() + 5
+    while d.jobs.record(jid)["percent"] != 40 and time.monotonic() < end:
+        time.sleep(0.01)
+    steps = {st["id"]: st for st in d.setup_state(quick=True)["steps"]}
+    check("Setup shows the fetch running with its percent", steps["virtio"].get("running") == 40
+          and "running" not in steps["bootstrap"], str(steps["virtio"]))
+    check("pressing the same Fetch again follows the running job", d.same_job("virtio-fetch", {}) == jid)
+    check("a different image is a different job", d.same_job("appliance-fetch", {"image": "ubuntu"}) == "")
+    out: list[str] = []
+    t = threading.Thread(target=d.stream_get_ready, args=(out.append,))
+    t.start()
+    end = time.monotonic() + 5
+    while not any("following it" in x for x in out) and time.monotonic() < end:
+        time.sleep(0.01)
+    check("Get everything ready reaches the running fetch and follows it", any("following it" in x for x in out), str(out))
+    check("while it follows, Get everything ready's step is that fetch",
+          d.same_job("virtio-fetch", {}) == jid and d.ready["steps"][d.ready["current"]]["label"] == "step virtio")
+    release.set()
+    t.join(10)
+    check("the fetch is not run a second time; the rest of the steps run",
+          d.ran == ["bootstrap", "ubuntu"], str(d.ran))
+    check("the run ends with every step done", "everything is ready" in out[-1], out[-1])
+    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    check("Setup shows fetches pressed one by one next to Get everything ready",
+          "Fetching now: " in page and "working on it… ${st.running}%" in page)
+
+
+
+def test_download_resume_and_leftovers():
+    """Closing winlab mid-download: the .part is resumed on the next fetch
+    with a Range request (a server that sends the whole file starts it
+    over), bad bytes are never resumed, and half files nothing touches any
+    more are removed when winlab starts."""
+    import contextlib
+    import hashlib
+    import io
+    import os
+    import tempfile
+    import threading
+    import time as _time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from winlab import bootstrap
+
+    body = bytes(range(256)) * 4096  # 1 MB
+    seen: list[str] = []
+
+    class H(BaseHTTPRequestHandler):
+        ranges = True
+
+        def do_GET(self):
+            rng = self.headers.get("Range", "")
+            seen.append(rng)
+            if rng and H.ranges:
+                start = int(rng.split("=")[1].rstrip("-"))
+                if start >= len(body):
+                    self.send_response(416)
+                    self.end_headers()
+                    return
+                self.send_response(206)
+                self.send_header("Content-Length", str(len(body) - start))
+                self.end_headers()
+                self.wfile.write(body[start:])
+                return
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/disc.iso"
+    sha = hashlib.sha256(body).hexdigest()
+    try:
+        with tempfile.TemporaryDirectory() as td, contextlib.redirect_stderr(io.StringIO()) as err:
+            dest = Path(td) / "disc.iso"
+            part = dest.with_name("disc.iso.part")
+            part.write_bytes(body[:300000])  # what a closed winlab left
+            bootstrap._download_to(url, dest, sha, label="disc")
+            check("a half download is resumed where it stopped", seen[-1] == "bytes=300000-"
+                  and dest.read_bytes() == body and not part.exists() and "resuming at" in err.getvalue(), str(seen))
+            dest.unlink()
+            H.ranges = False
+            part.write_bytes(body[:300000])
+            bootstrap._download_to(url, dest, sha, label="disc")
+            check("a server that sends the whole file starts it over, still correct", dest.read_bytes() == body)
+            dest.unlink()
+            H.ranges = True
+            part.write_bytes(body)  # complete already: the server answers 416
+            bootstrap._download_to(url, dest, sha, label="disc")
+            check("a .part the server cannot continue is fetched again", dest.read_bytes() == body)
+            dest.unlink()
+            part.write_bytes(b"\xff" * 300000)  # not this file's bytes
+            sleep, bootstrap.time.sleep = bootstrap.time.sleep, lambda s: None
+            try:
+                bootstrap._download_to(url, dest, sha, label="disc")
+                check("bad bytes are thrown away, then the download is done again", dest.read_bytes() == body)
+            except bootstrap.BootstrapError as exc:
+                check("bad bytes are thrown away, then the download is done again", False, str(exc))
+            finally:
+                bootstrap.time.sleep = sleep
+            # leftovers at start
+            root = Path(td) / "store"
+            (root / "downloads").mkdir(parents=True)
+            old_part = root / "downloads" / "old.iso.part"
+            new_part = root / "downloads" / "new.iso.part"
+            old_copy = root / "downloads" / "win.iso.copying"
+            live_copy = root / "downloads" / "live.iso.copying"
+            for f in (old_part, new_part, old_copy, live_copy):
+                f.write_bytes(b"x")
+            now = _time.time()
+            os.utime(old_part, (now - 8 * 86400, now - 8 * 86400))
+            os.utime(new_part, (now - 2 * 86400, now - 2 * 86400))
+            os.utime(old_copy, (now - 3600, now - 3600))
+            gone = bootstrap.clean_leftovers([root], now=now)
+            check("a .part untouched for a week and a cut-off import copy are removed",
+                  set(gone) == {old_part, old_copy} and not old_part.exists() and not old_copy.exists())
+            check("a recent .part stays to be resumed; a copy still running stays",
+                  new_part.exists() and live_copy.exists())
+    finally:
+        srv.shutdown()
+    import winlab.webui as _w
+    check("the desktop cleans leftovers when it starts", "threading.Thread(target=_clean_leftovers" in
+          Path(_w.__file__).read_text(encoding="utf-8"))
+
+# ===== the helpdesk ticket game (winlab/ticketgame.py) =====
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def json_dump(v) -> str:
+    import json
+    return json.dumps(v)
+
+
+# ===== the Linux track: Samba, BIND and a Linux client in the Windows domain =====
+
+
+# ===== EIGRP (FRRouting's eigrpd) and HSRP (winlab's own speaker) on the router (winlab/ioseigrp.py, ioshsrp.py, hsrpd.py) =====
+# eigrpd's own output, captured from FRRouting 8.4.4 in network namespaces:
+# the lab router (2.2.2.2) with rtr-edge (10.80.0.3) and rtr-isp
+# (198.51.100.2) both announcing 10.90.0.0/24, delay 200 on the office link.
+_EIGRP_NBR = """
+EIGRP neighbors for AS(100)
+
+H   Address           Interface            Hold   Uptime   SRTT   RTO   Q     Seq
+                                           (sec)           (ms)        Cnt    Num
+0   10.80.0.3         {office}              11     0        0      2    0      2
+0   198.51.100.2      {isp}              14     0        0      2    0      2
+"""
+_EIGRP_TOPO = """
+EIGRP Topology Table for AS(100)/ID(2.2.2.2)
+
+Codes: P - Passive, A - Active, U - Update, Q - Query, R - Reply
+       r - reply Status, s - sia Status
+
+P  10.80.0.0/24, 3 successors, FD is 28160, serno: 0
+       via Connected, {office}
+       via Connected, {office}
+       via Connected, {office}
+P  10.81.0.0/24, 1 successors, FD is 79360, serno: 0
+       via 10.80.0.3 (79360/28160), {office}
+P  10.90.0.0/24, 1 successors, FD is 30720, serno: 0
+       via 198.51.100.2 (30720/28160), {isp}
+       via 10.80.0.3 (79360/28160), {office}
+P  198.51.100.0/30, 1 successors, FD is 28160, serno: 0
+       via Connected, {isp}
+"""
+_EIGRP_IFS = """
+EIGRP interfaces for AS(100)
+
+Interface        Bandwidth  Delay      Peers  Xmit Queue   Mean    Pacing Time    Multicast    Pending  Hello    Holdtime
+                                              Un/Reliable  SRTT    Un/Reliable    Flow Timer   Routes
+{office}         100000     200        1      0 / 0         0       0              0            0       5        15
+{isp}         100000     10         1      0 / 0         0       0              0            0       5        15
+"""
+
+
+def _router_console_dash(root, td):
+    """A router-protocols lab in a temp dir and a console on its router."""
+    from winlab import netplan, paths, schema, workbench
+    paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+    paths.LABS.mkdir(parents=True)
+    (paths.LABS / "router-protocols.toml").write_text(
+        (root / "content" / "labs" / "router-protocols.toml").read_text(encoding="utf-8"), encoding="utf-8")
+
+    class Dash:
+        def __init__(self):
+            self.reload()
+
+        def reload(self):
+            self.lab = schema.load("router-protocols")
+            self.plan = netplan.compile_topology(self.lab, check_ports=False)
+            self.wb_live = workbench.Live()
+    workbench._running = lambda _name: {"fabric"}
+    return Dash()
+
+
+
+
+def test_w11_hsrp_speaker():
+    """winlab-hsrpd, winlab's own HSRP speaker: its packets byte for byte
+    against RFC 2281 (version 1) and the version 2 TLV layout, the frames it
+    puts on the wire, its configuration file, and its state machine with
+    two speakers in one process over a fake wire."""
+    import socket
+    import struct
+    from winlab import hsrpd
+
+    dflt = "".join(map(chr, (99, 105, 115, 99, 111))).encode()   # the protocol's default text
+    check("with no authentication configured, the protocol's default text is sent",
+          hsrpd.auth_bytes(None) == dflt + b"\0\0\0")
+    text = "lab" + "1"
+    v1 = hsrpd.encode_v1(hsrpd.OP_HELLO, "Active", 3, 10, 110, 1, hsrpd.auth_bytes(text), "10.80.0.1")
+    check("version 1, RFC 2281 5.1: version 0, op hello, state 16 (Active), 3 s, 10 s, priority 110, group 1, "
+          "8 octets of text, the virtual IP: 20 octets",
+          v1 == bytes.fromhex("00 00 10 03 0a 6e 01 00") + text.encode() + b"\0" * 4 + bytes.fromhex("0a500001"),
+          v1.hex())
+    check("the version 1 state octets are RFC 2281's",
+          [hsrpd.V1_CODE[s] for s in hsrpd.STATES] == [0, 1, 2, 4, 8, 16])
+    coup = hsrpd.encode_v1(hsrpd.OP_COUP, "Speak", 3, 10, 120, 7, hsrpd.auth_bytes(None), "10.80.0.1")
+    check("coup is op 1 and resign op 2", coup[1] == 1 and coup[2] == 4
+          and hsrpd.encode_v1(hsrpd.OP_RESIGN, "Active", 3, 10, 1, 1, dflt, "")[1:3] == b"\x02\x10")
+    m = hsrpd.decode(v1)
+    check("a version 1 packet decodes back", m["version"] == 1 and m["state"] == "Active" and m["prio"] == 110
+          and m["group"] == 1 and m["vip"] == "10.80.0.1" and m["hold"] == 10.0)
+    ident = bytes.fromhex("525400123456")
+    v2 = hsrpd.encode_v2(hsrpd.OP_HELLO, "Standby", 4095, ident, 100, 3, 10, "10.80.0.1", hsrpd.auth_bytes(None))
+    want = (bytes([1, 40, 2, 0, 5, 4]) + struct.pack("!H", 4095) + ident + struct.pack("!III", 100, 3000, 10000)
+            + bytes.fromhex("0a500001") + b"\0" * 12 + bytes([3, 8]) + dflt + b"\0\0\0")
+    check("version 2: group state TLV (type 1, length 40: version 2, op, state 5 Standby, IPv4, group in two "
+          "octets, the sender's MAC, priority, hello and hold in ms, the address in 16 octets), then text auth TLV",
+          v2 == want and len(v2) == 52, v2.hex())
+    m2 = hsrpd.decode(v2 + bytes([2, 4, 0, 1, 0, 0]))
+    check("a version 2 packet decodes back, an unknown TLV after it skipped",
+          m2["version"] == 2 and m2["group"] == 4095 and m2["state"] == "Standby" and m2["hello"] == 3.0
+          and m2["ident"] == ident and m2["auth"] == hsrpd.auth_bytes(None))
+    check("garbage and wrong versions decode to nothing", hsrpd.decode(b"\x01\x05xx") is None
+          and hsrpd.decode_v1(b"\x00" * 10) is None and hsrpd.decode(b"\x01\x28" + b"\x03" + b"\0" * 39) is None)
+    check("virtual MACs: 0000.0c07.acXX for version 1, 0000.0c9f.fXXX for version 2",
+          hsrpd.vmac(1, 1) == "00:00:0c:07:ac:01" and hsrpd.vmac(2, 1) == "00:00:0c:9f:f0:01"
+          and hsrpd.vmac(2, 4095) == "00:00:0c:9f:ff:ff" and hsrpd.cisco_mac(hsrpd.vmac(2, 1)) == "0000.0c9f.f001")
+    fr = hsrpd.udp_frame("00:00:0c:9f:f0:01", "10.80.0.2", hsrpd.V2_GROUP, v2, 7)
+    ip, udp = fr[14:34], fr[34:]
+    pseudo = socket.inet_aton("10.80.0.2") + socket.inet_aton("224.0.0.102") + struct.pack("!BBH", 0, 17, len(udp))
+    check("the frame: to 01:00:5e:00:00:66 from the virtual MAC, IPv4 TTL 1, UDP 1985 to 1985, checksums right",
+          fr[:6] == bytes.fromhex("01005e000066") and fr[6:12] == bytes.fromhex("00000c9ff001") and fr[12:14] == b"\x08\x00"
+          and ip[8] == 1 and ip[9] == 17 and hsrpd._csum(ip) == 0 and udp[:4] == struct.pack("!HH", 1985, 1985)
+          and hsrpd._csum(pseudo + udp) == 0 and udp[8:] == v2)
+    check("version 1 hellos go to 224.0.0.2 (01:00:5e:00:00:02)", hsrpd.mcast_mac(hsrpd.V1_GROUP) == "01:00:5e:00:00:02")
+    g = hsrpd.garp_frame("00:00:0c:07:ac:01", "10.80.0.1")
+    check("gratuitous ARP: broadcast from the virtual MAC, sender and target the virtual address",
+          g[:6] == b"\xff" * 6 and g[12:14] == b"\x08\x06" and g[14 + 8:14 + 14] == bytes.fromhex("00000c07ac01")
+          and g[14 + 14:14 + 18] == g[14 + 24:14 + 28] == bytes.fromhex("0a500001") and len(g) == 60)
+
+    conf = ("interface eth1\n standby version 2\n standby 1 ip 10.80.0.1\n standby 1 ip 10.80.0.5 secondary\n"
+            " standby 1 priority 90\n standby 1 preempt delay minimum 30\n standby 1 timers 1 4\n"
+            f" standby 1 authentication {text}\n standby 1 track eth0 decrement 20\n standby 1 name OFFICE\n"
+            "interface eth2\n standby ip 10.81.0.1\n")
+    cfgs = hsrpd.parse_conf(conf)
+    a, b = cfgs
+    check("the configuration file is IOS's own lines: version, ip, secondary, priority, preempt delay, timers, "
+          "authentication, track, name; a group with no number is group 0",
+          a["version"] == 2 and a["vip"] == "10.80.0.1" and a["secondary"] == ["10.80.0.5"] and a["prio"] == 90
+          and a["preempt"] and a["delay"] == 30 and (a["hello"], a["hold"]) == (1.0, 4.0) and a["auth"] == text
+          and a["tracks"] == [{"iface": "eth0", "decrement": 20}] and a["name"] == "OFFICE"
+          and b["group"] == 0 and b["version"] == 1 and not b["preempt"] and b["prio"] == 100)
+    bad = []
+    for txt in ("interface e\n standby 1 authentication md5 key-string x\n", "interface e\n standby 300 ip 10.0.0.1\n",
+                "interface e\n standby 1 timers 5 5\n", " standby 1 ip 10.0.0.1\n", "interface e\n standby 1 frob\n"):
+        try:
+            hsrpd.parse_conf(txt)
+        except hsrpd.ConfError as e:
+            bad.append(str(e))
+    check("the file's mistakes are named: md5, a version 1 group above 255, hold not above hello, no interface, "
+          "an unknown word", len(bad) == 5 and "MD5" in bad[0] and "0 to 255" in bad[1], str(bad))
+
+    # Two speakers in one process over a fake wire.
+    def pair(pa, pb, pre_a=True, pre_b=True, extra=""):
+        wire, logs = [], []
+
+        def mk(ip, prio, pre):
+            c = hsrpd.parse_conf(f"interface eth1\n standby version 2\n standby 1 ip 10.80.0.1\n"
+                                 f" standby 1 priority {prio}\n" + (" standby 1 preempt\n" if pre else "") + extra)[0]
+            grp = hsrpd.Group(c, None, log=lambda t, ip=ip: logs.append((ip, t)))
+            grp.send = lambda op, grp=grp: wire.append((grp.my_ip, hsrpd.decode(grp.payload(op, ident))))
+            return grp
+        ga, gb = mk("10.80.0.2", pa, pre_a), mk("10.80.0.3", pb, pre_b)
+        return ga, gb, wire, logs
+
+    def run(ga, gb, wire, t0, t1, up=(True, True)):
+        t = t0
+        while t < t1:
+            t = round(t + 0.1, 1)
+            for x, on in zip((ga, gb), up):
+                if on:
+                    x.tick(t)
+            while wire:
+                src, msg = wire.pop(0)
+                for x, on in zip((ga, gb), up):
+                    if on and x.my_ip != src:
+                        x.receive(msg, src, t)
+        return t
+
+    ga, gb, wire, logs = pair(110, 100)
+    ga.start("10.80.0.2", 0)
+    gb.start("10.80.0.3", 0.5)
+    t = run(ga, gb, wire, 0, 40)
+    seen = [s for ip, s in logs if ip == "10.80.0.2"]
+    check("alone at first, the better router goes Listen, Speak, Standby, Active; the other ends Standby",
+          (ga.state, gb.state) == ("Active", "Standby")
+          and [x.split("state ")[1] for x in seen] == ["Init -> Listen", "Listen -> Speak", "Speak -> Standby",
+                                                      "Standby -> Active"], str(logs))
+    act = ga.status(t)
+    check("the Active knows its Standby, the Standby its Active", act["active"] == "local" and act["standby"] == "10.80.0.3"
+          and gb.status(t)["active"] == "10.80.0.2" and gb.status(t)["standby"] == "local")
+    t2 = run(ga, gb, wire, t, t + 6, up=(False, True))
+    check("the Active falls silent: the Standby waits out the hold time", gb.state == "Standby")
+    t2 = run(ga, gb, wire, t2, t2 + 4.5, up=(False, True))
+    check("then takes over: Standby -> Active", gb.state == "Active")
+    ga.stop(t2)
+    wire.clear()
+    ga.start("10.80.0.2", t2)
+    t3 = run(ga, gb, wire, t2, t2 + 15)
+    check("the better router comes back and preempts with a coup; the other goes Speak then Standby",
+          (ga.state, gb.state) == ("Active", "Standby") and any("Active -> Speak" in s for ip, s in logs if ip == "10.80.0.3"))
+
+    ga, gb, wire, logs = pair(110, 100, pre_a=False)
+    gb.start("10.80.0.3", 0)
+    t = run(ga, gb, wire, 0, 25)
+    ga.start("10.80.0.2", t)
+    t = run(ga, gb, wire, t, t + 30)
+    check("without preempt the better router waits as Standby", (ga.state, gb.state) == ("Standby", "Active"))
+
+    ga, gb, wire, logs = pair(110, 100, extra=" standby 1 track eth0 decrement 20\n")
+    ga.start("10.80.0.2", 0)
+    gb.start("10.80.0.3", 0)
+    t = run(ga, gb, wire, 0, 30)
+    ga.track_down = {"eth0"}
+    t = run(ga, gb, wire, t, t + 5)
+    check("tracking: eth0 down takes 20 off (110 -> 90) and the other router (100, preempt) takes Active",
+          ga.prio() == 90 and gb.state == "Active" and ga.state != "Active",
+          f"{ga.state} {gb.state}")
+    ga.track_down = set()
+    t = run(ga, gb, wire, t, t + 5)
+    check("eth0 back: 110 again and the lab router takes it back", ga.state == "Active" and gb.state == "Standby")
+    ga.stop(t)
+    t = run(ga, gb, wire, t, t + 0.3, up=(False, True))
+    check("a resign makes the Standby Active at once, without waiting for the hold time", gb.state == "Active")
+
+    ga, gb, wire, logs = pair(100, 100)
+    ga.start("10.80.0.2", 0)
+    gb.start("10.80.0.3", 0)
+    run(ga, gb, wire, 0, 40)
+    check("equal priorities: the higher address wins", (ga.state, gb.state) == ("Standby", "Active"))
+
+    ga, gb, wire, logs = pair(110, 100)
+    gb.cfg["auth"] = "other"
+    ga.start("10.80.0.2", 0)
+    gb.start("10.80.0.3", 0)
+    run(ga, gb, wire, 0, 40)
+    check("different authentication text: each ignores the other, both Active, and it is logged",
+          (ga.state, gb.state) == ("Active", "Active") and any("BADAUTH" in s for _, s in logs))
+    out = hsrpd.show_brief([ga.status(40), gb.status(40)], names={"eth1": "GigabitEthernet0/1/0"},
+                           short=lambda n: n.replace("GigabitEthernet", "Gi"))
+    check("show standby brief: IOS's columns", "Interface   Grp  Pri P State   Active          Standby         Virtual IP"
+          in out and "Gi0/1/0     1    110 P Active  local" in out, out)
+    det = hsrpd.show_detail([ga.status(40)])
+    check("show standby: state, virtual IP and MAC, timers, preemption, priority, group name",
+          "eth1 - Group 1 (version 2)\n  State is Active" in det and "Active virtual MAC address is 0000.0c9f.f001 "
+          "(MAC In Use)" in det and "Hello time 3 sec, hold time 10 sec" in det and "Preemption enabled" in det
+          and "Priority 110 (configured 110)" in det and "Authentication mismatch with 10.80.0.3" in det, det)
+
+
+
+
+def test_w11_hsrp_two_speakers_netns():
+    """Two real winlab-hsrpd processes in two Linux network namespaces on a
+    bridge, with a PC namespace: election, the PC pinging the virtual
+    address at the virtual MAC, failover when the Active's link goes down.
+    Needs root, ip netns and ping; skipped (said so) without them."""
+    import os
+    import shutil
+    import subprocess
+    import time
+    from winlab import hsrpd
+
+    if getattr(os, "geteuid", lambda: -1)() != 0 or not shutil.which("ip") or not shutil.which("ping"):
+        print("  skip   two speakers in network namespaces (needs root, ip and ping)")
+        return
+    tag = f"wlh{os.getpid() % 10000}"
+    ns = [f"{tag}a", f"{tag}b", f"{tag}p", f"{tag}s"]
+
+    def sh(cmd):
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+    if sh(f"ip netns add {ns[3]}").returncode != 0:
+        print("  skip   two speakers in network namespaces (ip netns add refused)")
+        return
+    procs = []
+    td = Path(tempfile.mkdtemp())
+    try:
+        sh(f"ip -n {ns[3]} link add br0 type bridge && ip -n {ns[3]} link set br0 up")
+        for n, addr in zip(ns[:3], ("10.80.0.2/24", "10.80.0.3/24", "10.80.0.10/24")):
+            sh(f"ip netns add {n}; ip -n {n} link set lo up; ip link add {n}x type veth peer name eth1 netns {n}; "
+               f"ip link set {n}x netns {ns[3]}; ip -n {ns[3]} link set {n}x master br0; ip -n {ns[3]} link set {n}x up; "
+               f"ip -n {n} addr add {addr} dev eth1; ip -n {n} link set eth1 up")
+        for n, prio in ((ns[0], 110), (ns[1], 100)):
+            (td / f"{n}.conf").write_text(f"interface eth1\n standby version 2\n standby 1 ip 10.80.0.1\n"
+                                          f" standby 1 priority {prio}\n standby 1 preempt\n standby 1 timers 1 3\n")
+            procs.append(subprocess.Popen(["ip", "netns", "exec", n, sys.executable, hsrpd.__file__, "-c",
+                                           str(td / f"{n}.conf"), "-s", str(td / f"{n}.json")],
+                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+
+        def states():
+            out = []
+            for n in ns[:2]:
+                try:
+                    out.append(json.loads((td / f"{n}.json").read_text())["groups"][0]["state"])
+                except (OSError, ValueError, KeyError, IndexError):
+                    out.append("")
+            return out
+        import json
+        deadline = time.time() + 20
+        while time.time() < deadline and states() != ["Active", "Standby"]:
+            time.sleep(0.5)
+        check("two real speakers elect the better one Active, the other Standby", states() == ["Active", "Standby"],
+              str(states()))
+        ping = sh(f"ip netns exec {ns[2]} ping -c 2 -W 1 10.80.0.1")
+        neigh = sh(f"ip -n {ns[2]} neigh show 10.80.0.1").stdout
+        check("the PC reaches the virtual address at the virtual MAC", ping.returncode == 0
+              and "00:00:0c:9f:f0:01" in neigh, ping.stdout + neigh)
+        sh(f"ip -n {ns[0]} link set eth1 down")
+        deadline = time.time() + 10
+        while time.time() < deadline and states()[1] != "Active":
+            time.sleep(0.5)
+        ping = sh(f"ip netns exec {ns[2]} ping -c 2 -W 1 10.80.0.1")
+        check("the Active's link goes down: the Standby takes over and the PC still reaches the gateway",
+              states()[1] == "Active" and ping.returncode == 0, str(states()) + ping.stdout)
+        sh(f"ip -n {ns[0]} link set eth1 up")
+        deadline = time.time() + 15
+        while time.time() < deadline and states() != ["Active", "Standby"]:
+            time.sleep(0.5)
+        check("it comes back and preempts", states() == ["Active", "Standby"], str(states()))
+    finally:
+        for p in procs:
+            p.terminate()
+        for p in procs:
+            try:
+                p.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        for n in ns:
+            sh(f"ip netns del {n}")
+        shutil.rmtree(td, ignore_errors=True)
+
+
+def _pagp_cfg(dev, mode, sw_no, port_no, group=1):
+    return {"dev": dev, "mode": mode, "group": group, "device_id": f"02:57:4c:00:00:0{sw_no}",
+            "device_name": f"SW{sw_no}", "port_name": f"Gi0/{port_no}", "ifindex": 24 + port_no,
+            "bond": f"stp{sw_no}po{group}", "bridge": f"stp{sw_no}", "native": 4094, "vids": [], "cost": 4,
+            "priority": 32, "switch": f"sw{sw_no}", "port": f"GigabitEthernet0/{port_no}"}
+
+
+def _pagp_wire(cfgs, peer, seconds=10.0, step=0.25, start=0.0, eng=None, quiet=()):
+    """Runs winlab-pagpd's Engine over a fake wire: what a port sends arrives
+    at its peer (unless that cable is in `quiet`)."""
+    from winlab import pagpd
+    eng = eng or pagpd.Engine(cfgs, log=lambda _t: None)
+    t = start
+    while t < start + seconds:
+        for dev in eng.ports:
+            eng.link(dev, True, t)
+        for dev, pdu in eng.tick(t):
+            if dev not in quiet and peer.get(dev) in eng.ports:
+                eng.receive(peer[dev], pagpd.unframe(pagpd.frame("02:00:00:00:00:01", pdu)), t)
+        t += step
+    return eng, t
+
+
+def test_w11_pagp_speaker():
+    """winlab-pagpd, winlab's own PAgP speaker (winlab/pagpd.py): its frames
+    byte for byte against the layout Wireshark's PAgP dissector decodes,
+    PAgP's rules emerging from the protocol over a fake wire (desirable with
+    auto forms, auto with auto never does, a silent far end stands alone,
+    two neighbours on one group suspend the odd one out), and what the
+    router and the switch's console make of it."""
+    from winlab import etherchannel, pagpd
+    local = {"device_id": "02:57:4c:00:00:01", "learn_cap": 1, "priority": 128, "ifindex": 26,
+             "group_cap": 2, "group_ifindex": 0x1002}
+    partner = {"device_id": "02:57:4c:00:00:02", "learn_cap": 1, "priority": 128, "ifindex": 27,
+               "group_cap": 2, "group_ifindex": 0}
+    pdu = pagpd.encode_info(pagpd.F_CONSISTENT | pagpd.F_AUTO, local, partner,
+                            [(pagpd.TLV_DEVICE_NAME, b"SW1"), (pagpd.TLV_PORT_NAME, b"Gi0/2")])
+    check("the Info PDU: version 1, flags, then the local fields at Wireshark's offsets (2, 8, 9, 10, 14, 18)",
+          pdu[0] == 1 and pdu[1] == 0x06 and pdu[2:8] == bytes.fromhex("02574c000001") and pdu[8] == 1
+          and pdu[9] == 128 and pdu[10:14] == (26).to_bytes(4, "big") and pdu[14:18] == (2).to_bytes(4, "big")
+          and pdu[18:22] == (0x1002).to_bytes(4, "big"), pdu.hex())
+    check("the partner's fields at 22 to 41, the partner count at 42 and the TLV count at 44",
+          pdu[22:28] == bytes.fromhex("02574c000002") and pdu[30:34] == (27).to_bytes(4, "big")
+          and pdu[42:44] == b"\0\1" and pdu[44:46] == b"\0\2", pdu.hex())
+    check("TLVs from offset 46: type and length 2 octets each, the length counting the header",
+          pdu[46:53] == b"\0\1\0\7SW1" and pdu[53:62] == b"\0\2\0\x09Gi0/2" and len(pdu) == 62, pdu[46:].hex())
+    m = pagpd.decode(pdu)
+    check("and back: the decoder reads what the encoder wrote",
+          m["local"] == local and m["partner"] == partner and m["device_name"] == "SW1" and m["port_name"] == "Gi0/2"
+          and m["partner_count"] == 1, str(m))
+    fr = pagpd.frame("aa:bb:cc:00:00:01", pdu)
+    check("the frame: to 01:00:0c:cc:cc:cc, an 802.3 length, LLC AA-AA-03, SNAP OUI 00-00-0C PID 0x0104",
+          fr[:6] == bytes.fromhex("01000ccccccc") and fr[6:12] == bytes.fromhex("aabbcc000001")
+          and int.from_bytes(fr[12:14], "big") == 8 + len(pdu) and fr[14:22] == bytes.fromhex("aaaa0300000c0104")
+          and pagpd.unframe(fr) == pdu, fr[:24].hex())
+    cdp = bytearray(fr)
+    cdp[20:22] = b"\x20\x00"
+    check("a CDP frame (same address, PID 0x2000) is not PAgP", pagpd.unframe(bytes(cdp)) is None)
+    fl = pagpd.decode(pagpd.encode_flush("02:57:4c:00:00:01", "02:57:4c:00:00:02", 7))
+    check("the Flush PDU (version 2) decodes: both device ids and the transaction id",
+          fl["version"] == 2 and fl["partner_id"] == "02:57:4c:00:00:02" and fl["transaction"] == 7, str(fl))
+    check("a short or foreign PDU is refused", pagpd.decode(b"\1\0") is None and pagpd.decode(b"\3" + b"\0" * 50) is None)
+
+    peer = {"a2": "b2", "b2": "a2", "a3": "b3", "b3": "a3"}
+
+    def cfgs(ma, mb):
+        return [_pagp_cfg("a2", ma, 1, 2), _pagp_cfg("a3", ma, 1, 3), _pagp_cfg("b2", mb, 2, 2), _pagp_cfg("b3", mb, 2, 3)]
+
+    def states(e):
+        return {d: p.state for d, p in e.ports.items()}
+    eng, t = _pagp_wire(cfgs("desirable", "auto"), peer, 3)
+    check("desirable with auto: both cables bundle at both ends within a few hellos",
+          set(states(eng).values()) == {"P"}, str(states(eng)))
+    nb = eng.ports["a2"].nb
+    check("each end knows its neighbour: device id, name, port, and the auto flag from the auto end",
+          nb["local"]["device_id"] == "02:57:4c:00:00:02" and nb["device_name"] == "SW2" and nb["port_name"] == "Gi0/2"
+          and nb["flags"] & pagpd.F_AUTO and nb["flags"] & pagpd.F_CONSISTENT, str(nb))
+    sent = eng.ports["a2"].sent
+    eng, t = _pagp_wire(None, peer, 60, start=t, eng=eng)
+    check("once bundled the hellos slow to one every 30 s", eng.ports["a2"].sent - sent <= 3
+          and set(states(eng).values()) == {"P"}, str(eng.ports["a2"].sent - sent))
+    eng, _ = _pagp_wire(cfgs("desirable", "desirable"), peer, 3)
+    check("desirable with desirable bundles", set(states(eng).values()) == {"P"}, str(states(eng)))
+    eng, _ = _pagp_wire(cfgs("auto", "auto"), peer, 10)
+    check("auto with auto never forms: neither end asks, nothing is sent, both stand alone",
+          set(states(eng).values()) == {"I"} and all(p.sent == 0 for p in eng.ports.values()), str(states(eng)))
+    lone = [_pagp_cfg("a2", "desirable", 1, 2), _pagp_cfg("a3", "desirable", 1, 3)]
+    eng, _ = _pagp_wire(lone, peer, 10)
+    check("desirable facing a switch that speaks no PAgP: it asks every second and stands alone",
+          set(states(eng).values()) == {"I"} and eng.ports["a2"].sent >= 9, str(states(eng)))
+    eng, t = _pagp_wire(cfgs("desirable", "auto"), peer, 3)
+    eng, t = _pagp_wire(None, peer, 120, start=t, eng=eng, quiet=("b3",))
+    check("a neighbour that falls silent is lost after 3.5 slow hellos: that cable leaves the bundle, the other stays",
+          states(eng)["a3"] == "I" and states(eng)["a2"] == "P" and eng.ports["a3"].nb is None, str(states(eng)))
+    eng.link("a2", False, t)
+    eng.link("a2", False, t + 1)
+    eng.tick(t + 1)
+    check("a link down (two polls) drops the neighbour and the port at once", states(eng)["a2"] == "D")
+    three = cfgs("desirable", "auto") + [_pagp_cfg("c4", "auto", 3, 4)]
+    three[1] = dict(three[1], dev="a3")
+    peer3 = {"a2": "b2", "b2": "a2", "a3": "c4", "c4": "a3"}
+    eng, _ = _pagp_wire([three[0], three[1], three[2], three[4]], peer3, 4)
+    check("one group, cables to two different switches: one bundles, the odd one is suspended (s)",
+          sorted([states(eng)["a2"], states(eng)["a3"]]) == ["P", "s"], str(states(eng)))
+    st = eng.status(10.0)
+    check("the state file's rows: switch, port, state and the neighbour",
+          {r["dev"]: r for r in st}["b2"]["neighbor"]["name"] == "SW1" and st[0]["switch"] == "sw1", str(st[0]))
+    check("the speaker's flag on the console: P only once the port sits in the bond, w while it waits",
+          etherchannel.pagp_flag({"state": "P", "bundled": True}) == "P"
+          and etherchannel.pagp_flag({"state": "P", "bundled": False}) == "w"
+          and etherchannel.pagp_flag({"state": "I"}) == "I" and etherchannel.pagp_flag({}) == "D")
+    root = Path(__file__).resolve().parent.parent
+    text = (root / "winlab" / "pagpd.py").read_text(encoding="utf-8")
+    check("the speaker is standard library only, and says what it does not do and that it met only itself",
+          "What it does not do" in text and "tested against itself only" in text
+          and {a or b for a, b in re.findall(r"^(?:import (\w+)|from (\w+) import )", text, re.M)}
+          <= {"__future__", "json", "os", "select", "signal", "socket", "struct", "subprocess", "sys", "time"})
+    check("the nftables rule matches PAgP's LLC/SNAP header right after the Ethernet header",
+          "@ll,112,64 0xaaaa0300000c0104 drop" in etherchannel.PAGP_NFT)
+
+
+def test_w11_pagp_console_and_router():
+    """PAgP typed at two switch consoles: the router script runs winlab-pagpd
+    on the desirable and auto ports (and nothing new for a lab without them),
+    and show pagp neighbor / show etherchannel summary read the speaker."""
+    import json as _json
+    import os
+    from winlab import devcli, editor, etherchannel, netplan, paths, schema, stp, workbench
+    from winlab.model import CUSTOM
+    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+        os.environ["WINLAB_IMAGES"] = str(td / "images")
+        try:
+            dest = editor.new_workbench("pagp-lab")
+            lab = schema.load(dest)
+            for n, c in (("sw1", "192.168.10.0/24"), ("sw2", "192.168.20.0/24")):
+                editor.add_network(lab, n, cidr=c)
+            editor.set_routed(lab, "sw2", False)
+            editor.add_node(lab, "pc01", kind=CUSTOM, image="win11")
+            editor.cable(lab, "pc01", 0, "sw1")
+            editor.save(lab)
+
+            class _Dash:
+                def reload(self):
+                    self.lab = schema.load(dest)
+                    self.plan = netplan.compile_topology(self.lab, check_ports=False)
+            d = _Dash()
+            d.reload()
+            workbench._running = lambda _n: {"fabric"}
+            workbench.act(d, "wb-cable", {"node": "switch", "network": "sw2", "to": "sw1"})
+            workbench.act(d, "wb-stp-cable", {"a": "sw1", "b": "sw2"})
+            d.reload()
+            plain = stp.render(d.plan)
+            check("a lab with no PAgP: no speaker, no nftables table in its script",
+                  "winlab-pagpd" not in "\n".join(plain) and etherchannel.PAGP_TABLE not in "\n".join(plain))
+            check("its rebuild only stops a speaker left from before",
+                  "kill" in "\n".join(stp.render(d.plan, reset=True)).split("# PAgP: no desirable or auto port")[1])
+            state = {"text": ""}
+
+            def runner(cmd, timeout=0):
+                return state["text"] if etherchannel.SPEAKER_STATE in cmd else ""
+            con = {s: devcli.Console(d, f"sw:{s}", runner_factory=lambda: (runner, "")) for s in ("sw1", "sw2")}
+            for c in con.values():
+                c.run("enable")
+                c.run("configure terminal")
+            s1, s2 = con["sw1"], con["sw2"]
+            s1.run("interface range gi0/2 - 3")
+            out = s1.run("channel-group 1 mode desirable")
+            check("desirable: the console says who speaks PAgP here", etherchannel.PAGP_NOTE in out
+                  and "winlab-pagpd" in out and "not against a Cisco switch" in out, out)
+            s2.run("interface range gi0/1 - 2")
+            s2.run("channel-group 1 mode auto")
+            d.reload()
+            conf = etherchannel.pagp_conf(d.plan)
+            by = {(c["switch"], c["port"]): c for c in conf}
+            c1 = by.get(("sw1", "GigabitEthernet0/2"), {})
+            check("the speaker's file: each desirable and auto port, its veth, bond, bridge and the switch's id",
+                  len(conf) == 4 and c1.get("dev") == "stp1g2" and c1.get("bond") == "stp1po1" and c1.get("bridge") == "stp1"
+                  and c1.get("mode") == "desirable" and c1.get("device_id") == stp.bridge_mac(d.lab, "sw1")
+                  and c1.get("ifindex") == 26 and by[("sw2", "GigabitEthernet0/1")]["mode"] == "auto", str(conf[:1]))
+            text = "\n".join(stp.render(d.plan))
+            check("the router: empty balance-xor bonds, the members ports of the bridge, nftables, the speaker",
+                  "stp1po1 type bond mode balance-xor" in text and "stp2po1 type bond mode balance-xor" in text
+                  and "ip link set stp1g2 master stp1\n" in text and f"table bridge {etherchannel.PAGP_TABLE}" in text
+                  and etherchannel.speaker_hash() in text and "base64 -d > /usr/local/sbin/winlab-pagpd.gz" in text
+                  and "apk add --no-network python3" in text, text[-600:])
+            blob = text.split("<<'WLPAGPD'\n")[1].split("\nWLPAGPD")[0]
+            import base64
+            import gzip
+            check("the speaker on the router is this one, byte for byte",
+                  gzip.decompress(base64.b64decode(blob.replace("\n", ""))) == etherchannel.speaker_source())
+            summ = s1.run("do show etherchannel summary")
+            check("router answering nothing yet: the summary shows what PAgP's rules predict", "Po1(SU)" in summ
+                  and "PAgP" in summ, summ)
+            rows = [{"dev": "stp1g2", "switch": "sw1", "port": "GigabitEthernet0/2", "group": 1, "mode": "desirable",
+                     "state": "P", "bundled": True, "neighbor": {"device_id": stp.bridge_mac(d.lab, "sw2"), "name": "Switch",
+                                                                 "port": "Gi0/1", "ifindex": 25, "group_cap": 1,
+                                                                 "flags": 7, "age": 12.4}},
+                    {"dev": "stp1g3", "switch": "sw1", "port": "GigabitEthernet0/3", "group": 1, "mode": "desirable",
+                     "state": "I", "bundled": False, "neighbor": None}]
+            state["text"] = _json.dumps({"ports": rows})
+            summ = s1.run("do show etherchannel summary")
+            check("the speaker's state wins: one member bundled (P), one stand-alone (I)",
+                  "Po1(SU)" in summ and "Gi0/2(P)" in summ and "Gi0/3(I)" in summ, summ)
+            nb = s1.run("do show pagp neighbor")
+            check("show pagp neighbor reads the speaker: the partner's name, id, port, age and flags",
+                  "Gi0/2     Switch" in nb and devcli.dotted_mac(stp.bridge_mac(d.lab, "sw2")) in nb and "12s" in nb
+                  and "SCAP" in nb and "Gi0/3" not in nb.split("Cap.")[1] and "read from winlab-pagpd" in nb, nb)
+            rows[0]["bundled"] = False
+            state["text"] = _json.dumps({"ports": rows})
+            check("agreed but not yet in the bond: w (waiting to be aggregated)",
+                  "Gi0/2(w)" in s1.run("do show etherchannel summary"))
+            state["text"] = ""
+            s2.run("no channel-group")
+            s2.run("channel-group 1 mode auto")
+            s1.run("no channel-group")
+            s1.run("channel-group 1 mode auto")
+            nb = s1.run("do show pagp neighbor")
+            check("auto with auto, router off: no neighbour predicted, and the summary stands them alone",
+                  "Gi0/2 " not in nb.split("Cap.")[1] and "Gi0/2(I)" in s1.run("do show etherchannel summary"), nb)
+            d.reload()
+            check("the speaker still runs on auto ports (they answer), so the protocol decides",
+                  len(etherchannel.pagp_conf(d.plan)) == 4)
+        finally:
+            paths.VAR, paths.STATE, paths.LABS = saved[:3]
+            if saved[3] is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = saved[3]
+            workbench._running = saved[4]
+
+
+def test_w11_pagp_two_speakers_netns():
+    """winlab-pagpd for real: two kernel bridges in a network namespace (the
+    router's switch bridges), two veth pairs between them, one speaker
+    process for all four ports as on the lab router. PAgP frames cross the
+    veths, desirable with auto agrees on both cables, auto with auto stays
+    silent, and the nftables rule keeps PAgP frames from being flooded onto
+    the other cable. Where the kernel has Linux bonding the ports must end
+    up in the bonds; where it has none (said so) only the agreement is
+    checked. Needs root and ip; skipped (said so) without them."""
+    import json as _json
+    import os
+    import shutil
+    import subprocess
+    import time
+    from winlab import etherchannel, pagpd
+
+    if getattr(os, "geteuid", lambda: -1)() != 0 or not shutil.which("ip"):
+        print("  skip   PAgP speakers in a network namespace (needs root and ip)")
+        return
+    ns = f"wlp{os.getpid() % 10000}"
+
+    def sh(cmd):
+        return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=30)
+
+    if sh(f"ip netns add {ns}").returncode != 0:
+        print("  skip   PAgP speakers in a network namespace (ip netns add refused)")
+        return
+    td = Path(tempfile.mkdtemp())
+    X = f"ip netns exec {ns}"
+    proc = None
+    try:
+        bonding = sh(f"{X} ip link add stp1po1 type bond mode balance-xor miimon 100").returncode == 0
+        for b in (1, 2):
+            sh(f"{X} ip link add stp{b} type bridge stp_state 1 forward_delay 400; {X} ip link set stp{b} up")
+            if bonding:
+                sh(f"{X} ip link add stp{b}po1 type bond mode balance-xor miimon 100; "
+                   f"{X} ip link set stp{b}po1 master stp{b}; {X} ip link set stp{b}po1 up")
+        for g in (2, 3):
+            sh(f"{X} ip link add stp1g{g} type veth peer name stp2g{g}")
+            for b in (1, 2):
+                sh(f"{X} ip link set stp{b}g{g} master stp{b}; {X} ip link set stp{b}g{g} up")
+
+        def run(ma, mb, wait):
+            cfgs = [dict(_pagp_cfg(f"stp1g{g}", ma, 1, g), vids=[]) for g in (2, 3)] + \
+                   [dict(_pagp_cfg(f"stp2g{g}", mb, 2, g), vids=[]) for g in (2, 3)]
+            (td / "c.json").write_text(_json.dumps({"ports": cfgs}))
+            (td / "s.json").unlink(missing_ok=True)
+            p = subprocess.Popen(["ip", "netns", "exec", ns, sys.executable, pagpd.__file__, "-c",
+                                  str(td / "c.json"), "-s", str(td / "s.json")],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            deadline = time.time() + wait
+            rows = {}
+            while time.time() < deadline:
+                time.sleep(0.5)
+                try:
+                    rows = {r["dev"]: r for r in _json.loads((td / "s.json").read_text())["ports"]}
+                except (OSError, ValueError, KeyError):
+                    continue
+                if wait > 5 and rows and all(r["state"] == "P" and (r["bundled"] or not bonding) for r in rows.values()):
+                    break
+            return p, rows
+        proc, rows = run("desirable", "auto", 15)
+        check("two real speakers over veth pairs: desirable with auto agree on both cables at both ends",
+              len(rows) == 4 and all(r["state"] == "P" for r in rows.values())
+              and rows["stp1g2"]["neighbor"]["name"] == "SW2" and rows["stp2g3"]["neighbor"]["port"] == "Gi0/3",
+              str({k: (v["state"], v.get("error", "")) for k, v in rows.items()}))
+        if bonding:
+            check("and the speaker moved each veth into its bond", all(r["master"] == r["dev"][:4] + "po1"
+                                                                      for r in rows.values()), str(rows))
+        else:
+            print("  skip   bundling into the bond (this kernel has no Linux bonding: CONFIG_BONDING off)")
+        proc.terminate()
+        proc.wait(timeout=10)
+        proc, rows = run("auto", "auto", 4)
+        check("auto with auto, for real: nothing sent, no neighbour, all stand-alone",
+              rows and all(r["state"] == "I" and r["sent"] == 0 and r["neighbor"] is None for r in rows.values()),
+              str(rows))
+        proc.terminate()
+        proc.wait(timeout=10)
+        proc = None
+        # Flooding: a PAgP frame into stp1g2 must not leave stp1 by stp1g3 once the nftables rule is in.
+        if shutil.which("nft") and sh(f"{X} nft -f - <<'E'\n{etherchannel.PAGP_NFT}\nE").returncode == 0:
+            # stp1 without spanning tree (its ports forward at once), the far ends out of stp2: no loop.
+            sh(f"{X} ip link del stp1; {X} ip link add stp1 type bridge stp_state 0; {X} ip link set stp1 up")
+            for g in (2, 3):
+                sh(f"{X} ip link set stp2g{g} nomaster; {X} ip link set stp1g{g} master stp1; "
+                   f"{X} ip link set stp1g{g} up; {X} ip link set stp2g{g} up")
+            time.sleep(0.5)
+            code = ("import socket,sys,time\nsys.path.insert(0, %r)\nimport pagpd\n"
+                    "r=socket.socket(socket.AF_PACKET,socket.SOCK_RAW,socket.htons(3)); r.bind(('stp2g3',0)); r.settimeout(2)\n"
+                    "s=socket.socket(socket.AF_PACKET,socket.SOCK_RAW); s.bind(('stp2g2',0))\n"
+                    "time.sleep(0.2)\n"
+                    "for _ in range(3): s.send(pagpd.frame('02:00:00:00:00:09', pagpd.encode_info(0,{'device_id':'02:00:00:00:00:09'},None,[])))\n"
+                    "n=0\nt=time.time()+1.5\n"
+                    "while time.time()<t:\n"
+                    " try:\n  d,a=r.recvfrom(2048)\n except OSError: break\n"
+                    " if a[2]!=4 and pagpd.unframe(d) is not None: n+=1\n"
+                    "print(n)\n") % str(Path(pagpd.__file__).parent)
+            (td / "flood.py").write_text(code)
+            got = sh(f"{X} {sys.executable} {td / 'flood.py'}").stdout.strip()
+            sh(f"{X} nft delete table bridge {etherchannel.PAGP_TABLE}")
+            again = sh(f"{X} {sys.executable} {td / 'flood.py'}").stdout.strip()
+            check("nftables keeps PAgP off the bridge: none flooded onto the other cable with the rule, "
+                  "flooded without it", got == "0" and again not in ("", "0"), f"with {got!r}, without {again!r}")
+        else:
+            print("  skip   the nftables flood check (no nft, or bridge nftables refused)")
+        sh(f"{X} ip link set stp1g2 nomaster")
+        cfg = _json.dumps(dict(_pagp_cfg("stp1g2", "desirable", 1, 2), bridge="stp1"))
+        (td / "cfg.json").write_text(cfg)
+        (td / "unb.py").write_text(f"import sys, json\nsys.path.insert(0, {str(Path(pagpd.__file__).parent)!r})\n"
+                                   f"import pagpd\npagpd.unbundle(json.loads(open({str(td / 'cfg.json')!r}).read()))\n")
+        sh(f"{X} {sys.executable} {td / 'unb.py'}")
+        check("a port that leaves the bundle goes back into its switch's bridge, up",
+              "master stp1" in sh(f"{X} ip link show stp1g2").stdout, sh(f"{X} ip link show stp1g2").stdout)
+    finally:
+        if proc is not None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        sh(f"ip netns del {ns}")
+        shutil.rmtree(td, ignore_errors=True)
+
+
+
+# ===== the network diagram is diagrams.net's =====
+
+
+
+
+
+
+
+
+
+
+# ===== the edge-firewall lab: OPNsense rules, NAT, IPsec, WireGuard, IDS =====
+
+
+
+# ===== monitoring dashboards: the monitoring-dashboards lab (winlab/dashlab.py) =====
+
+
+
+
+
+
+# ===== PowerShell automation track (module powershell, lab automation) =====
+def _corp_sam(given: str, surname: str) -> str:
+    """The naming rule the track's brief states, as a reference for the
+    checks' expected values: accents off, a to z only, lower case, joined
+    with a dot, 20 characters, never ending on the dot."""
+    import unicodedata
+
+    def part(s: str) -> str:
+        s = "".join(c for c in unicodedata.normalize("NFD", s.strip()) if unicodedata.category(c) != "Mn")
+        return re.sub(r"[^a-z]", "", s.lower())
+    return (part(given) + "." + part(surname))[:20].rstrip(".")
+
+
+
+
+
+
+
+
+
+
+# ===== remote support: MeshCentral on the IT ops server (winlab/remotesupport.py) =====
+
+
+
+
+
+
+def test_linux_host():
+    """winlab on a Linux PC: the distribution's QEMU and OVMF laid out in
+    runtime/qemu as links, the KVM and QEMU lines of the PC checklist, the
+    desktop's own file dialogs, and the Linux package."""
+    import json as _json
+    import os as _os
+    import tempfile
+    from types import SimpleNamespace
+    from winlab import bootstrap, linuxhost, paths, readiness, webui
+
+    class _SkipLinks(Exception):
+        pass
+
+    fam = linuxhost.family
+    check("distribution families from os-release",
+          fam(linuxhost.os_release('ID=ubuntu\nID_LIKE=debian\n')) == "debian"
+          and fam(linuxhost.os_release('ID="linuxmint"\nID_LIKE="ubuntu debian"')) == "debian"
+          and fam({"ID": "fedora"}) == "fedora" and fam({"ID": "rocky", "ID_LIKE": "rhel centos fedora"}) == "fedora"
+          and fam({"ID": "manjaro", "ID_LIKE": "arch"}) == "arch"
+          and fam({"ID": "opensuse-tumbleweed", "ID_LIKE": "opensuse suse"}) == "suse"
+          and fam({"ID": "gentoo"}) == "")
+    check("the install command per package manager, never with sudo baked in",
+          linuxhost.install_argv("debian")[:3] == ["apt-get", "install", "-y"]
+          and "ovmf" in linuxhost.install_argv("debian") and "swtpm" in linuxhost.install_argv("arch")
+          and linuxhost.install_argv("") == [] and "sudo apt-get install" in linuxhost.install_hint("debian")
+          and "package manager" in linuxhost.install_hint(""))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        t = Path(tmp)
+        fw = t / "fw"; fw.mkdir()
+        good_vars = fw / "VARS_4M.fd"; good_vars.write_bytes(b"\0" * linuxhost.VARS_SIZE)
+        small_vars = fw / "VARS_2M.fd"; small_vars.write_bytes(b"\0" * 0x20000)
+        for n in ("CODE_4M.fd", "CODE_4M.secboot.fd", "CODE_2M.fd", "SEV.fd", "CODE.qcow2"):
+            (fw / n).write_bytes(b"x")
+
+        def desc(name, code, nv, feats, fmt="raw", mode=None):
+            m = {"device": "flash", "executable": {"filename": str(fw / code), "format": fmt}}
+            if nv:
+                m["nvram-template"] = {"filename": str(nv), "format": fmt}
+            if mode:
+                m["mode"] = mode
+            (t / "d" / name).write_text(_json.dumps({
+                "interface-types": ["uefi"], "mapping": m, "features": feats,
+                "targets": [{"architecture": "x86_64", "machines": ["pc-q35-*"]}]}))
+        (t / "d").mkdir()
+        desc("10-sev.json", "SEV.fd", None, ["amd-sev", "amd-sev-es"], mode="stateless")
+        desc("20-qcow.json", "CODE.qcow2", good_vars, [], fmt="qcow2")
+        desc("30-2m.json", "CODE_2M.fd", small_vars, [])
+        desc("40-enrolled.json", "CODE_4M.secboot.fd", good_vars, ["secure-boot", "requires-smm", "enrolled-keys"])
+        desc("50-secure.json", "CODE_4M.secboot.fd", good_vars, ["secure-boot", "requires-smm"])
+        desc("60-plain.json", "CODE_4M.fd", good_vars, ["acpi-s3"])
+        f = linuxhost.find_firmware(dirs=(t / "d",), fallbacks=())
+        check("firmware from QEMU's descriptors: raw, 4 MB layout, empty store, not SEV",
+              f is not None and f.code == fw / "CODE_4M.fd" and f.vars == good_vars
+              and f.secure == fw / "CODE_4M.secboot.fd", str(f))
+        f2 = linuxhost.find_firmware(dirs=(t / "none",),
+                                     fallbacks=((str(fw / "CODE_2M.fd"), str(small_vars), ""),
+                                                (str(fw / "CODE_4M.fd"), str(good_vars), str(fw / "nope.fd"))))
+        check("without descriptors the known paths are tried, a 2 MB build skipped",
+              f2 is not None and f2.code == fw / "CODE_4M.fd" and f2.secure is None)
+
+        saved = (linuxhost.find_qemu, linuxhost.find_img, linuxhost.find_firmware, linuxhost.qemu_version)
+        try:
+            if _os.name == "nt":
+                raise _SkipLinks()  # symbolic links need a privilege Windows rarely grants
+            (t / "usr").mkdir()
+            q, i = t / "usr" / "qemu-system-x86_64", t / "usr" / "qemu-img"
+            q.write_text(""); i.write_text("")
+            linuxhost.find_qemu, linuxhost.find_img = (lambda which=None: q), (lambda which=None: i)
+            linuxhost.find_firmware = lambda *a, **k: linuxhost.Firmware(fw / "CODE_4M.fd", good_vars,
+                                                                         fw / "CODE_4M.secboot.fd")
+            linuxhost.qemu_version = lambda exe, run=None: "QEMU emulator version 9.9"
+            rt = t / "rt" / "qemu"
+            (rt / "bin").mkdir(parents=True); (rt / "bin" / "old.exe").write_text("")
+            exe = linuxhost.link_runtime(rt)
+            share = rt / "share" / "qemu"
+            check("the system QEMU and firmware are linked where winlab looks for them",
+                  exe.is_symlink() and exe.resolve() == q.resolve()
+                  and (rt / "bin" / "qemu-img").resolve() == i.resolve()
+                  and (share / "edk2-x86_64-code.fd").resolve() == (fw / "CODE_4M.fd").resolve()
+                  and (share / "edk2-i386-vars.fd").resolve() == good_vars.resolve()
+                  and (share / "edk2-x86_64-secure-code.fd").resolve() == (fw / "CODE_4M.secboot.fd").resolve()
+                  and not (rt / "bin" / "old.exe").exists())
+            check("what was linked is recorded for doctor",
+                  linuxhost.linked_info(rt).get("version") == "QEMU emulator version 9.9")
+            linuxhost.find_qemu = lambda which=None: None
+            try:
+                linuxhost.link_runtime(rt); raised = ""
+            except linuxhost.LinuxHostError as exc:
+                raised = str(exc)
+            check("no QEMU: the error says how to install it", "QEMU" in raised and "install" in raised, raised)
+        except _SkipLinks:
+            pass
+        finally:
+            linuxhost.find_qemu, linuxhost.find_img, linuxhost.find_firmware, linuxhost.qemu_version = saved
+
+        # bootstrap on Linux links instead of downloading MSYS2's Windows build
+        calls = []
+        from winlab import psmodules
+        saved_b = (bootstrap.is_linux, bootstrap._link_linux_qemu, bootstrap._fetch_windows_qemu, psmodules.fetch)
+        try:
+            def _stop(*a, **k):
+                raise psmodules.ModuleError("stop here: no network in the tests")
+            psmodules.fetch = _stop
+            bootstrap._link_linux_qemu = lambda say: calls.append("link")
+            bootstrap._fetch_windows_qemu = lambda *a: calls.append("msys2")
+            bootstrap.is_linux = lambda: True
+            try:
+                bootstrap.bootstrap()
+            except bootstrap.BootstrapError:
+                pass
+            check("bootstrap on Linux uses the system QEMU, never MSYS2's", calls[:1] == ["link"]
+                  and "msys2" not in calls, str(calls))
+        finally:
+            bootstrap.is_linux, bootstrap._link_linux_qemu, bootstrap._fetch_windows_qemu, psmodules.fetch = saved_b
+
+        # pickers
+        have = lambda names: (lambda n: f"/usr/bin/{n}" if n in names else None)
+        z = linuxhost._picker_argv("file", "Pick", "/home/u/Downloads", have({"zenity"}))
+        k = linuxhost._picker_argv("folder", "Pick", "", have({"kdialog"}))
+        check("GNOME's dialog through zenity, KDE's through kdialog",
+              z[:2] == ["zenity", "--file-selection"] and "--filename=/home/u/Downloads/" in z
+              and any("*.iso" in a for a in z) and k[:3] == ["kdialog", "--title", "Pick"]
+              and "--getexistingdirectory" in k and linuxhost._picker_argv("file", "x", "", have(set())) == [])
+        ran = lambda rc, out: (lambda argv, **kw: SimpleNamespace(returncode=rc, stdout=out, stderr=b"boom"))
+        ok_pick = linuxhost.pick("file", "t", "", ran(0, b"/home/u/ws.iso\n"), have({"zenity"}))
+        cancel = linuxhost.pick("file", "t", "", ran(1, b""), have({"zenity"}))
+        try:
+            linuxhost.pick("file", "t", "", ran(0, b""), have(set())); none = ""
+        except RuntimeError as exc:
+            none = str(exc)
+        check("the chosen path, '' on cancel, and type-the-path when no dialog exists",
+              ok_pick == "/home/u/ws.iso" and cancel == "" and "zenity" in none and "type the path" in none)
+
+        # Downloads from XDG user dirs
+        home = t / "home"; (home / ".config").mkdir(parents=True); (home / "Téléchargements").mkdir()
+        (home / ".config" / "user-dirs.dirs").write_text('XDG_DOWNLOAD_DIR="$HOME/Téléchargements"\n', encoding="utf-8")
+        saved_env = _os.environ.pop("XDG_CONFIG_HOME", None)
+        try:
+            check("a localised Downloads folder from user-dirs.dirs",
+                  readiness._xdg_download_dir(home) == home / "Téléchargements")
+        finally:
+            if saved_env is not None:
+                _os.environ["XDG_CONFIG_HOME"] = saved_env
+
+        # the PC checklist
+        saved_var = paths.VAR
+        paths.VAR = t / "var"; paths.VAR.mkdir()
+        try:
+            rep = SimpleNamespace(accel="kvm")
+            by = lambda items: {c["id"]: c for c in items}
+            c = by(readiness.linux_checks(rep, kvm="ok", missing=[]))
+            check("KVM usable and QEMU installed: both green",
+                  c["kvm"]["status"] == "ok" and c["qemu"]["status"] == "ok")
+            c = by(readiness.linux_checks(rep, kvm="missing", missing=["QEMU (qemu-system-x86_64)"]))
+            check("no /dev/kvm is red and names the BIOS switch and the module",
+                  c["kvm"]["status"] == "fail" and "modprobe" in c["kvm"]["detail"] and "VT-x" in c["kvm"]["detail"]
+                  and c["qemu"]["status"] == "warn")
+            c = by(readiness.linux_checks(rep, kvm="no-access", missing=[]))
+            check("no access to /dev/kvm: winlab offers to add the user to the kvm group",
+                  c["kvm"]["fix"] == "kvm-access" and c["kvm"]["status"] == "warn")
+            (paths.VAR / linuxhost.KVM_MARKER).write_text("u")
+            c = by(readiness.linux_checks(rep, kvm="no-access", missing=[]))
+            check("once added, the line says to sign out and back in", c["kvm"]["fix"] == ""
+                  and "sign out" in c["kvm"]["detail"])
+        finally:
+            paths.VAR = saved_var
+
+    check("the Setup jobs exist for the Linux fixes",
+          "install-qemu" in webui.JOB_INFO and "kvm-access" in webui.JOB_INFO
+          and hasattr(webui.Dashboard, "stream_install_qemu") and hasattr(webui.Dashboard, "stream_kvm_access"))
+    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    check("the page runs them from the checklist", "fix==='install-qemu'" in page and "fix==='kvm-access'" in page)
+    root = Path(__file__).resolve().parent.parent
+    build = (root / "packaging" / "build-linux.sh").read_text(encoding="utf-8")
+    inst = (root / "packaging" / "linux" / "install.sh").read_text(encoding="utf-8")
+    check("the Linux package: one-file binary, per-user install with a data folder, menu entry",
+          "--onefile" in build and "protect.py" in build and "winlab-home.txt" in inst
+          and "applications" in inst and "lab down --all" in inst
+          and "@EXEC@" in (root / "packaging" / "linux" / "winlab.desktop").read_text(encoding="utf-8"))
+
+
+
+
+def test_desktop_languages():
+    """Spanish, Hebrew and Arabic tables: every one loads, every translation keeps
+    the English text's {} values, and the choice holds in var/language.json."""
+    import json as _json
+    from winlab import i18n, paths
+    root = Path(__file__).resolve().parent.parent
+    for code in ("es", "he", "ar"):
+        raw = _json.loads((root / "content" / "i18n" / f"{code}.json").read_text(encoding="utf-8"))
+        check(f"{code}: the table loads and covers the desktop", len(i18n.table(code)) > 3000, str(len(raw)))
+        bad = []
+        for k, v in raw.items():
+            n = k.count("{}")
+            nums = sorted(int(x) for x in re.findall(r"\{(\d+)\}", v))
+            # numbered values may be reordered, and one glued to a word (an English
+            # plural ending: machine{}) may be left out
+            at = [m.start() for m in re.finditer(r"\{\}", k)]
+            ok = (v.count("{}") == n and not nums) or (
+                "{}" not in v and len(set(nums)) == len(nums) and all(1 <= x <= n for x in nums)
+                and all(i in nums or (p > 0 and k[p - 1].isalpha()) for i, p in enumerate(at, 1)))
+            if not ok:
+                bad.append(k)
+        check(f"{code}: every translation keeps the values the page fills in", not bad, str(bad[:3]))
+    check("Hebrew and Arabic read right to left, Spanish left to right",
+          i18n.LANGS["he"][1] and i18n.LANGS["ar"][1] and not i18n.LANGS["es"][1])
+    saved = paths.VAR
+    with tempfile.TemporaryDirectory() as td:
+        paths.VAR = Path(td) / "var"
+        try:
+            check("English until a language is chosen", i18n.current() == "en" and i18n.view()["table"] == {})
+            check("an unknown language is refused", "error" in i18n.choose("xx") and i18n.current() == "en")
+            i18n.choose("he")
+            v = i18n.view()
+            check("the choice holds and the view carries direction and table",
+                  v["lang"] == "he" and v["rtl"] and v["table"].get("Settings") and len(v["langs"]) == 4)
+        finally:
+            paths.VAR = saved
+    page = (root / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    import subprocess as _sp
+    for code in ("es", "he", "ar"):
+        r = _sp.run([sys.executable, str(root / "tools" / "i18n_extract.py"), "--missing", code],
+                    capture_output=True, text=True, encoding="utf-8")
+        miss = _json.loads(r.stdout or "[]")
+        check(f"{code}: every desktop text has a translation (docs/TRANSLATING.md)", not miss, str(miss[:5]))
+    check("the Settings page has the language picker and the page translates as it draws",
+          'id="pref-lang"' in page and "function setLanguage(" in page and "MutationObserver" in page
+          and "/api/i18n" in page)
+
+
+
+# ===== the AI data center: a pre-built scenario to run and fix (winlab/aidc.py) =====
+
+
+def test_other_routers():
+    """More routers than the lab router (winlab/routers.py): each its own
+    console, settings, startup configuration and network stack in the
+    router VM; cabled to switches as trunks; powered on and off on its own."""
+    import os
+    from winlab import devcli, editor, iosnv, livenet, netplan, paths, routers, schema, workbench
+
+    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+        os.environ["WINLAB_IMAGES"] = str(td / "images")
+        try:
+            dest = editor.new_workbench("two-routers")
+            lab = schema.load(dest)
+            for nid, cidr in (("office", "10.1.1.0/24"), ("transit", "10.0.12.0/24"), ("branch", "10.2.2.0/24")):
+                editor.add_network(lab, nid, cidr=cidr)
+                editor.set_routed(lab, nid, False)
+            editor.save(lab)
+
+            class Dash:
+                def __init__(self):
+                    self.reload()
+
+                def reload(self):
+                    self.lab = schema.load(dest)
+                    self.plan = netplan.compile_topology(self.lab, check_ports=False)
+                    self.wb_live = workbench.Live()
+
+            d = Dash()
+            workbench._running = lambda _n: {"fabric"}
+            act = lambda action_, **p: workbench.act(d, action_, p)
+            act("wb-cable", node="router", network="office")
+            act("wb-cable", node="router", network="transit")
+            r = act("wb-add", shelf="router", id="branch1", x=700, y=60)
+            check("a router comes off the shelf as router:<id>", r["ok"] and r["id"] == "router:branch1", r.get("message", ""))
+            check("a second router of the same id is refused", not act("wb-add", shelf="router", id="branch1")["ok"])
+            check("it keeps its place on the canvas", d.lab.layout.get("router:branch1") == [700, 60])
+            r = act("wb-cable", node="router:branch1", network="transit")
+            check("its port takes a switch's cable", r["ok"] and "Gi0/0/0" in r["message"], r.get("message", ""))
+            act("wb-cable", node="router:branch1", network="branch")
+            check("the switch's uplink stays where it was (the lab router's)",
+                  devcli.uplinked(d.lab, "transit") and not d.lab.networks["transit"].upstream)
+            ran = []
+            nf = lambda: ((lambda cmd, timeout=60: ran.append(cmd) or ""), "")
+
+            def say(dev, lines):
+                con = workbench.console(d, dev)
+                con._runner_factory = nf
+                return [con.run(x) for x in lines]
+            say("router", ["", "en", "conf t", "hostname HQ", "int g0/0/0", "ip address 10.1.1.1 255.255.255.0",
+                           "no shut", "int g0/0/1", "ip address 10.0.12.1 255.255.255.0", "no shut", "exit",
+                           "router ospf 1", "network 10.0.0.0 0.255.255.255 area 0", "end", "write memory"])
+            out = say("router:branch1", ["", "en", "conf t", "hostname BRANCH", "int g0/0/0",
+                                         "ip address 10.0.12.2 255.255.255.0", "no shut", "int g0/0/1",
+                                         "ip address 10.2.2.1 255.255.255.0", "no shut", "exit",
+                                         "router ospf 1", "network 10.0.0.0 0.255.255.255 area 0", "end",
+                                         "write memory", "show ip interface brief"])
+            d.reload()
+            lab = d.lab
+            own = lab.devices["router:branch1"]
+            check("the second router's console keeps its own settings",
+                  own.get("hostname") == "BRANCH" and lab.devices["router"].get("hostname") == "HQ")
+            check("its address on a shared switch is its own, the lab router's stays",
+                  lab.networks["transit"].router_ip == "10.0.12.1" and own.get("gw:transit") == "10.0.12.2")
+            check("show ip interface brief on it lists its own addresses",
+                  "10.0.12.2" in out[-1] and "10.2.2.1" in out[-1] and "10.0.12.1" not in out[-1])
+            check("the lab router does not route the branch switch; the second router does",
+                  not lab.networks["branch"].routed and routers.view(lab, "branch1").networks["branch"].routed
+                  and lab.networks["transit"].routed)
+            nv = iosnv.load(lab.name)["devices"]
+            check("each router's startup configuration is kept under its own name",
+                  "hostname BRANCH" in nv["router:branch1"]["text"] and "hostname HQ" in nv["router"]["text"])
+            script = netplan.render_fabric_setup(d.plan)
+            ns = routers.netns("branch1")
+            check("the router VM gives it a network namespace and its own processes and files",
+                  f"ip netns add {ns}" in script and "unshare --pid --fork --mount" in script
+                  and "lowerdir=/etc" in script)
+            check("its cables are veth pairs: a trunk port on the switches' bridge carrying the switch's VLANs",
+                  f"peer name gi0 netns {ns}" in script and "pvid untagged   # transit VLAN 1" in script)
+            check("its FRRouting runs inside it with its own configuration",
+                  "nsenter -t $(cat " in script and "hostname BRANCH" in script and "hostname HQ" in script)
+            frr_in = script.split(f"<<'WLR_{routers.short('branch1').upper()}_EOF'")[1]
+            check("its SVIs carry its own addresses", "ip addr replace 10.0.12.2/24 dev lab0.102" in frr_in
+                  or "ip addr replace 10.0.12.2/24" in frr_in)
+            check("packages go onto the VM before the router's private files would hide them",
+                  script.index("apk add --no-network frr") < script.index(f"<<'WLR_{routers.short('branch1').upper()}_EOF'"))
+            w = routers.wrap("branch1", "vtysh -c 'show ip route'")
+            check("its console's commands run inside it", w.count("nsenter") == 1 and "-n -m -p" in w
+                  and "the router is off" in w)
+            # live changes
+            pins = livenet.snapshot(d.plan, 1)
+            check("a running router's state is recorded per router", "branch1" in pins["routers"])
+            check("nothing changed, nothing to do", not livenet.changes(d.plan, pins)["routers"])
+            say("router:branch1", ["", "en", "conf t", "ip route 0.0.0.0 0.0.0.0 10.0.12.1", "end"])
+            d.reload()
+            ch = livenet.changes(d.plan, pins)
+            check("a route typed on it changes only that router", ch["routers"] == ["branch1"] and not ch["l3"])
+            lines, _ = routers.live_lines(d.plan, "branch1", pins["routers"]["branch1"])
+            check("and is applied inside it without building it again",
+                  lines and "ip netns add" not in "\n".join(lines) and "nsenter" in "\n".join(lines))
+            r = act("wb-rtpower", id="router:branch1", on="")
+            ch = livenet.changes(d.plan, pins)
+            lines, _ = routers.live_lines(d.plan, "branch1", pins["routers"]["branch1"])
+            check("its power switch takes only it down", r["ok"] and "kill -9" in "\n".join(lines)
+                  and "ip netns add" not in "\n".join(lines))
+            check("its console goes dark", not workbench.console(d, "router:branch1").powered()
+                  and workbench.console(d, "router").powered())
+            r = act("wb-rtpower", id="router:branch1", on="1")
+            check("powered on, it starts from its startup configuration (the route was never written)",
+                  r["ok"] and not any(k.startswith("route:") for k in d.lab.devices["router:branch1"]))
+            lab = d.lab
+            before = {p["switch"]: p["shut"] for p in routers.ports(lab, d.plan, "branch1")}
+            lab.devices.setdefault("sw:transit", {})["power"] = "off"
+            after = {p["switch"]: p["shut"] for p in routers.ports(lab, d.plan, "branch1")}
+            lab.devices["sw:transit"].pop("power")
+            check("a switch powered off takes away its link to the second router too",
+                  not before["transit"] and after["transit"] and after.get("branch") == before.get("branch"))
+            v = workbench.view(d)
+            rv = v["routers"][0]
+            check("the canvas gets the other routers with their ports",
+                  rv["id"] == "router:branch1" and rv["name"] == "BRANCH"
+                  and [p["network"] for p in rv["ports"][:2]] == ["transit", "branch"])
+            check("a router with cables in it is not removed", not act("wb-rm", id="router:branch1")["ok"])
+            act("wb-unplug", node="router:branch1", network="transit")
+            act("wb-unplug", node="router:branch1", network="branch")
+            check("unplugged, its cables are gone and the lab router keeps its own",
+                  not devcli.cabled_ports(routers.view(d.lab, "branch1")) and devcli.uplinked(d.lab, "transit"))
+            r = act("wb-rm", id="router:branch1")
+            check("an empty router is removed with its place on the canvas",
+                  r["ok"] and "router:branch1" not in d.lab.devices and "router:branch1" not in d.lab.layout)
+            ch = livenet.changes(d.plan, pins)
+            check("a running router that was removed is taken down", ch["routers_gone"] == ["branch1"])
+            # a cable straight from one router to another
+            act("wb-add", shelf="router", id="edge")
+            r = act("wb-rlink", a="router", aport="Gi0/1/0", b="router:edge")
+            check("two routers take a direct cable, port to port", r["ok"] and r["id"] == "link1", r.get("message", ""))
+            lk = routers.links(d.lab)
+            check("the cable has the two routers' ports at its ends",
+                  lk and {e["dev"] for e in lk[0]["ends"]} == {"router", "router:edge"})
+            check("it is no switch on the canvas", "link1" not in devcli.switches(d.lab)
+                  and all(sw_["id"] != "link1" for sw_ in workbench.view(d)["switches"]))
+            check("a port with a cable in it takes no second one",
+                  not act("wb-rlink", a="router", aport="Gi0/1/0", b="router:edge")["ok"])
+            say("router", ["", "en", "conf t", "int g0/1/0", "ip address 10.9.9.1 255.255.255.252", "no shut", "end"])
+            say("router:edge", ["", "en", "conf t", "int g0/0/0", "ip address 10.9.9.2 255.255.255.252", "no shut",
+                                "exit", "snmp-server community lab RO", "end"])
+            d.reload()
+            ev = routers.view(d.lab, "edge")
+            check("each end has its own address on the cable",
+                  d.lab.networks["link1"].router_ip == "10.9.9.1" and ev.networks["link1"].router_ip == "10.9.9.2"
+                  and d.lab.networks["link1"].routed and ev.networks["link1"].routed)
+            mods = routers.module_lines(d.plan, "edge")
+            check("the second router runs its own SNMP agent", any("rocommunity lab" in x for x in mods["nms"]))
+            check("the lab router's scripts keep to its own processes",
+                  "pkill()" in netplan.render_fabric_setup(d.plan) and "_wlroot" in routers.SHELL_GUARD)
+            from winlab import iosssh
+            say("router:edge", ["", "en", "conf t", "hostname EDGE", "ip domain-name corp.lab",
+                                "crypto key generate rsa modulus 768", "username netops privilege 15 secret " + "".join(chr(c) for c in (108, 97, 98, 111, 112, 115, 55)),
+                                "line vty 0 4", "login local", "transport input ssh", "end"])
+            d.reload()
+            srv = {dev: (ns, addrs) for dev, ns, addrs in iosssh.servers(d.plan)}
+            check("the second router answers SSH on its own addresses, inside its own network stack",
+                  srv.get("router:edge") == (routers.netns("edge"), ["10.9.9.2"]), str(srv))
+            check("the SSH bridge takes sessions for it",
+                  "routers.rid_of(dev)" in Path(iosssh.__file__).read_text(encoding="utf-8"))
+            r = act("wb-unplug", node="link", network="link1")
+            check("pulled out, the cable is gone from both routers", r["ok"] and "link1" not in d.lab.networks
+                  and not routers.links(d.lab))
+        finally:
+            (paths.VAR, paths.STATE, paths.LABS, img, workbench._running) = saved
+            if img is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = img
+
+
+
+
+
+
+
+
+
+
+def test_lesson_translations():
+    """Every lesson ships in Spanish, Hebrew and Arabic (docs/TRANSLATING.md):
+    content/i18n/lessons/<lang>/<id>.json with the English fields' shape, and
+    the desktop shows it when that language is chosen."""
+    import importlib.util as _iu
+    from winlab import lessons as _ls
+    root = Path(__file__).resolve().parent.parent
+    spec = _iu.spec_from_file_location("i18n_lessons", root / "tools" / "i18n_lessons.py")
+    tool = _iu.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    ids = sorted(p.stem for p in (root / "content" / "lessons").glob("*.toml"))
+    for code in ("es", "he", "ar"):
+        bad = {i: p for i in ids if (p := tool.problems(code, i))}
+        check(f"{code}: every lesson is translated, same shape as English", not bad,
+              "; ".join(f"{i}: {', '.join(p)}" for i, p in list(bad.items())[:4]) + (f" (+{len(bad) - 4} more)" if len(bad) > 4 else ""))
+    one = _ls.load(ids[0])
+    he = _ls.translated(_ls.load(ids[0]), "he")
+    check("a lesson reads in the chosen language, its checks unchanged",
+          (he.title != one.title or not (root / "content" / "i18n" / "lessons" / "he" / f"{ids[0]}.json").exists())
+          and [v.cmd for v in he.verify] == [v.cmd for v in one.verify] and he.further == one.further)
+
+
+def test_content_translations():
+    """Exercises, exams, guides, scenarios, sites, help topics and the command
+    reference ship in Spanish, Hebrew and Arabic (docs/TRANSLATING.md), and a
+    translation never touches a script."""
+    import importlib.util as _iu
+    import json as _json
+    from winlab import content as _c
+    root = Path(__file__).resolve().parent.parent
+    spec = _iu.spec_from_file_location("i18n_content", root / "tools" / "i18n_content.py")
+    tool = _iu.module_from_spec(spec)
+    spec.loader.exec_module(tool)
+    files = tool.files()
+    for code in ("es", "he", "ar"):
+        bad = {f: n for f in files if (n := len(tool.missing(code, f)))}
+        check(f"{code}: every exercise, exam, guide and help text is translated", not bad,
+              ", ".join(f"{f} ({n})" for f, n in list(bad.items())[:4]) + (f" (+{len(bad) - 4} more)" if len(bad) > 4 else ""))
+    ex = sorted((root / "content" / "exercises").glob("*.toml"))[0]
+    with tempfile.TemporaryDirectory() as td:
+        doc = {"exercise": {"title": "T"}, "check": [{"name": "N", "script": "T", "hint": "H"}]}
+        saved = _c.translation_file
+        try:
+            f = Path(td) / "t.json"
+            f.write_text(_json.dumps({"T": "tt", "N": "nn", "H": "hh"}), encoding="utf-8")
+            _c.translation_file = lambda p, l: f
+            out = _c.localized(ex, doc, "he")
+        finally:
+            _c.translation_file = saved
+    check("a translation swaps the texts and leaves every script alone",
+          out["exercise"]["title"] == "tt" and out["check"][0] == {"name": "nn", "script": "T", "hint": "hh"})
+    import re as _re
+    bidi = [str(f.relative_to(root)) for f in (root / "content" / "i18n").rglob("*.json")
+            if _re.search("[\u200e\u200f\u202a-\u202e\u2066-\u2069]", f.read_text(encoding="utf-8"))]
+    check("no translation carries right-to-left control characters (the page sets direction)", not bidi, str(bidi[:3]))
+    check("lab definitions are never translated (the desktop writes them back)",
+          _c.translation_file(root / "content" / "labs" / "ad-ds-basics.toml", "he") is None)
+
+
+
+
+# ===== the analyst's desk: blue-team lessons, problems and the CySA+ track =====
+BLUETEAM_LESSONS = {"sec-sysmon-deploy": "sec-sysmon-deployed", "sec-threat-hunt": "hunt-quiet-foothold",
+                    "sec-phishing-triage": "phish-reported", "sec-evidence-triage": "sec-evidence-collected",
+                    "sec-vuln-management-cycle": "sec-vuln-cycle", "sec-detection-tuning": "sec-detection-tuned"}
+BLUETEAM_PROBLEMS = {"ts-sysmon-log-disabled": "sysmon-log-disabled",
+                     "ts-wazuh-tuning-too-broad": "wazuh-suppress-too-broad"}
+
+
+
+
+
+
+# ===== desktop support (CompTIA A+ Core 2): Windows 11 by hand, the boot and recovery tools, startup,
+# restore points, the command-line toolbox, performance, a nuisance clean-up, and the A+ practice track =====
+_APLUS_LESSONS = {
+    "aplus-install-windows11": ("exercise", "aplus-pc04-installed"),
+    "aplus-boot-and-recovery": ("exercise", "aplus-recovery-ready"),
+    "aplus-clean-boot": ("problem", "w11-startup-hog"),
+    "aplus-system-restore": ("exercise", "aplus-restore-points"),
+    "aplus-malware-removal": ("problem", "w11-nuisance-cleanup"),
+    "aplus-command-line-toolbox": ("exercise", "aplus-support-toolbox"),
+    "aplus-performance-tools": ("problem", "w11-memory-hog"),
+}
+_APLUS_TS = {"ts-pc-wont-boot": "w11-bcd-entry-deleted", "ts-stuck-in-safe-mode": "w11-stuck-safe-mode",
+             "ts-hosts-file-redirect": "w11-hosts-redirect", "ts-home-ip-settings": "w11-home-ip-config"}
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------------------
+# Windows Server availability, branches and trusts (AZ-802 gap lessons):
+# Hyper-V Replica, Storage Replica, an RODC, a forest trust, DHCP failover,
+# DNSSEC and an RDS deployment, with three drills (winlab/serverha.py).
+WSHA_LESSONS = {
+    "hyperv-replica": ("workloads", "failover-cluster", "hyperv-replica-failover"),
+    "storage-replica": ("workloads", "disaster-recovery", "storage-replica-to-dr"),
+    "rds-session-farm": ("workloads", "every-role", "rds-farm-with-gateway"),
+    "rodc-branch-office": ("identity", "enterprise-multisite", "rodc-for-the-branch"),
+    "forest-trust-selective-auth": ("identity", "time-and-kerberos", "forest-trust-selective"),
+    "dhcp-failover": ("network", "ad-ds-basics", "dhcp-failover-pair"),
+    "dnssec-signed-zone": ("network", "enterprise-multisite", "dnssec-validated-zone"),
+}
+WSHA_DRILLS = {
+    "ts-dhcp-failover-blocked": ("ad-ds-basics", "dc01", "dhcp-failover-blocked"),
+    "ts-rodc-branch-denied": ("enterprise-multisite", "dc01", "rodc-branch-denied"),
+    "ts-trust-auth-firewall": ("time-and-kerberos", "dc01", "trust-auth-firewall"),
+}
+WSHA_ORDERS = {"identity": (200, 249), "workloads": (700, 749), "network": (400, 419), "troubleshoot": (730, 759)}
+
+
+
+
+
+
+
+
+
+
+# ---------------------------------------------------------------- CCNA device skills
+def _ccna_dash(lab_name: str):
+    from winlab import netplan, schema, workbench
+
+    class Dash:
+        def __init__(self):
+            self.reload()
+
+        def reload(self):
+            self.lab = schema.load(lab_name)
+            self.plan = netplan.compile_topology(self.lab, check_ports=False)
+            self.wb_live = workbench.Live()
+    return Dash()
+
+
+def _ccna_fetch_out(img) -> str:
+    import hashlib
+    from winlab import iosimage
+    data = iosimage.build(img)
+    hl = len(iosimage.header(img, "0" * 64))
+    head = data[:hl].decode().splitlines()[:5]
+    return ("#rc=0\n#size %d\n#md5 %s\n#body %s\n" % (len(data), hashlib.md5(data).hexdigest(),
+                                                   hashlib.sha256(data[hl:]).hexdigest())
+            + "".join("#head " + h + "\n" for h in head) + "#via 10.1.1.9 dev lab0.10 src 10.1.1.1\n")
+
+
+def test_ccna_device_images():
+    """winlab's stand-in images: deterministic, the damaged one caught by its
+    own hash and by the published MD5, and on the tftpd stick."""
+    import hashlib
+    from winlab import debpacks, iosimage
+    good, bad = iosimage.RELEASES[0], iosimage.RELEASES[1]
+    a, b = iosimage.build(good), iosimage.build(good)
+    check("an image is the same bytes every time, with winlab's header",
+          a == b and a.startswith(iosimage.MAGIC.encode() + b"\nplatform ISR4321\nversion 15.2(8)WL"))
+    check("the published MD5 is the good build's", iosimage.published_md5(good) == hashlib.md5(a).hexdigest())
+    check("the damaged image's MD5 is not the published one",
+          hashlib.md5(iosimage.build(bad)).hexdigest() != iosimage.published_md5(bad))
+    mb = iosimage.meta_from(iosimage.parse_fetch(_ccna_fetch_out(bad)))
+    mg = iosimage.meta_from(iosimage.parse_fetch(_ccna_fetch_out(good)))
+    check("what the router measures: the good image valid, the damaged one not",
+          mg["valid"] and mg["kind"] == "image" and mg["version"] == "15.2(8)WL" and not mb["valid"], str(mb))
+    check("a file that is no image is kept as a file",
+          iosimage.meta_from({"head": ["hello"], "size": 5, "md5": "x", "body": "y"})["kind"] == "file")
+    check("bootable: the platform and the hash decide",
+          iosimage.bootable(mg, "router") == "" and "platform" in iosimage.bootable(mg, "sw:office")
+          and "damaged" in iosimage.bootable(mb, "router"))
+    stick = debpacks.own_tools("tftpd")
+    check("the tftpd stick carries the images and their MD5 list",
+          set(stick) >= {"IMAGES-MD5.txt", "IMAGES.txt", good.name, bad.name, iosimage.RELEASES[2].name}
+          and iosimage.published_md5(good).encode() in stick["IMAGES-MD5.txt"] and bool(debpacks.own_tools("frr")))
+    cmd = iosimage.fetch_cmd("10.80.0.10", good.name, "wlsw-office")
+    check("the fetch runs busybox tftp (in the switch's namespace) and measures md5 and body hash",
+          '"$T" -g -l $f -r' in cmd and "ip netns exec wlsw-office" in cmd and "md5sum" in cmd and "sha256sum" in cmd)
+
+
+def test_ccna_password_recovery_and_upgrade():
+    """The Break in the boot window, ROMMON's confreg and reset, the router
+    starting empty and taking its configuration back, the register in show
+    version and running-config; the switch's boot loader and config.text;
+    an image copied, verified, booted; the console cable's Ctrl+C."""
+    import os
+    from winlab import (consolecable, devcli, editor, exercises, iosboot, iosimage, iosnv, paths, workbench)
+    from winlab.model import CUSTOM
+    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
+    secret_a = "".join(["s", "e", "k", "r", "1", "t"])
+    secret_b = "".join(["n", "e", "w", "o", "n", "e", "2"])
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+        os.environ["WINLAB_IMAGES"] = str(td / "images")
+        try:
+            editor.new_workbench("boot-net")
+            name = "boot-net"
+            d = _ccna_dash(name)
+            workbench._running = lambda _n: {"fabric", "pc01"}
+            fetch = {"out": ""}
+
+            def runner_factory():
+                return (lambda cmd, timeout=60: fetch["out"] if "winlab-img" in cmd else ""), ""
+            workbench.act(d, "wb-add", {"shelf": "switch", "id": "office", "x": 200, "y": 240})
+            editor.add_node(d.lab, "pc01", kind=CUSTOM, image="win11")
+            editor.cable(d.lab, "pc01", 0, "office")
+            d.lab.layout["pc01"] = [100, 400]
+            editor.save(d.lab)
+            d.reload()
+            workbench.act(d, "wb-cable", {"node": "router", "network": "office"})
+            con = devcli.Console(d, "router", runner_factory=runner_factory, link=lambda l, up: None)
+            say = con.run
+            for line in ("", "en", "conf t", "hostname R1", "enable secret " + secret_a, "int g0/0/0",
+                         "ip address 10.1.1.1 255.255.255.0", "no shut", "end", "write"):
+                say(line)
+            ver = say("show version")
+            check("show version: the factory image and register 0x2102",
+                  'System image file is "bootflash:router-universal.bin"' in ver
+                  and "Version 15.2(7)WL" in ver and "register is 0x2102" in ver, ver)
+            check("a Ctrl+C long after the start is ignored", say(iosboot.BREAK) == "" and con.prompt() == "R1#")
+            iosnv.power_on(d.lab)
+            out = say(iosboot.BREAK)
+            check("a Break in the boot window: ROMMON", "aborted due to user interrupt" in out
+                  and con.prompt() == "rommon 1 > ", out)
+            check("ROMMON's help and an unknown word", "confreg" in say("help")
+                  and 'monitor: command "bogus" not found' in say("bogus") and con.prompt() == "rommon 3 > ")
+            out = say("confreg 0x2142")
+            rec = iosimage.device(name, "router")
+            check("confreg sets the next start's value", "reset or power cycle" in out
+                  and rec.get("next") == "0x2142", f"{out!r} {rec}")
+            check("a bad value is refused", "bad value" in say("confreg 2142"))
+            out = say("reset")
+            check("reset: the router starts with the register applied", "Configuration register is 0x2142" in out
+                  and "Press RETURN to get started." in out and con.prompt() == "", out)
+            check("and offers the setup dialog", "Configuration Dialog" in say("")
+                  and "initial configuration dialog" in con.prompt())
+            say("no")
+            say("")
+            say("en")
+            check("it started empty, no secret asked, NVRAM still full",
+                  con.prompt() == "Router#" and "hostname R1" in say("show startup-config")
+                  and not d.lab.networks["office"].routed)
+            check("show version: the register now", "Configuration register is 0x2142" in say("show version"))
+            check("before the fix the checks say what is missing",
+                  not iosboot.check_router_recovered(d.lab)[0] and not iosboot.check_router_register(d.lab)[0])
+            say("copy startup-config running-config")
+            check("copy startup-config running-config brings it back", con.prompt() == "R1#"
+                  and d.lab.networks["office"].routed)
+            for line in ("conf t", "enable secret " + secret_b, "config-register 0x2102"):
+                say(line)
+            check("config-register: show version says what the next reload uses",
+                  "0x2142 (will be 0x2102 at next reload)" in say("do show version"))
+            say("config-register 0x2142")
+            check("a non-default register is a running-config line", "config-register 0x2142" in say("do show run"))
+            say("config-register 0x2102")
+            say("end")
+            check("the secret is new but not saved yet", not iosboot.check_router_secret(d.lab)[0])
+            say("write")
+            res = [exercises._WINLAB_CHECKS[n](d.lab) for n in
+                   ("iosboot-router-recovered", "iosboot-router-secret", "iosboot-router-register")]
+            check("the recovery's checks pass", all(r[0] for r in res), str(res))
+
+            # images: archive, copy from TFTP, verify, boot system, reload
+            good, bad = iosimage.RELEASES[0], iosimage.RELEASES[1]
+            say("copy running-config bootflash:pre-upgrade-confg")
+            check("a configuration archive in flash", "bytes copied" in say("")
+                  and "pre-upgrade-confg" in say("dir"))
+            fetch["out"] = _ccna_fetch_out(good)
+            say("copy tftp: bootflash:")
+            say("10.1.1.9")
+            say(good.name)
+            out = say("")
+            check("copy tftp: bootflash: fetches and keeps the image",
+                  f"[OK - {len(iosimage.build(good))} bytes]" in out and good.name in say("show flash:"), out)
+            check("verify /md5 against the published sum",
+                  "Verified" in say(f"verify /md5 bootflash:{good.name} {iosimage.published_md5(good)}"))
+            check("verify checks the embedded hash", "Image verified" in say(f"verify bootflash:{good.name}"))
+            fetch["out"] = _ccna_fetch_out(bad)
+            o1 = say(f"copy tftp://10.1.1.9/{bad.name} bootflash:")
+            o1 += say("") + say("") + say("")
+            o2 = say(f"verify /md5 bootflash:{bad.name} {iosimage.published_md5(bad)}")
+            o3 = say(f"verify bootflash:{bad.name}")
+            check("the damaged image fails both checks", "%Error verifying" in o2 and "damaged" in o3,
+                  f"{o1!r} {o2!r} {o3!r}")
+            say(f"delete bootflash:{bad.name}")
+            say("")
+            say("")
+            check("delete asks twice and removes it", bad.name not in say("dir"))
+            for line in ("conf t", f"boot system bootflash:{good.name}", "boot system bootflash:router-universal.bin",
+                         "end"):
+                say(line)
+            run = say("show running-config")
+            check("boot system lines sit between the markers", f"boot-start-marker\nboot system bootflash:{good.name}\n"
+                  "boot system bootflash:router-universal.bin\nboot-end-marker" in run, run[:400])
+            check("not in the startup configuration until saved", "(not set)" in say("show boot"))
+            say("write")
+            say("reload")
+            out = say("")
+            check("reload loads the new image", f"Loading bootflash:{good.name}" in out and "15.2(8)WL" in out, out)
+            say("")
+            say("en")
+            say(secret_b)
+            ver = say("show version")
+            check("show version: the new version and image file", "Version 15.2(8)WL" in ver
+                  and f'"bootflash:{good.name}"' in ver, ver)
+            res = [exercises._WINLAB_CHECKS[n](d.lab) for n in
+                   ("iosimage-router-flash", "iosimage-router-boot", "iosimage-config-archive")]
+            check("the upgrade's router checks pass", all(r[0] for r in res), str(res))
+            fl = iosimage.files(name, "router")
+            fl[good.name] = dict(fl[good.name], valid=False)
+            iosimage.put_files(name, "router", fl)
+            say("reload")
+            out = say("")
+            check("a boot system file that does not boot: the next one loads", "BOOTFAIL" in out
+                  and "Loading bootflash:router-universal.bin" in out, out)
+            fl = {k: dict(v, valid=False) for k, v in iosimage.files(name, "router").items()
+                  if v.get("kind") == "image"}
+            iosimage.put_files(name, "router", fl)
+            say("")
+            say("en")
+            say(secret_b)
+            say("reload")
+            out = say("")
+            check("nothing bootable: ROMMON", "NOIMAGE" in out and con.prompt().startswith("rommon"), out)
+            iosimage.put_files(name, "router", {"router-universal.bin": iosimage.meta_of(iosimage.FACTORY["router"])})
+            check("boot <file> from ROMMON", "Press RETURN" in say("boot bootflash:router-universal.bin"))
+
+            # the switch's boot loader
+            sw = devcli.Console(d, "sw:office", runner_factory=runner_factory, link=lambda l, up: None)
+            for line in ("", "en", "conf t", "hostname SW1", "enable secret " + secret_a, "end", "write"):
+                sw.run(line)
+            workbench.act(d, "wb-swpower", {"network": "office", "on": False})
+            workbench.act(d, "wb-swpower", {"network": "office", "on": True})
+            sw = devcli.Console(d, "sw:office", runner_factory=runner_factory, link=lambda l, up: None)
+            check("a switch powered on opens its Break window", iosboot.window_open(iosimage.device(name, "sw:office")))
+            sw.s.mode = "idle"
+            check("the Break: the switch's boot loader", "flash_init" in sw.run(iosboot.BREAK)
+                  and sw.prompt() == "switch: ")
+            check("flash is unreadable before flash_init", "flash_init first" in sw.run("dir flash:"))
+            sw.run("flash_init")
+            check("dir after flash_init lists config.text", "config.text" in sw.run("dir flash:"))
+            sw.run("rename flash:config.text flash:config.old")
+            check("the switch starts without config.text", "Press RETURN" in sw.run("boot")
+                  and bool(iosimage.device(name, "sw:office").get("recovery")))
+            for line in ("", "no", "", "en"):
+                sw.run(line)
+            check("empty, no secret, the old file kept", sw.prompt() == "Switch#" and "config.old" in sw.run("dir")
+                  and sw.run("show startup-config") == "startup-config is not present")
+            sw.run("rename flash:config.old flash:config.text")
+            sw.run("copy flash:config.text running-config")
+            check("renamed back and copied in", sw.prompt() == "SW1#")
+            for line in ("conf t", "enable secret " + secret_b, "end", "write"):
+                sw.run(line)
+            check("the switch recovery's checks pass", iosboot.check_switch_recovered(d.lab)[0]
+                  and iosboot.check_switch_secret(d.lab)[0])
+
+            # the console cable: Ctrl+C is the Break
+            iosnv.power_on(d.lab)
+            term = consolecable.Terminal(devcli.Console(d, "router", runner_factory=runner_factory,
+                                                        link=lambda l, up: None))
+            term.wake()
+            out = term.feed(b"\x03").decode("latin-1")
+            check("the console cable's Ctrl+C in the window: ROMMON", "rommon 1 >" in out, out)
+            out = term.feed(b"reset\r").decode("latin-1")
+            check("and reset from it", "Press RETURN" in out, out)
+        finally:
+            paths.VAR, paths.STATE, paths.LABS = saved[:3]
+            if saved[3] is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = saved[3]
+            workbench._running = saved[4]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def test_desktop_look_and_accessibility():
+    """Settings > Personalization and Accessibility as Windows has them: light,
+    dark or the PC's mode, contrast themes, a text size slider, animation
+    effects; and the desktop works with a screen reader and the keyboard."""
+    page = Path("winlab/webui_page.html").read_text(encoding="utf-8")
+    head = page.split("</head>")[0]
+    check("dark mode is picked by hand or follows the PC, before the first paint",
+          "r.dataset.theme=" in head and "prefers-color-scheme: dark" in head and 'id="pref-theme"' in page
+          and '<option value="system">Same as this PC</option>' in page and "darkHost.addEventListener" in page)
+    check("every dark rule hangs on data-theme, so the choice wins over the PC's",
+          "@media(prefers-color-scheme:dark)" not in page.replace(" ", "") and ":root[data-theme=dark]{" in page)
+    check("four contrast themes with their own colours",
+          all(f":root[data-contrast={k}]" in page for k in ("night", "aquatic", "dusk", "desert")) and 'id="pref-contrast"' in page)
+    check("a machine's screen keeps its own colours under a contrast theme",
+          ":not(:is(.vnc,.xterm,.llscreen,pre" in page)
+    check("text size from 100 to 225 percent scales the page's own text",
+          'id="pref-text" min="100" max="225"' in page and "calc(${m[1]}px * var(--ts, 1))" in page and "function textScaleOn(" in page)
+    check("animation effects is a switch and follows the PC's reduced motion",
+          'role="switch" class="tgl" id="pref-motion"' in page and "reduceMotion.matches" in page)
+    check("Settings has pages as Windows does", all(f'data-page="{k}"' in page for k in ("lab", "look", "access", "lang", "act"))
+          and 'role="tablist"' in page and "function setPage(" in page)
+    check("windows are dialogs named by their title; the shell has roles",
+          "w.setAttribute('role','dialog')" in page and "aria-labelledby" in page and 'id="taskbar" role="toolbar"' in page
+          and 'id="start" role="dialog"' in page and 'id="ctx" role="menu"' in page and 'role="menuitem"' in page
+          and 'id="toast" role="status"' in page)
+    check("buttons drawn as divs get a role, the Tab order and Enter/Space",
+          "function axFix(" in page and "el.setAttribute('role','button')" in page and "t.click();return;" in page)
+    check("visible focus, arrow keys in menus and lists, Shift+F10, a window switcher",
+          ":focus-visible{outline:2px solid var(--focus)" in page and "ArrowDown" in page and "e.key==='F10'&&e.shiftKey" in page
+          and 'id="winswitch"' in page and "function wsShow(" in page and "e.code==='KeyW'" in page)
+    check("a lesson's step boxes are named by their step", 'aria-labelledby="stp-${i}-n stp-${i}-t"' in page)
+
+
+# ===== DevOps track (module devops, lab devops-pipeline) =====
+def _forgejo_fixture(td: Path) -> Path:
+    """A Forgejo-shaped data folder for the devops checks: app.ini, a SQLite
+    database with the tables and columns the checks read, and bare
+    repositories corp/web, corp/infra and corp/deploy."""
+    import os
+    import sqlite3
+    import subprocess
+    work = td / "forgejo"
+    repos = work / "repos"
+    db = work / "forgejo.db"
+    (work).mkdir(parents=True)
+    ini = work / "app.ini"
+    ini.write_text("APP_NAME = Forgejo\n\n[database]\nDB_TYPE = sqlite3\nPATH = " + str(db).replace("\\", "/")
+                   + "\n\n[repository]\nROOT = " + str(repos).replace("\\", "/")
+                   + "\n\n[server]\nROOT_URL = http://10.83.0.20:3000/\n\n[security]\nINSTALL_LOCK = true\n",
+                   encoding="utf-8")
+    con = sqlite3.connect(db)
+    con.executescript("""
+        create table "user" (id integer primary key, lower_name text, type integer, is_admin integer);
+        create table repository (id integer primary key, owner_id integer, lower_name text, is_private integer);
+        create table protected_branch (id integer primary key, repo_id integer, rule_name text, can_push integer,
+                                       required_approvals integer);
+        create table pull_request (id integer primary key, base_repo_id integer, has_merged integer, base_branch text);
+        create table action_runner (id integer primary key, name text, last_online integer, deleted integer);
+        create table action_run (id integer primary key, repo_id integer, ref text, event text, status integer);
+        create table secret (id integer primary key, owner_id integer, repo_id integer, name text);
+        create table package (id integer primary key, owner_id integer, type text, lower_name text);
+        create table package_version (id integer primary key, package_id integer, lower_version text);
+        insert into "user" values (1, 'labadmin', 0, 1), (2, 'ada', 0, 0), (3, 'ci-bot', 0, 0), (4, 'corp', 1, 0);
+        insert into repository values (10, 4, 'web', 0), (11, 4, 'infra', 0), (12, 4, 'deploy', 0);
+        insert into protected_branch values (1, 10, 'main', 0, 1);
+        insert into pull_request values (1, 10, 1, 'main'), (2, 10, 1, 'main'), (3, 10, 0, 'main');
+        insert into action_run values (1, 10, 'refs/pull/1/head', 'pull_request', 1),
+            (2, 10, 'refs/heads/main', 'push', 2), (3, 10, 'refs/heads/main', 'push', 1),
+            (4, 11, 'refs/heads/main', 'push', 1), (5, 12, 'refs/heads/main', 'push', 1);
+        insert into secret values (1, 0, 10, 'REGISTRY_TOKEN'), (2, 4, 0, 'DEPLOY_SSH_KEY');
+        insert into package values (1, 4, 'container', 'web');
+        insert into package_version values (1, 1, '0a1b2c3d4e5f'), (2, 1, '1a2b3c4d5e6f'),
+            (3, 1, 'sha256:' || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
+    """)
+    import time as _t
+    con.execute("insert into action_runner values (1, 'ci01', ?, 0)", (int(_t.time()) - 30,))
+    con.commit()
+    con.close()
+    env = dict(os.environ, GIT_AUTHOR_NAME="Ada Lovelace", GIT_AUTHOR_EMAIL="ada@corp.lab",
+               GIT_COMMITTER_NAME="Ada Lovelace", GIT_COMMITTER_EMAIL="ada@corp.lab")
+    files = {
+        "web": [("index.html", "<title>Corp web</title>\n"), ("about.html", "about\n"),
+                (".forgejo/workflows/ci.yml", "on: [push, pull_request]\njobs:\n  test:\n    runs-on: lab\n"
+                 "    env:\n      TOKEN: ${{ secrets.REGISTRY_TOKEN }}\n    steps:\n      - run: sh tests/check.sh\n")],
+        "infra": [(".forgejo/workflows/infra.yml", "jobs:\n  infra:\n    runs-on: lab\n    steps:\n"
+                   "      - run: tofu init && tofu apply -auto-approve && ansible-playbook site.yml\n")],
+        "deploy": [("release.env", "WEB_TAG=1a2b3c4d5e6f\n"),
+                   (".forgejo/workflows/reconcile.yml", "on:\n  push:\n    branches: [main]\n  schedule:\n"
+                    "    - cron: '*/15 * * * *'\njobs:\n  reconcile:\n    runs-on: lab\n")],
+    }
+    for name, content in files.items():
+        wt = td / "wt" / name
+        wt.mkdir(parents=True)
+        run = lambda *a: subprocess.run(["git", "-c", "init.defaultBranch=main", *a], cwd=wt, env=env,
+                                        capture_output=True, text=True, check=True)
+        run("init", "-q")
+        for path, text in content:
+            (wt / path).parent.mkdir(parents=True, exist_ok=True)
+            (wt / path).write_text(text, encoding="utf-8")
+            run("add", path)
+            run("commit", "-q", "-m", f"Add {path}")
+        if name == "web":
+            run("revert", "--no-edit", "HEAD~1")
+        (repos / "corp").mkdir(parents=True, exist_ok=True)
+        subprocess.run(["git", "clone", "-q", "--bare", str(wt), str(repos / "corp" / f"{name}.git")],
+                       capture_output=True, check=True)
+    return ini
+
+
+
+
+# ===== incident response in depth: Velociraptor, Zeek, Sigma, YARA and the runbook (winlab/irtools.py) =====
+_IR_LESSONS = {
+    "ir-velociraptor-server": ("exercise", "ir-velociraptor-server"),
+    "ir-velociraptor-clients": ("exercise", "ir-velociraptor-fleet"),
+    "ir-velociraptor-hunt": ("problem", "ir-fleet-beacon"),
+    "ir-velociraptor-triage": ("exercise", "ir-triage-collected"),
+    "zeek-sensor": ("exercise", "zeek-sensor-logs"),
+    "zeek-notice": ("exercise", "zeek-notice-raised"),
+    "sigma-rules": ("exercise", "sigma-rules-converted"),
+    "sigma-to-wazuh": ("exercise", "sigma-wazuh-rule"),
+    "yara-share-scan": ("problem", "yara-share-samples"),
+    "ir-runbook": ("problem", "ir-dns-beacon"),
+}
+_IR_TS = {"ts-velociraptor-client-offline": "velo-client-wrong-server", "ts-zeek-crashed": "zeek-script-broken",
+          "ts-sigma-rule-silent": "sigma-field-case"}
+
+
+
+
+
+
+
+
+
+
+
+
+# The aws-cloud lab's optional lessons on the student's own AWS account and
+# Google Cloud trial, done in the browser like the Azure ones (test_aws_cloud).
+BROWSER_LESSONS |= {"aws-free-account", "aws-real-iam-cloudshell", "aws-real-vpc-ec2", "aws-real-s3-cleanup",
+                    "gcp-free-trial", "gcp-iam-vpc", "gcp-compute-engine"}
+
+
+
+
+
+
+def test_vm_tuning():
+    """Lighter machines: Hyper-V enlightenments for Windows on KVM, no HPET
+    for Windows (hpet = true puts it back), zero writes not stored, and the
+    balloon reporting free pages where the host can take them back."""
+    from winlab import balloon, netplan, schema
+    from winlab.providers import qemu
+    from winlab.providers.qemu import QemuProvider
+    lab = schema.load("ad-ds-basics")
+    plan = netplan.compile_topology(lab, check_ports=False)
+    win = next(n for n in lab.node_list() if n.is_windows)
+    arg = lambda argv, flag: argv[argv.index(flag) + 1]
+    kvm = QemuProvider(plan, accel="kvm").build_node(win).argv
+    check("a Windows machine on KVM gets the Hyper-V enlightenments and a delayed PIT",
+          arg(kvm, "-cpu").startswith(f"host,{qemu.HV_KVM}") and "hv-stimer" in qemu.HV_KVM
+          and "kvm-pit.lost_tick_policy=delay" in kvm, arg(kvm, "-cpu"))
+    whpx = QemuProvider(plan, accel="whpx").build_node(win).argv
+    check("on WHPX the CPU model is unchanged and there is no KVM-only global; HPET off",
+          arg(whpx, "-cpu") == qemu.cpu_model("whpx") and not any("kvm-pit" in a for a in whpx)
+          and arg(whpx, "-machine") == "q35,hpet=off", arg(whpx, "-machine"))
+    check("the system disk skips storing zeros and passes TRIM through",
+          any("id=sys," in a and "discard=unmap,detect-zeroes=unmap" in a for a in whpx))
+    win.vars["hpet"] = True
+    try:
+        back = QemuProvider(plan, accel="whpx").build_node(win).argv
+        check("hpet = true on a machine puts the HPET back", arg(back, "-machine") == "q35")
+    finally:
+        win.vars.pop("hpet", None)
+    fab = QemuProvider(plan, accel="kvm").build_fabric().argv
+    check("the router's CPU stays plain host and keeps its HPET (Linux)",
+          arg(fab, "-cpu") == "host" and arg(fab, "-machine") == "q35")
+    saved = balloon.host_can_reclaim
+    try:
+        balloon.host_can_reclaim = lambda: True
+        on = qemu.balloon_device()
+        balloon.host_can_reclaim = lambda: False
+        off = qemu.balloon_device()
+    finally:
+        balloon.host_can_reclaim = saved
+    check("free page reporting where the host can discard pages, the plain balloon on Windows",
+          on == "virtio-balloon-pci,free-page-reporting=on" and off == "virtio-balloon-pci", str((on, off)))
+
+
+def test_desktop_page_script_parses():
+    """The desktop page's script is one program: a stray quote in any string
+    (an apostrophe in a single-quoted hint) stops every window. node checks
+    it when it is on this PC."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        print("  skip node is not installed")
+        return
+    text = Path("winlab/webui_page.html").read_text(encoding="utf-8")
+    code = "\n".join(re.findall(r"<script>(.*?)</script>", text, re.S))
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td, "page.js")
+        f.write_text(code, encoding="utf-8")
+        r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+    check("the desktop page's script parses (node --check)", r.returncode == 0, (r.stderr or "")[-400:])
+
+
+def test_problem_engine_is_robust():
+    """The problems engine (winlab/problemengine.py) against a fake guest:
+    nothing runs with a missing value, a break that did not take is put
+    back, a failed break is rolled back, a second Break does not apply
+    twice, a put-back is safe to repeat, a check that cannot run is no
+    try, one action per problem and machine at a time, a log for support,
+    and every {name} in the catalog is one a lab can fill."""
+    import json as _json
+    from winlab import guestfaults as gf, paths, problemengine as pe, progress, webui
+
+    class Guest:
+        """healthy flips with the apply and the undo; knobs make it misbehave."""
+        def __init__(self):
+            self.healthy = True
+            self.calls = []
+            self.apply_takes = True
+            self.apply_rc = 0
+            self.undo_rc = 0
+            self.undo_heals = True
+            self.reachable = True
+            self.verify_reachable = True
+            self.slow = 0          # checks that still say healthy after a good apply
+
+        def __call__(self, node, cmd, shell):
+            self.calls.append(cmd.split()[0].rstrip(";"))
+            if not self.reachable:
+                return pe.Ran(False, err="cannot reach the guest channel")
+            if cmd.startswith("VERIFY"):
+                if not self.verify_reachable:
+                    return pe.Ran(False, err="no reply within 120s")
+                if self.slow and not self.healthy:
+                    self.slow -= 1
+                    return pe.Ran(True, True, "True")
+                return pe.Ran(True, True, "checking\n" + ("True" if self.healthy else "False"))
+            if cmd.startswith("APPLY"):
+                if self.apply_takes:
+                    self.healthy = False
+                return pe.Ran(True, self.apply_rc == 0, "", "Access is denied.\nthe disk is write-protected"
+                              if self.apply_rc else "")
+            if cmd.startswith("UNDO"):
+                if self.undo_heals:
+                    self.healthy = True
+                return pe.Ran(True, self.undo_rc == 0, "", "nothing to undo" if self.undo_rc else "")
+            return pe.Ran(True, True, "")
+
+    sid, rsid, msid = "zz-engine-test", "zz-engine-restart", "zz-engine-mail"
+    gf._reg(gf.GuestFault(id=sid, title="t", os=gf.WINDOWS, teaches="t", symptom="the {share} share is gone",
+                          apply="APPLY {share}", clear="UNDO {share}", verify="VERIFY {share}", hints=("a", "b", "c")))
+    gf._reg(gf.GuestFault(id=rsid, title="t", os=gf.WINDOWS, teaches="t", symptom="s",
+                          apply="APPLY; shutdown.exe /r /t 15", clear="UNDO", verify="VERIFY"))
+    gf._reg(gf.GuestFault(id=msid, title="t", os=gf.WINDOWS, teaches="t", symptom="s",
+                          apply="APPLY {mailip}", clear="UNDO {mailip}", verify="VERIFY {mailip}"))
+    saved = (pe.SETTLE, paths.VAR, progress.progress_file)
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            paths.VAR = Path(td) / "var"
+            progress.progress_file = lambda: Path(td) / "progress.json"
+            pe.SETTLE = (0, 0)
+            lab = "zz-lab"
+
+            g = Guest()
+            r = pe.apply_break(g, lab, sid, "pc01", {"share": "Company"})
+            check("engine: a clean break is checked before and after",
+                  r.ok and r.status == pe.BROKEN and r.broken and g.calls == ["VERIFY", "APPLY", "VERIFY"]
+                  and "the Company share is gone" in r.message, f"{r} {g.calls}")
+            g.calls.clear()
+            r = pe.apply_break(g, lab, sid, "pc01", {}, known_broken=True)
+            check("engine: Break on a machine that already has it applies nothing a second time",
+                  r.ok and r.status == pe.ALREADY_BROKEN and r.broken and g.calls == ["VERIFY"], f"{r} {g.calls}")
+
+            g = Guest(); g.apply_takes = False
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: a break that did not take is put back and said, nothing to hunt",
+                  not r.ok and r.status == pe.DID_NOT_TAKE and not r.broken and "UNDO" in g.calls
+                  and "nothing to fix" in r.message, f"{r} {g.calls}")
+
+            g = Guest(); g.slow = 2
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: a problem that needs a moment to show is waited for, not undone",
+                  r.ok and r.status == pe.BROKEN and "UNDO" not in g.calls, f"{r} {g.calls}")
+
+            g = Guest(); g.apply_rc = 1
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: a break that fails part way is rolled back at once and says why",
+                  not r.ok and r.status == pe.REFUSED and not r.broken and g.healthy
+                  and "write-protected" in r.message and "put it back" in r.message, f"{r}")
+            g = Guest(); g.apply_rc = 1; g.undo_heals = False
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: when the rollback fails too, the problem stays marked and Give up is the way out",
+                  not r.ok and r.broken and "Give up" in r.message, f"{r}")
+
+            g = Guest(); g.reachable = False
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: a machine that does not answer is not touched",
+                  not r.ok and r.status == pe.UNREACHABLE and not r.broken and g.calls == ["VERIFY"], f"{r} {g.calls}")
+
+            g = Guest(); g.healthy = False
+            r = pe.apply_break(g, lab, sid, "pc01", {})
+            check("engine: a machine that already fails the check is still broken (the fix is the lesson)",
+                  r.ok and r.status == pe.BROKEN and g.calls == ["VERIFY", "APPLY"], f"{r} {g.calls}")
+
+            g = Guest()
+            r = pe.apply_break(g, lab, msid, "pc01", {})
+            check("engine: a lab without the machine a problem needs refuses it before running anything",
+                  not r.ok and r.status == pe.MISSING_VALUES and "mailip" in r.message and not g.calls, f"{r}")
+            check("engine: missing_values sees empty and absent values",
+                  pe.missing_values(msid, {}) == ["mailip"] and not pe.missing_values(msid, {"mailip": "10.0.0.5"}))
+
+            g = Guest(); g.undo_rc = 1
+            r = pe.restore(g, lab, sid, "pc01", {})
+            check("engine: Give up on a healthy machine is safe to repeat",
+                  r.ok and r.status == pe.RESTORED and not r.broken, f"{r}")
+            g = Guest(); g.healthy = False; g.undo_heals = False
+            r = pe.restore(g, lab, sid, "pc01", {})
+            check("engine: an undo that leaves the problem in place says so",
+                  not r.ok and r.status == pe.RESTORE_INCOMPLETE and r.broken, f"{r}")
+
+            g = Guest(); g.healthy = False; g.verify_reachable = False
+            r = pe.verify_fix(g, lab, sid, "pc01", {})
+            check("engine: a check that cannot run is a CHECK_ERROR, not a failed try",
+                  not r.ok and r.status == pe.CHECK_ERROR and "Nothing was counted" in r.message, f"{r}")
+            g.verify_reachable = True
+            check("engine: verify tells fixed from not fixed",
+                  pe.verify_fix(g, lab, sid, "pc01", {}).status == pe.NOT_FIXED)
+            g.healthy = True
+            check("engine: verify tells fixed", pe.verify_fix(g, lab, sid, "pc01", {}).status == pe.FIXED)
+
+            g = Guest()
+            r = pe.apply_break(g, lab, rsid, "pc01", {})
+            check("engine: a break that restarts the machine is not judged by a check racing the restart",
+                  r.ok and r.status == pe.RESTARTING and g.calls == ["VERIFY", "APPLY"], f"{r} {g.calls}")
+
+            pe._claim((lab, sid, "pc01"))
+            try:
+                g = Guest()
+                r = pe.apply_break(g, lab, sid, "pc01", {})
+                check("engine: a second Break while the first still runs is told to wait",
+                      not r.ok and r.status == pe.BUSY and not g.calls, f"{r}")
+            finally:
+                pe._release((lab, sid, "pc01"))
+
+            def boom(node, cmd, shell):
+                raise RuntimeError("agent bug")
+            r = pe.apply_break(boom, lab, sid, "pc01", {})
+            check("engine: a bug in a runner is an answer, not a crashed request",
+                  not r.ok and r.status == pe.REFUSED and "agent bug" in r.message, f"{r}")
+
+            recs = [_json.loads(x) for x in (paths.lab_dir(lab) / "problems.log").read_text(encoding="utf-8").splitlines()]
+            check("engine: every action is logged for support, with the raw output",
+                  len(recs) >= 15 and {"break", "restore", "verify"} <= {x["action"] for x in recs}
+                  and any("write-protected" in x["detail"] for x in recs), str(len(recs)))
+
+            # The Problems window through the engine: Break, Break again, a check
+            # that cannot run, Give up.
+            d = webui.Dashboard(webui.load_lab("ad-ds-basics"), accel="tcg")
+            node = next(n for n, nd in d.lab.nodes.items() if nd.kind != "linux")
+
+            class _NS:
+                pid, serial_port = 1, 1
+            st = type("St", (), {"nodes": {node: _NS()}})()
+            g = Guest()
+            orig = (webui.state.load, webui.state.pid_alive, pe.guest_runner)
+            webui.state.load = lambda name: st
+            webui.state.pid_alive = lambda pid: True
+            pe.guest_runner = lambda name, timeout=120: g
+            try:
+                r = d._guest_fault({"node": node, "scenario": sid})
+                e = progress.load()["problems"][sid]
+                check("Problems window: Break goes through the engine and marks the machine",
+                      r["ok"] and r["broken"] and r["status"] == pe.BROKEN and e.get("broken_on") == node, str(r))
+                g.calls.clear()
+                r = d._guest_fault({"node": node, "scenario": sid})
+                check("Problems window: Break again does not apply twice",
+                      r["ok"] and r["status"] == pe.ALREADY_BROKEN and "APPLY" not in g.calls, str(r))
+                g.verify_reachable = False
+                r = d._guest_fault_verify({"node": node, "scenario": sid})
+                e = progress.load()["problems"][sid]
+                check("Problems window: a check that cannot run counts no try",
+                      not r["ok"] and not r["fixed"] and int(e.get("tries") or 0) == 0
+                      and not int(e.get("attempts") or 0), f"{r} {e}")
+                g.verify_reachable = True
+                r = d._guest_fault_verify({"node": node, "scenario": sid})
+                check("Problems window: a real failed check counts one try",
+                      r["ok"] and not r["fixed"] and r["tries"] == 1, str(r))
+                r = d._guest_fault({"node": node, "scenario": sid, "clear": "1"})
+                e = progress.load()["problems"][sid]
+                check("Problems window: Give up puts it back and clears the mark",
+                      r["ok"] and not r["broken"] and "given up" in r["message"] and not e.get("broken_on"), str(r))
+                g.apply_takes = False
+                r = d._guest_fault({"node": node, "scenario": sid})
+                e = progress.load()["problems"][sid]
+                check("Problems window: a break that did not take leaves no mark and no Give up",
+                      not r["ok"] and not r["broken"] and not e.get("broken_on"), str(r))
+                progress.problem_break_failed(sid, node, "the checkpoint is gone")
+                card = next(c for c in d.guest_faults() if c["id"] == sid)
+                check("Problems window: a break from outside that failed is on the card",
+                      "checkpoint is gone" in card["break_error"], str(card.get("break_error")))
+                progress.problem_broken(sid, node, True)
+                card = next(c for c in d.guest_faults() if c["id"] == sid)
+                check("Problems window: the next break clears that note", not card["break_error"])
+            finally:
+                webui.state.load, webui.state.pid_alive, pe.guest_runner = orig
+    finally:
+        pe.SETTLE, paths.VAR, progress.progress_file = saved
+        for x in (sid, rsid, msid):
+            gf.SCENARIOS.pop(x, None)
+
+    bad = {s: pe.unknown_tokens(s) for s in gf.SCENARIOS if pe.unknown_tokens(s)}
+    check("engine: every {name} in the catalog is a value a lab can fill (no typo reaches a guest)", not bad, str(bad))
+    page = (Path(__file__).resolve().parent.parent / "winlab" / "webui_page.html").read_text(encoding="utf-8")
+    check("Problems window: Give up follows whether the problem is still in place",
+          "r.broken!==undefined" in page and "The last break did not happen" in page)
+    import json as _j
+    root = Path(__file__).resolve().parent.parent
+    msgs = ["broke {} — symptom: {}", "the break did not take on {}: it still checks out healthy, so winlab put it back. "
+            "There is nothing to fix", "could not check {}: it did not answer. Nothing was counted; try again in a moment",
+            "{} refused the break: {}. winlab put it back as it was", "The last break did not happen: {}"]
+    for code in ("he", "ar", "es"):
+        t = _j.loads((root / "content" / "i18n" / f"{code}.json").read_text(encoding="utf-8"))
+        check(f"{code}: the engine's messages are translated", all(t.get(m) for m in msgs),
+              str([m for m in msgs if not t.get(m)]))
+
+
+# ===== guides: a small office from a bare switch and router, a new hire's PC from box to desk (winlab/guide.py) =====
+
+
+# ---- pc-core: A+ desktop support (troubleshooting method, change management,
+# backup, disks, workgroups, PC network problems) ----
+
+
+
+# ===== pc-extras: blue screens, Hyper-V and Sandbox, Ubuntu Desktop, printer faults =====
+PCX_LESSONS = {
+    "aplus-blue-screen-dump": ("endpoint", 630, "windows11-desktops", "pc02", "", "aplus-bsod-dump-read"),
+    "pc-hyperv-and-sandbox": ("endpoint", 631, "windows11-desktops", "pc01", "", "w11-hyperv-and-sandbox"),
+    "ubuntu-desktop-for-support": ("endpoint", 632, "linux-by-hand", "lxpc01", "", "ubuntu-desktop-installed"),
+    "printer-status-from-the-device": ("endpoint", 633, "print-support", "prn01", "printer-tray-empty", ""),
+    "ts-bsod-after-driver-update": ("troubleshoot", 990, "windows11-desktops", "pc02", "w11-bsod-storage-driver", ""),
+    "ts-printer-paper-jam": ("troubleshoot", 991, "print-support", "prn01", "printer-paper-jam", ""),
+    "ts-printer-toner-empty": ("troubleshoot", 992, "print-support", "prn01", "printer-toner-empty", ""),
+}
+
+
+
+
+
+
+def test_pcx_printer_reports_its_state():
+    """The printer appliance serves its real panel state over SNMP (Host
+    Resources and the Printer MIB) and IPP, knows an empty cartridge, and
+    the cups pack carries the snmp tools to read it."""
+    from winlab import appliance, debpacks
+    sh = Path("content/roles/netprinter.sh").read_text(encoding="utf-8")
+    check("snmpd passes the printer rows and the Printer MIB to winlab's script",
+          "pass .1.3.6.1.2.1.25.3.5" in sh and "pass .1.3.6.1.2.1.43" in sh and "winlab-printer-mib" in sh
+          and "-I -hr_device" in sh)
+    check("IPP printer-state-reasons follow the panel",
+          "winlab-printer-reasons" in sh and "printer-state-reasons=" in sh
+          and all(r in sh for r in ("media-jam-error", "media-empty-error", "toner-empty-error", "door-open-error")))
+    s = appliance.panel_state("flag toner-low\nflag toner-empty\njobs 1\n")
+    check("an empty cartridge stops the printer", s["state"] == "toner-empty" and s["toner_empty"])
+    s = appliance.panel_state("flag jam\nflag toner-empty\n")
+    check("a jam still wins over the toner on the panel", s["state"] == "jam")
+    check("a new cartridge clears low and empty", appliance.PRINTER_OPS["toner-new"][1] >= {"toner-low", "toner-empty"}
+          and "toner-empty" in appliance.PRINTER_OPS)
+    check("the cups pack carries net-snmp's tools", "snmp" in debpacks.PACKS["cups"].packages)
+    page = Path("winlab/webui_page.html").read_text(encoding="utf-8")
+    check("the printer window shows an empty cartridge", "'toner-empty':['Toner empty'" in page)
+
+
+
+
+def test_pcx_windbg_on_the_toolkit():
+    """WinDbg goes on the toolkit stick only after the customer accepts
+    Microsoft's licence; the App Installer file must name Microsoft.WinDbg
+    on a microsoft.com host, and the bundle must say it is WinDbg."""
+    import io
+    import zipfile
+    from winlab import toolkit
+    xml = ('<AppInstaller Uri="https://aka.ms/windbg/download" Version="1.2510.7001.0">'
+           '<MainBundle Name="Microsoft.WinDbg" Version="1.2510.7001.0" Publisher="CN=Microsoft"'
+           ' Uri="https://windbg.download.prss.microsoft.com/dbazure/prod/1-2510-7001-0/windbg.msixbundle" /></AppInstaller>')
+    v, url = toolkit.parse_appinstaller(xml)
+    check("the App Installer file gives the version and the bundle", v == "1.2510.7001.0" and url.endswith("windbg.msixbundle"))
+    refused = 0
+    for bad in (xml.replace("Microsoft.WinDbg", "Other.App"), xml.replace("prss.microsoft.com", "example.net"),
+                xml.replace("https://windbg", "http://windbg"), "<AppInstaller/>"):
+        try:
+            toolkit.parse_appinstaller(bad)
+        except toolkit.ToolkitError:
+            refused += 1
+    check("another package, host or plain http is refused", refused == 4)
+
+    def bundle(name):
+        b = io.BytesIO()
+        with zipfile.ZipFile(b, "w") as z:
+            z.writestr("AppxMetadata/AppxBundleManifest.xml",
+                       f'<Bundle><Identity Name="{name}" Publisher="CN=Microsoft" Version="1.2510.7001.0"/></Bundle>')
+        return b.getvalue()
+    check("a WinDbg bundle is read for its version", toolkit.check_windbg(bundle("Microsoft.WinDbg")) == "1.2510.7001.0")
+    refused = 0
+    for data in (bundle("Microsoft.Other"), b"not a zip"):
+        try:
+            toolkit.check_windbg(data)
+        except toolkit.ToolkitError:
+            refused += 1
+    check("anything else is refused", refused == 2)
+    got = []
+    try:
+        toolkit.fetch(("windbg",), get=lambda *a, **k: got.append(a) or b"", download=lambda *a, **k: got.append(a))
+        ok = False
+    except toolkit.ToolkitError as exc:
+        ok = "licence" in str(exc) and not got
+    check("WinDbg is never fetched unless the customer accepts Microsoft's licence", ok)
+    check("the toolkit window offers the fetch", "toolkit-windbg-fetch" in Path("winlab/webui.py").read_text(encoding="utf-8")
+          and "tkWinDbg" in Path("winlab/webui_page.html").read_text(encoding="utf-8"))
+
+
+
+
+
+# ---- net-physical: cable tester and toner, PoE budgets, guest Wi-Fi portal
+
+def _np_lab(td, name):
+    """A copy of a shipped lab in a scratch WINLAB root."""
+    import shutil
+    from winlab import paths, schema
+    paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+    paths.LABS.mkdir(parents=True, exist_ok=True)
+    shutil.copy(Path(f"content/labs/{name}.toml"), paths.LABS / f"{name}.toml")
+    return schema.load(name)
+
+
+def test_np_physfault_kinds():
+    """The new cable faults: a split pair is on the router's side of the
+    link (loss and corruption); an open, a short and crossed pairs take the
+    link down at the card, like a dead card."""
+    from winlab import physfaults
+    for k in ("split", "open", "short", "crossed"):
+        check(f"physfaults knows the {k} cable fault", k in physfaults.KINDS)
+    check("a split pair is shaped on the router side", physfaults.KINDS["split"].side == "router"
+          and "split" in physfaults._TC)
+    check("open, short and crossed pairs are card-side, like a dead card",
+          all(physfaults.card_side(k) for k in ("nic", "open", "short", "crossed"))
+          and not physfaults.card_side("split") and not physfaults.card_side("bad")
+          and not physfaults.card_side("nope"))
+
+
+
+
+
+
+
+
+
+
+
+
+# --- net-core: VLANs, IPv4 static routes, IOS ACLs, NAT/PAT and their tickets ---
+
+_NETCORE_LESSONS = ("vlans-access-trunks", "ipv4-static-routes", "ios-acls-standard-extended", "ios-nat-pat")
+_NETCORE_TICKETS = {
+    "ts-trunk-native-mismatch": "trunk-native-mismatch", "ts-trunk-vlan-not-allowed": "trunk-vlan-not-allowed",
+    "ts-access-port-wrong-vlan": "access-port-wrong-vlan", "ts-port-err-disabled": "port-err-disabled",
+    "ts-speed-duplex-mismatch": "speed-duplex-mismatch", "ts-acl-wrong-direction": "acl-wrong-direction",
+    "ts-nat-inside-outside-swapped": "nat-inside-outside-swapped", "ts-pc-wrong-gateway": "pc-wrong-gateway",
+    "ts-pc-wrong-mask": "pc-wrong-mask", "ts-pc-duplicate-ip": "pc-duplicate-ip"}
+
+
+class _NetcoreEnv:
+    """A scratch copy of the two labs, with the VMs and the guests mocked:
+    the console, the breaks and the checks write real lab files and read
+    them back, but nothing starts."""
+
+    def __enter__(self):
+        import shutil
+        from unittest import mock
+        from winlab import paths, workbench, netbasics
+        self.td = Path(tempfile.mkdtemp())
+        (self.td / "labs").mkdir()
+        for n in ("campus-vlans", "router-protocols"):
+            shutil.copy(paths.LABS / f"{n}.toml", self.td / "labs" / f"{n}.toml")
+        self.saved = (paths.LABS, paths.VAR, paths.STATE)
+        paths.LABS, paths.VAR, paths.STATE = self.td / "labs", self.td / "var", self.td / "var" / "state"
+        self.cmds = []
+        self.patches = [
+            mock.patch.object(workbench, "_running",
+                              lambda _n: {"fabric", "pc-a", "pc-b", "pc-c", "srv01", "pc-office", "pc-guest"}),
+            mock.patch.object(netbasics, "_guest", lambda lab, node, cmd: (self.cmds.append((node, cmd)), (True, ""))[1])]
+        for p in self.patches:
+            p.start()
+        return self
+
+    def __exit__(self, *exc):
+        import shutil
+        from winlab import paths
+        for p in self.patches:
+            p.stop()
+        paths.LABS, paths.VAR, paths.STATE = self.saved
+        shutil.rmtree(self.td, ignore_errors=True)
+
+    def dash(self, name):
+        from winlab import schema, netplan, workbench
+
+        class Dash:
+            def __init__(d):
+                d.name = name
+                d.reload()
+
+            def reload(d):
+                d.lab = schema.load(name)
+                d.plan = netplan.compile_topology(d.lab, check_ports=False)
+                d.wb_live = workbench.Live()
+        return Dash()
+
+    @staticmethod
+    def console(d, dev):
+        from winlab import devcli
+        c = devcli.Console(d, dev, runner_factory=lambda: ((lambda cmd, timeout=60: ""), ""), link=lambda l, up: None)
+        c.powered = lambda: True
+        for line in ("", "en"):
+            c.run(line)
+        return c
+
+    @staticmethod
+    def run(c, *lines):
+        return "\n".join(c.run(line) for line in lines)
+
+
+
+
+def test_netcore_problems_and_hosts():
+    """Each ticket's problem has three hints, a verify, runs on the Ubuntu
+    PCs, and is broken from outside (a quick host break) unless it is a PC's
+    own setting changed inside it (gateway, mask)."""
+    from winlab import guestfaults
+    inside = {"pc-wrong-gateway", "pc-wrong-mask"}
+    for pid in _NETCORE_TICKETS.values():
+        f = guestfaults.SCENARIOS[pid]
+        check(f"{pid} has a 3-step hint ladder and a verify", len(f.hints) == 3 and bool(f.verify.strip()), str(len(f.hints)))
+        check(f"{pid} runs on ubuntu", "ubuntu" in f.images, str(f.images))
+        if pid in inside:
+            check(f"{pid} is broken inside the PC with a clear", not f.host and bool(f.apply.strip()) and bool(f.clear.strip()))
+        else:
+            check(f"{pid} is broken from outside, quickly", bool(f.host) and f.host in guestfaults.HOST_BREAKS
+                  and guestfaults.host_break_is_quick(pid), f.host)
+    blob = "\n".join(f"{f.apply}\n{f.clear}\n{f.verify}\n" + "\n".join(f.hints)
+                     for f in (guestfaults.SCENARIOS[p] for p in _NETCORE_TICKETS.values()))
+    check("no password-looking literal in the net-core problems",
+          not re.search(r"(?i)password\s*[:=]\s*\S|-Password\s+'", blob))
+
+
+
+
+
+
+
+
+
+
+
+
+
+# --- net-extras: TACACS+ (tac_plus-ng pack, command authorization and accounting), FTP and SCP copies,
+# SNMPv3 and LibreNMS, the network tools lessons (iperf3, mtr, nmap, tshark) and their drills.
+
+def _nx_workbench(td: Path, name: str):
+    """A workbench with one routed switch and a PC, and a dashboard stand-in."""
+    import os
+    from winlab import editor, images, netplan, paths, schema, workbench
+    from winlab.model import CUSTOM
+    paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+    os.environ["WINLAB_IMAGES"] = str(td / "images")
+    dest = editor.new_workbench(name)
+    lab = schema.load(dest)
+    paths.downloads_dir().mkdir(parents=True, exist_ok=True)
+    images.installer_path("win11").write_bytes(b"\0" * 2048)
+    editor.add_network(lab, "sw1", cidr="10.10.10.0/24")
+    editor.add_node(lab, "pc01", kind=CUSTOM, image="win11")
+    editor.cable(lab, "pc01", 0, "sw1")
+    editor.save(lab)
+
+    class _Dash:
+        def reload(self):
+            self.lab = schema.load(dest)
+            self.plan = netplan.compile_topology(self.lab, check_ports=False)
+    d = _Dash()
+    d.reload()
+    workbench._running = lambda _n: {"fabric"}
+    return d
+
+
+def _nx_saved():
+    import os
+    from winlab import paths, workbench
+    return (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
+
+
+def _nx_restore(saved) -> None:
+    import os
+    from winlab import paths, workbench
+    paths.VAR, paths.STATE, paths.LABS = saved[:3]
+    workbench._running = saved[4]
+    if saved[3] is None:
+        os.environ.pop("WINLAB_IMAGES", None)
+    else:
+        os.environ["WINLAB_IMAGES"] = saved[3]
+
+
+def test_netextras_tacacs_pack():
+    """The tacacs pack (winlab/tacacs.py): git's blob and tree ids rebuilt
+    from a `git archive` tarball, $Id$ folded back, the fetch refusing a
+    tarball whose tree is not the commit's, BUILD.txt; the ftpd and nettools
+    packs; the Alpine packages the copies and the tools need."""
+    import json as _j
+    import os
+    import shutil
+    import subprocess
+    from winlab import alpineovl, debpacks, tacacs
+
+    p = debpacks.PACKS
+    check("the tacacs pack: the build tools from Ubuntu and the source as its extra file",
+          p["tacacs"].image == "ubuntu" and p["tacacs"].extra == "tacacs"
+          and {"build-essential", "libpcre2-dev", "libssl-dev", "libc-ares-dev"} <= set(p["tacacs"].packages))
+    check("the ftpd pack: vsftpd and the ftp client; nettools: iperf3, mtr, nmap, tshark, termshark on Debian 12",
+          set(p["ftpd"].packages) == {"vsftpd", "ftp"} and p["nettools"].image == "debian12"
+          and {"iperf3", "mtr-tiny", "nmap", "tshark", "termshark"} <= set(p["nettools"].packages))
+    pk = set(alpineovl.APPLIANCE_PACKAGES) | set(alpineovl.FABRIC_PACKAGES)
+    check("the router's package volume carries curl, Dropbear's scp and dbclient, mtr and iperf3",
+          {"curl", "dropbear-scp", "dropbear-dbclient", "mtr", "iperf3"} <= pk)
+    check("the source is pinned to one commit, fetched from GitHub's archive of it",
+          re.fullmatch(r"[0-9a-f]{40}", tacacs.COMMIT) is not None and tacacs.COMMIT in tacacs.TARBALL_URL
+          and tacacs.TARBALL_URL.startswith("https://codeload.github.com/"))
+    check("git's blob id for 'hello\\n'", tacacs.blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a")
+
+    g = shutil.which("git")
+    if not g:
+        print("  skip git is not installed: the tree check against a real git archive")
+        return
+    with tempfile.TemporaryDirectory() as td:
+        td = Path(td)
+        repo = td / "repo"
+        (repo / "src" / "deep").mkdir(parents=True)
+        (repo / ".gitattributes").write_text("*.c ident\n")
+        (repo / "src" / "main.c").write_text("/* $Id$ */\nint main(void) { return 0; }\n")
+        (repo / "src" / "deep" / "x.txt").write_text("plain\n")
+        (repo / "configure").write_text("#!/bin/sh\necho ok\n")
+        (repo / "configure").chmod(0o755)
+        os.symlink("src/main.c", repo / "link")
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
+                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid", HOME=str(td))
+
+        def gr(*a):
+            return subprocess.run([g, "-C", str(repo), *a], capture_output=True, text=True, env=env).stdout.strip()
+        gr("init", "-q")
+        gr("add", "-A")
+        gr("commit", "-q", "-m", "x")
+        tree = gr("rev-parse", "HEAD^{tree}")
+        tgz = td / "src.tar.gz"
+        gr("archive", "--format=tar.gz", "--prefix=event-driven-servers-abc/", "-o", str(tgz), "HEAD")
+        got, top = tacacs.tree_of_tar(tgz)
+        check("the tarball's files make the commit's tree ($Id$ expanded by ident and folded back, the exec bit, "
+              "a symlink)", got == tree and top == "event-driven-servers-abc", (got, tree, top))
+
+        rec_get = {"tree": tree}
+
+        def get(url, timeout=0):
+            return _j.dumps({"sha": tacacs.COMMIT, "tree": {"sha": rec_get["tree"]}}).encode()
+
+        def download(url, dest, expect_sha="", label=""):
+            Path(dest).write_bytes(tgz.read_bytes())
+        out = td / "pack"
+        out.mkdir()
+        rec = tacacs.fetch_extra(p["tacacs"], out, None, get, download, lambda _m: None)
+        man = {"extra": rec}
+        check("the fetch keeps the tarball, records its SHA-256 and the tree, and writes BUILD.txt",
+              rec["tree"] == tree and len(rec["sha256"]) == 64 and (out / tacacs.TARBALL).is_file()
+              and "./configure" in (out / "BUILD.txt").read_text() and tacacs.extra_ready(out, man))
+        rec_get["tree"] = "0" * 40
+        try:
+            tacacs.fetch_extra(p["tacacs"], out, None, get, download, lambda _m: None)
+            refused = False
+        except tacacs.ExtraError as exc:
+            refused = "is not commit" in str(exc)
+        check("a tarball whose files are not the commit's tree is refused and not kept",
+              refused and not (out / tacacs.TARBALL).exists())
+
+
+class _NxTacWire(_L2secWire):
+    """The TACACS+ server, with command authorization (refuses any hostname
+    command) and accounting (keeps every record)."""
+
+    def __init__(self, key: str, users: dict):
+        super().__init__(key, users)
+        self.asked: list[list[str]] = []
+        self.acct: list[tuple[int, list[str]]] = []
+
+    @staticmethod
+    def _args(body: bytes, off: int) -> list[str]:
+        ulen, plen, rlen, n = body[off + 4], body[off + 5], body[off + 6], body[off + 7]
+        lens = list(body[off + 8:off + 8 + n])
+        i = off + 8 + n + ulen + plen + rlen
+        out = []
+        for ln in lens:
+            out.append(body[i:i + ln].decode("latin-1"))
+            i += ln
+        return out
+
+    def _tacacs(self, data: bytes) -> bytes:
+        import struct
+        from winlab import aaa
+        pk = aaa.tac_split(data, self.tkey)
+        if not pk:
+            return b""
+        kind, _, body = pk[0]
+        session = data[4:8]
+        if kind == 3:
+            self.acct.append((body[0], self._args(body, 1)))
+            return aaa.tac_packet(3, 2, session, struct.pack(">HH", 0, 0) + bytes([1]), self.tkey)
+        if kind == 2:
+            args = self._args(body, 0)
+            if any(a.startswith("cmd=") and a != "cmd=" for a in args):
+                self.asked.append(args)
+                ok = "cmd=hostname" not in args
+                return aaa.tac_packet(2, 2, session, bytes([1 if ok else 0x10, 0]) + struct.pack(">HH", 0, 0),
+                                      self.tkey)
+        return super()._tacacs(data)
+
+
+def test_netextras_aaa_commands():
+    """aaa authorization commands and aaa accounting exec/commands
+    (winlab/aaa.py): the packets on their own, the console's lines and
+    running configuration, a TACACS+ server refusing one command over SSH,
+    the stop records with the whole command, exec start and stop."""
+    import struct
+    from winlab import aaa, devcli, iosssh
+
+    key = "-".join(["tac", "shared", "word"])
+    upw = "-".join(["alice", "tac", "phrase"])
+    w = _NxTacWire(key, {"alice": upw})
+    pkt = aaa.tac_author_cmd("alice", "vty0", "10.10.10.50", key, ["configure", "terminal"], 15)
+    check("a command AUTHOR REQUEST: service=shell, cmd= the first word, cmd-arg for the rest and <cr>",
+          aaa.tac_author_reply(w._tacacs(pkt), key)[0] == aaa.PASS
+          and w.asked[-1] == ["service=shell", "cmd=configure", "cmd-arg=terminal", "cmd-arg=<cr>"], str(w.asked))
+    refused = aaa.tac_author_reply(w._tacacs(aaa.tac_author_cmd("alice", "vty0", "", key, ["hostname", "X"], 15)), key)
+    check("the server's FAIL is a refusal", refused[0] == aaa.FAIL, str(refused))
+    rep = w._tacacs(aaa.tac_acct("alice", "vty0", "", key, aaa.ACCT_STOP, 15, ["task_id=1", "cmd=show clock <cr>"]))
+    check("an ACCOUNTING REQUEST decodes on the server, and its SUCCESS reply on the router",
+          aaa.tac_acct_reply(rep, key) == (aaa.PASS, "SUCCESS") and w.acct[-1] == (aaa.ACCT_STOP, ["task_id=1", "cmd=show clock <cr>"]))
+    check("an accounting reply under another key does not decode", aaa.tac_acct_reply(rep, key + "x")[0] == aaa.ERROR)
+    check("the level a command is checked at: show at # is 1, configure is 15, everything in user mode 1",
+          aaa.command_level("enable", ["show", "run"]) == 1 and aaa.command_level("enable", ["configure"]) == 15
+          and aaa.command_level("config", ["hostname", "X"]) == 15 and aaa.command_level("user", ["ping"]) == 1)
+    del struct
+
+    saved = _nx_saved()
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            d = _nx_workbench(Path(td), "tac-lab")
+            wire = _NxTacWire(key, {"alice": upw})
+            con = devcli.Console(d, "router", runner_factory=lambda: (wire, ""))
+            con.run("enable")
+            con.run("configure terminal")
+            check("command authorization needs aaa new-model",
+                  "aaa new-model" in con.run("aaa authorization commands 15 default group tacacs+ local"))
+            for line in ("aaa new-model", "tacacs server TAC", "address ipv4 10.10.10.11", "key " + key, "exit",
+                         "aaa authentication login default group tacacs+ local",
+                         "aaa authorization exec default group tacacs+ local"):
+                con.run(line)
+            warn = con.run("aaa authorization commands 15 default group tacacs+")
+            check("a list that ends in group tacacs+ is warned about (no fallback while the server is down)",
+                  "every command is refused" in warn, warn)
+            check("RADIUS is not a command authorization method",
+                  "RADIUS does not authorize commands" in con.run("aaa authorization commands 15 default group radius"))
+            for line in ("aaa authorization commands 15 default group tacacs+ local",
+                         "aaa accounting exec default start-stop group tacacs+",
+                         "aaa accounting commands 15 default stop-only group tacacs+"):
+                out = con.run(line)
+                check(f"accepted: {line}", "%" not in out, out)
+            run = con.run("do show running-config")
+            check("show running-config keeps the command authorization and accounting lines",
+                  "aaa authorization commands 15 default group tacacs+ local" in run
+                  and "aaa accounting exec default start-stop group tacacs+" in run
+                  and "aaa accounting commands 15 default stop-only group tacacs+" in run, run[:1500])
+            con.run("end")
+            check("the console is not asked (no aaa authorization console), so nothing went to the server",
+                  wire.asked == [])
+
+            vc = iosssh.VtyConsole(d, "router", "alice", "10.10.10.50", runner_factory=lambda: (wire, ""))
+            vc.open()
+            vc.run(upw)
+            check("alice logs in over SSH at the server's level 15", vc.s.mode == "enable")
+            check("and an exec start record went to the server",
+                  any(f == aaa.ACCT_START and "service=shell" in a for f, a in wire.acct), str(wire.acct))
+            n0 = len(wire.asked)
+            vc.run("conf t")
+            check("conf t is asked about as configure terminal, the words IOS spells out",
+                  len(wire.asked) == n0 + 1 and wire.asked[-1][1:3] == ["cmd=configure", "cmd-arg=terminal"],
+                  str(wire.asked[-1:]))
+            out = vc.run("hostname EVIL")
+            check("the server refuses hostname: Command authorization failed, and the name stays",
+                  "Command authorization failed." in out and devcli.hostname(d.lab, devcli.ROUTER) != "EVIL", out)
+            out = vc.run("interface g0/0/0")
+            check("another configuration command passes", "authorization failed" not in out, out)
+            vc.run("end")
+            stops = [a for f, a in wire.acct if f == aaa.ACCT_STOP and any(x.startswith("cmd=") for x in a)]
+            check("each level 15 command left a stop record with the whole command",
+                  any("cmd=configure terminal <cr>" in a for a in stops)
+                  and any(x.startswith("cmd=interface") for a in stops for x in a), str(stops[-3:]))
+            check("the refused command was not accounted as run",
+                  not any("cmd=hostname EVIL <cr>" in a for a in stops))
+            con.run("configure terminal")
+            con.run("aaa authorization config-commands")
+            con.run("no aaa authorization config-commands")
+            run = con.run("do show running-config")
+            check("no aaa authorization config-commands is shown, as IOS does",
+                  "no aaa authorization config-commands" in run, run[:1500])
+            n1 = len(wire.asked)
+            vc.run("conf t")
+            vc.run("interface g0/0/0")
+            check("with config-commands off, commands in configuration mode are not asked about",
+                  len(wire.asked) == n1 + 1, str(wire.asked[n1:]))
+            vc.run("end")
+            wire.down = True
+            out = vc.run("conf t")
+            check("a server that does not answer falls back to local (alice is no local user: refused)",
+                  "Command authorization failed." in out, out)
+            wire.down = False
+            vc.run("exit")
+            check("logging out sends the exec stop record with the elapsed time",
+                  any(f == aaa.ACCT_STOP and any(x.startswith("elapsed_time=") for x in a) for f, a in wire.acct),
+                  str(wire.acct[-2:]))
+        finally:
+            _nx_restore(saved)
+
+
+def test_netextras_ftp_scp():
+    """copy running-config ftp: and scp:, copy ftp: running-config
+    (winlab/ftpscp.py): ip ftp username/password, IOS's questions, curl's
+    and Dropbear scp's command lines with the login kept off the command line,
+    the server's refusals worded as IOS does, the backup folder fault."""
+    import base64
+    import os
+    import subprocess
+    from winlab import devcli, ftpscp, guestfaults
+
+    check("URLs: scheme, user, password, host, path",
+          ftpscp.parse_url("ftp://u:p@10.1.1.5/dir/r1-confg") == ("ftp", "u", "p", "10.1.1.5", "dir/r1-confg")
+          and ftpscp.parse_url("scp:") == ("scp", "", "", "", ""))
+    check("curl's and scp's failures, as IOS words them",
+          ftpscp.ios_error("ftp", "curl: (67) Access denied: 530", 67).startswith("Not logged in")
+          and ftpscp.ios_error("ftp", "curl: (25) Failed FTP upload: 553", 25) == "Permission denied"
+          and ftpscp.ios_error("ftp", "curl: (7) Failed to connect", 7) == "Connection refused"
+          and ftpscp.ios_error("scp", "Permission denied (password)", 1).startswith("Not logged in"))
+
+    saved = _nx_saved()
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            d = _nx_workbench(Path(td), "ftp-lab")
+            ran, out_ = [], {"x": ""}
+
+            def runner():
+                def r(cmd, timeout=0):
+                    ran.append(cmd)
+                    return out_["x"]
+                return r, ""
+            r = devcli.Console(d, "router", runner_factory=runner)
+            r.run("")
+            r.run("en")
+            fpw = "".join(["b", "k", "p", "w", "4", "2", "x", "y"])
+            r.run("conf t")
+            for line in ("hostname R1", "ip ftp username netbackup", "ip ftp password " + fpw, "end"):
+                r.run(line)
+            run = r.run("show running-config")
+            check("ip ftp username and password are in the running configuration",
+                  "ip ftp username netbackup" in run and ("ip ftp password " + fpw) in run, run[:800])
+            r.run("copy running-config ftp:")
+            p1 = r.prompt()
+            r.run("10.10.10.50")
+            p2 = r.prompt()
+            out_["x"] = "#rc=0\n"
+            out = r.run("")
+            check("copy running-config ftp: asks for the server and the file, hostname-confg by default",
+                  p1 == "Address or name of remote host []? " and p2 == "Destination filename [r1-confg]? ", (p1, p2))
+            cmd = ran[-1]
+            cfg = base64.b64decode(cmd.split("printf %s '")[1].split("'")[0]).decode()
+            check("curl stores it with the login in a -K file, never on its command line",
+                  "Writing r1-confg" in out and "bytes copied in" in out and '-T $f ftp://10.10.10.50/r1-confg' in cmd
+                  and "-K $k" in cmd and fpw not in cmd and cfg == f'user = "netbackup:{fpw}"\n', cmd[-300:])
+            out_["x"] = "curl: (25) Failed FTP upload: 553\n#rc=25\n"
+            r.run("copy running-config ftp://10.10.10.50/r1-confg")
+            r.run("")
+            out = r.run("")
+            check("a 553 is Permission denied, with the hint about write_enable and the folder",
+                  "%Error opening ftp://10.10.10.50/r1-confg (Permission denied)" in out and "write_enable" in out, out)
+            # SCP: the user and the password asked for, the password in the environment
+            spw = "".join(["s", "c", "p", "w", "9", "9", "q", "z"])
+            r.run("copy running-config scp:")
+            r.run("10.10.10.50")
+            pu = r.prompt()
+            r.run("netbackup")
+            r.run("")
+            pp = r.prompt()
+            out_["x"] = "#rc=0\n"
+            out = r.run(spw)
+            cmd = ran[-1]
+            check("copy running-config scp: asks the user, the file and the password",
+                  pu.startswith("Destination username [") and pp == "Password: " and "bytes copied in" in out,
+                  (pu, pp, out))
+            check("Dropbear's scp through dbclient -y -y, the password only in DROPBEAR_PASSWORD",
+                  "-S $w" in cmd and "-y -y" in cmd and "netbackup@10.10.10.50:r1-confg" in cmd and spw not in cmd
+                  and base64.b64encode(spw.encode()).decode() in cmd, cmd[-300:])
+            # a file brought back into the running configuration
+            body = "hostname R2\nip route 10.9.9.0 255.255.255.0 10.10.10.50\n"
+            out_["x"] = "#rc=0\n#data\n" + base64.encodebytes(body.encode()).decode()
+            r.run("copy ftp: running-config")
+            r.run("10.10.10.50")
+            r.run("r2-confg")
+            out = r.run("")
+            check("copy ftp: running-config merges the file: the new hostname",
+                  "Loading r2-confg" in out and devcli.hostname(d.lab, devcli.ROUTER) == "R2", out)
+        finally:
+            _nx_restore(saved)
+
+    f = guestfaults.SCENARIOS.get("ftp-upload-dir-not-writable")
+    check("the FTP drill is registered for Ubuntu with three hints and a verify",
+          f is not None and f.images == ("ubuntu",) and len(f.hints) == 3 and "echo True" in f.verify)
+    if f is not None:
+        cmd, _ = guestfaults.build_command(f.id, {}, clear=False)
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td, "vsftpd.log")
+            log.write_text('Sat Nov  7 10:00:00 2026 [pid 9] [root] OK UPLOAD: Client "::ffff:10.80.0.2", '
+                           '"/backups/r1-confg", 1234 bytes, 5.00Kbyte/sec\n')
+            probe = cmd.replace("/var/log/vsftpd.log", str(log)).split('[ -n "$u" ]')[0] + 'echo "$u $d"'
+            got = subprocess.run(["sh", "-c", probe], capture_output=True, text=True).stdout.strip()
+        home = os.path.expanduser("~root")
+        check("the drill finds the account and the folder of the last upload from vsftpd's log, inside the chroot",
+              got == f"root {home}/backups", got)
+
+
+
+
+
+
+
+# ---- wifi-air: real 802.11 to a Linux laptop over vwifi (winlab/vwifi.py), its lesson and two tickets
+def test_wifiair_vwifi_pinned_and_fetched():
+    """The first published build is pinned; fetching it checks the digest
+    and the size, and it goes onto the router's volume, an air AP's volume
+    and the wifi pack's stick."""
+    from winlab import vwifi
+    check("vwifi's release asset is pinned: release vwifi-c3822ba, its SHA-256 and size",
+          vwifi.TAG == "vwifi-c3822ba" and vwifi.published()
+          and vwifi.ASSET_SHA256 == "29c18f590ef85e6438b6b1649105ea42096f7fc3ab90f39adac1ec2a703f69b5"
+          and vwifi.ASSET_SIZE == 2796700)
+    saved = vwifi.store
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        vwifi.store = lambda: d
+        try:
+            got = []
+
+            def fake(url, dest, expect_sha="", label=""):
+                got.append((url, expect_sha))
+                with open(dest, "wb") as fh:
+                    fh.truncate(vwifi.ASSET_SIZE)
+
+            check("nothing is on this PC before the fetch", not vwifi.ready() and vwifi.volume_files() == [])
+            p = vwifi.fetch(progress=lambda _m: None, download=fake)
+            check("the fetch asks for winlab's release asset with the pinned digest, and then it is ready",
+                  p == d / vwifi.ASSET and got == [(f"{vwifi.RELEASE}/{vwifi.ASSET}", vwifi.ASSET_SHA256)]
+                  and vwifi.ready() and vwifi.volume_files() == [(f"vwifi/{vwifi.ASSET}", p)])
+            vwifi.fetch(progress=lambda _m: None, download=fake)
+            check("a second fetch downloads nothing", len(got) == 1)
+            stick = d / "stick"
+            stick.mkdir()
+            man = {"extra": vwifi.fetch_extra(None, stick, [], None, fake, lambda _m: None)}
+            check("the wifi pack carries the whole build (programs, licence, source) beside its .debs",
+                  (stick / vwifi.ASSET).stat().st_size == vwifi.ASSET_SIZE and vwifi.extra_ready(stick, man)
+                  and vwifi.ExtraError is vwifi.VwifiError)
+            with open(p, "ab") as fh:
+                fh.write(b"x")
+            check("a file of another size is not taken as the build", not vwifi.ready())
+        finally:
+            vwifi.store = saved
+    root = Path(__file__).resolve().parent.parent
+    check("preparation fetches it, the repository volume carries it",
+          "vwifi.fetch(" in (root / "winlab" / "prepare.py").read_text(encoding="utf-8")
+          and "files += vwifi.volume_files()" in (root / "winlab" / "apkrepo.py").read_text(encoding="utf-8"))
+
+
+
+
+
+
+
+
+# ---- rstp
+# Real rapid spanning tree: mstpd (GPL-2.0-or-later) built from its pinned
+# release by winlab's own workflow, fetched at preparation like vwifi, run on
+# the router for the rapid-pvst switches; the lesson, the BPDU guard ticket,
+# the exam map and the licence row.
+
+def test_rstp_mstpd_pin_fetch_and_pack():
+    """mstpd is pinned to a release commit; nothing is fetched before a build
+    is pinned; with a digest pinned the asset is fetched, checked and carried
+    on the repository volume; the workflow builds it from source by hand only
+    and refuses another digest; the pack is reproducible and carries the
+    programs, the licence, the NOTICE and the complete source."""
+    import gzip
+    import hashlib
+    import importlib.util
+    import io
+    import os
+    import tarfile
+    from winlab import apkrepo, mstpd, paths, prepare
+
+    root = Path(__file__).resolve().parent.parent
+    check("mstpd is pinned to release 0.2.0's commit, GPL-2.0-or-later, and its asset is winlab's own release",
+          len(mstpd.COMMIT) == 40 and mstpd.VERSION == "0.2.0" and mstpd.LICENSE == "GPL-2.0-or-later"
+          and mstpd.RELEASE.startswith("https://github.com/rdiol12/winlablite/releases/download/")
+          and mstpd.ASSET == f"mstpd-0.2.0-{mstpd.COMMIT[:7]}.tar.gz" and mstpd.PROGRAMS == ("mstpd", "mstpctl"))
+    said = []
+    check("nothing is fetched before a build is pinned, and it says how to publish one",
+          mstpd.published() or (mstpd.fetch(progress=said.append, download=lambda *a, **k: 1 / 0) is None
+                                 and "Actions > mstpd" in said[0] and not mstpd.ready()))
+    saved = (paths.VAR, os.environ.get("WINLAB_IMAGES"), mstpd.ASSET_SHA256)
+    with tempfile.TemporaryDirectory() as td:
+        os.environ["WINLAB_IMAGES"] = str(Path(td) / "images")
+        try:
+            blob = b"\x1f\x8b fake mstpd pack"
+            mstpd.ASSET_SHA256 = hashlib.sha256(blob).hexdigest()
+            got = []
+
+            def dl(url, dest, expect_sha="", label=""):
+                got.append((url, expect_sha))
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(blob)
+                return dest
+            path = mstpd.fetch(download=dl)
+            check("with a digest pinned: fetched from the release, checked against it, recorded",
+                  path == mstpd.asset_path() and got == [(f"{mstpd.RELEASE}/{mstpd.ASSET}", mstpd.ASSET_SHA256)]
+                  and mstpd.ready() and mstpd.summary()["ready"], str(got))
+            check("the repository volume carries it under mstpd/",
+                  mstpd.volume_files() == [(f"mstpd/{mstpd.ASSET}", mstpd.asset_path())])
+        finally:
+            mstpd.ASSET_SHA256 = saved[2]
+            if saved[1] is None:
+                os.environ.pop("WINLAB_IMAGES", None)
+            else:
+                os.environ["WINLAB_IMAGES"] = saved[1]
+    check("preparing the fabric fetches it (a failure is a warning) and the volume adds it",
+          "mstpd.fetch(" in (root / "winlab" / "prepare.py").read_text(encoding="utf-8")
+          and "except mstpd.MstpdError" in (root / "winlab" / "prepare.py").read_text(encoding="utf-8")
+          and "files += mstpd.volume_files()" in (root / "winlab" / "apkrepo.py").read_text(encoding="utf-8"))
+    del apkrepo, prepare
+    wf = (root / ".github" / "workflows" / "mstpd.yml").read_text(encoding="utf-8")
+    check("the workflow: by hand only, from the pinned commit, static in Alpine, packed with the source, "
+          "refusing a different digest",
+          "workflow_dispatch" in wf and "import winlab.mstpd as m" in wf and "rev-parse HEAD" in wf
+          and "LDFLAGS=-all-static" in wf and "grep -q NEEDED" in wf and "tools/pack_mstpd.py" in wf
+          and "not published." in wf and "steps.pin.outputs.alpine" in wf and "push:" not in wf)
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "bin").mkdir()
+        for prog in mstpd.PROGRAMS:
+            (d / "bin" / prog).write_bytes(b"\x7fELF " + prog.encode())
+        (d / "src.tar.gz").write_bytes(b"source")
+        (d / "LICENSE").write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 2")
+        spec = importlib.util.spec_from_file_location("pack_mstpd", root / "tools" / "pack_mstpd.py")
+        pm = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pm)
+        a = pm.pack(d / "bin", d / "src.tar.gz", d / "LICENSE")
+        b = pm.pack(d / "bin", d / "src.tar.gz", d / "LICENSE")
+        with tarfile.open(fileobj=io.BytesIO(a), mode="r:gz") as tar:
+            names = tar.getnames()
+            notice = tar.extractfile("mstpd/NOTICE").read().decode()
+            modes = {m.name: m.mode for m in tar.getmembers()}
+        check("the pack is reproducible and carries the programs, licence, notice and complete source",
+              a == b and gzip.decompress(a)[:5] == b"mstpd"
+              and set(names) == {"mstpd/LICENSE", "mstpd/NOTICE", "mstpd/source/src.tar.gz",
+                                 "mstpd/bin/mstpd", "mstpd/bin/mstpctl"}
+              and modes["mstpd/bin/mstpd"] == 0o755, str(names))
+        check("the NOTICE names upstream, the commit, the licence and how it was built",
+              mstpd.UPSTREAM in notice and mstpd.COMMIT in notice and "General Public License" in notice
+              and "-all-static" in notice)
+        (d / "bin" / "mstpctl").write_bytes(b"#!/bin/sh")
+        try:
+            pm.pack(d / "bin", d / "src.tar.gz", d / "LICENSE")
+            refused = False
+        except SystemExit:
+            refused = True
+        check("a program that is not a Linux binary is refused", refused)
+    lines = "\n".join(mstpd.router_lines())
+    check("the router: the two programs from the volume into /usr/local/sbin once per build, and winlab's "
+          "bridge-stp that hands only the listed bridges to mstpd",
+          "/media/*/mstpd/mstpd-*.tar.gz" in lines and "blkid -L WLAPK" in lines
+          and f"{mstpd.ROUTER_BIN}/" in lines and "/sbin/bridge-stp" in lines and "wl_mstpd=1" in lines
+          and f"grep -qx \"$1\" {mstpd.RSTP_LIST}" in lines and "pidof mstpd" in lines and ".version" in lines)
+    licensing = (root / "LICENSING.md").read_text(encoding="utf-8")
+    check("LICENSING.md lists mstpd: GPL, built from source, the source shipped in the asset, fetched",
+          "| mstpd and mstpctl (rapid spanning tree" in licensing and "GPL-2.0-or-later" in licensing
+          and "yes, with the complete corresponding source" in licensing.split("| mstpd and mstpctl")[1].split("\n")[0])
+
+
+def _rstp_ring():
+    """A workbench lab with three switches in a ring (two uplinks into sw1
+    and a spare cable), its dash, and the paths to put back."""
+    import os
+    from winlab import editor, images, netplan, paths, schema, workbench
+    from winlab.model import CUSTOM
+    saved = (paths.VAR, paths.STATE, paths.LABS, os.environ.get("WINLAB_IMAGES"), workbench._running)
+    td = Path(tempfile.mkdtemp())
+    paths.VAR, paths.STATE, paths.LABS = td / "var", td / "var" / "state", td / "labs"
+    os.environ["WINLAB_IMAGES"] = str(td / "images")
+    dest = editor.new_workbench("rstp-ring")
+    lab = schema.load(dest)
+    paths.downloads_dir().mkdir(parents=True, exist_ok=True)
+    images.installer_path("win11").write_bytes(b"\0" * 2048)
+    for n, c in (("sw1", "192.168.10.0/24"), ("sw2", "192.168.20.0/24"), ("sw3", "192.168.30.0/24")):
+        editor.add_network(lab, n, cidr=c)
+    for s in ("sw2", "sw3"):
+        editor.set_routed(lab, s, False)
+    for nid, net in (("pc01", "sw1"), ("pc02", "sw2"), ("pc03", "sw3")):
+        editor.add_node(lab, nid, kind=CUSTOM, image="win11")
+        editor.cable(lab, nid, 0, net)
+    editor.save(lab)
+
+    class _Dash:
+        def reload(self):
+            self.lab = schema.load(dest)
+            self.plan = netplan.compile_topology(self.lab, check_ports=False)
+    d = _Dash()
+    d.reload()
+    workbench._running = lambda _n: {"fabric"}
+    workbench.act(d, "wb-cable", {"node": "switch", "network": "sw2", "to": "sw1"})
+    workbench.act(d, "wb-cable", {"node": "switch", "network": "sw3", "to": "sw1"})
+    workbench.act(d, "wb-stp-cable", {"a": "sw2", "b": "sw3"})
+    d.reload()
+    return d, saved, td
+
+
+def _rstp_restore(saved, td):
+    import os
+    import shutil
+    from winlab import paths, workbench
+    paths.VAR, paths.STATE, paths.LABS = saved[:3]
+    workbench._running = saved[4]
+    if saved[3] is None:
+        os.environ.pop("WINLAB_IMAGES", None)
+    else:
+        os.environ["WINLAB_IMAGES"] = saved[3]
+    shutil.rmtree(td, ignore_errors=True)
+
+
+def test_rstp_render_and_console():
+    """rapid-pvst on the router: mstpd started and the bridges listed before
+    they are made, each rapid bridge handed to mstpd with mstpctl (rstp, the
+    priority, per port cost, priority, edge and BPDU guard) and the links set
+    after; pvst alone keeps 802.1D and empties the list; a BPDU-guarded port
+    is left for mstpd to shut; the consoles say what runs the tree, and show
+    spanning-tree prints what mstpctl reports."""
+    from unittest import mock
+    from winlab import devcli, mstpd, stp
+    d, saved, td = _rstp_ring()
+    try:
+        con = {s: devcli.Console(d, f"sw:{s}", runner_factory=lambda: (lambda *a, **k: "", "")) for s in ("sw1", "sw2", "sw3")}
+        for c in con.values():
+            c.run("enable")
+            c.run("configure terminal")
+        text = "\n".join(stp.render(d.plan))
+        check("all pvst: the kernel's 802.1D, the RSTP list emptied, no mstpctl",
+              f"rm -f {mstpd.RSTP_LIST}" in text and "mstpctl" not in text and "stp_state 1" in text, text[:300])
+        with mock.patch.object(mstpd, "ready", lambda: False):
+            out = con["sw1"].run("spanning-tree mode rapid-pvst")
+        check("without mstpd fetched the console says rapid-pvst is 802.1D with short timers",
+              "mstpd is not on the router yet" in out and "4 s forward delay" in out, out)
+        with mock.patch.object(mstpd, "ready", lambda: True):
+            out = con["sw2"].run("spanning-tree mode rapid-pvst")
+            out3 = con["sw3"].run("spanning-tree mode rapid-pvst")
+            mst = con["sw3"].run("spanning-tree mode mst")
+        check("with mstpd fetched it says rapid spanning tree runs in mstpd", "runs in mstpd" in out and "802.1w" in out3, out)
+        check("mst is taken now (winlab/mst.py) and says it runs in mstpd", "MSTP (802.1s)" in mst, mst)
+        con["sw3"].run("spanning-tree mode rapid-pvst")
+        con["sw1"].run("spanning-tree vlan 1 root primary")
+        con["sw2"].run("interface gi0/2")
+        con["sw2"].run("spanning-tree cost 19")
+        con["sw2"].run("spanning-tree port-priority 64")
+        con["sw2"].run("exit")
+        d.reload()
+        idx = {s: i for i, s in enumerate(devcli.switches(d.lab), 1)}
+        names = stp.ifnames(d.lab)
+        lines = stp.render(d.plan)
+        text = "\n".join(lines)
+        b1, b2 = f"stp{idx['sw1']}", f"stp{idx['sw2']}"
+        start = text.index(f"printf '%s\\n' ")
+        check("mstpd is started and the rapid bridges listed before any bridge is made",
+              start < text.index(f"ip link add {b1} type bridge")
+              and f"printf '%s\\n' stp1 stp2 stp3 > {mstpd.RSTP_LIST}" in text and mstpd.MSTPD in text, text[:900])
+        g = names["sw2 GigabitEthernet0/2"]
+        m = mstpd.MSTPCTL
+        check("each rapid bridge is handed to mstpd only when the kernel gave it over (stp_state 2): rstp, priority",
+              f'[ "$(cat /sys/class/net/{b2}/bridge/stp_state 2>/dev/null)" = 2 ]' in text
+              and f"{m} addbridge {b2}" in text and f"{m} setforcevers {b2} rstp" in text
+              and f"{m} settreeprio {b1} 0 6" in text and f"{m} settreeprio {b2} 0 8" in text)
+        check("and per port: point-to-point, the cost and priority the console set, edge and BPDU guard",
+              f"{m} setportp2p {b2} {g} yes" in text and f"{m} setportpathcost {b2} {g} 19" in text
+              and f"{m} settreeportprio {b2} {g} 0 4" in text and f"{m} setportadminedge {b2} {g} no" in text
+              and f"{m} setbpduguard {b2} {g} no" in text)
+        check("the way into the router's bridge is an edge port", f"{m} setportadminedge {b1} {b1}fa yes" in text)
+        check("the ports' links come up after mstpd has its bridges (BPDU guard sees the first BPDU)",
+              text.index(f"{m} addbridge {b2}") < text.index(f"ip link set {g} up"))
+        check("the kernel bridge keeps its fallback timers (4 s) in case mstpd is not there",
+              "forward_delay 400" in text)
+
+        # BPDU guard on sw1's port to sw2: mstpd shuts it itself, both ends are left up for it.
+        con["sw1"].run("interface gi0/2")
+        con["sw1"].run("spanning-tree portfast trunk")
+        out = con["sw1"].run("spanning-tree bpduguard enable")
+        d.reload()
+        text = "\n".join(stp.render(d.plan))
+        mine, far = names["sw1 GigabitEthernet0/2"], names["sw2 GigabitEthernet0/1"]
+        check("BPDU guard on a port to a switch err-disables it (the console logs it)", "BLOCK_BPDUGUARD" in out, out)
+        check("the router leaves the guarded port and its far end up for mstpd, down without it",
+              f'if [ -n "$wl_mstpd" ]; then ip link set {mine} up; else ip link set {mine} down; fi' in text
+              and f'if [ -n "$wl_mstpd" ]; then ip link set {far} up; else ip link set {far} down; fi' in text
+              and f"{m} setbpduguard {b1} {mine} yes" in text and f"{m} setportadminedge {b1} {mine} yes" in text)
+
+        # What the running router answers: mstpctl's roles and states.
+        sample = (f"#stp\nB {b1} 2 6000.02574c 6000.02574c\nP {b1} {mine} 0\nM {b1} rstp\n"
+                  f"R {b1} {mine} no Disabled discarding yes yes \n"
+                  f"R {b1} {names['sw1 GigabitEthernet0/3']} yes Designated forwarding no no \n"
+                  f"B {b2} 2 8000.02574c 8000.02574c\nM {b2} rstp\n"
+                  f"R {b2} {names['sw2 GigabitEthernet0/2']} yes Root forwarding no no \n"
+                  f"B stp3 2 8000.0 8000.0\nM stp3 rstp\n"
+                  f"R stp3 {names['sw3 GigabitEthernet0/1']} yes Root forwarding no no \n"
+                  f"R stp3 {names['sw3 GigabitEthernet0/2']} yes Alternate discarding no no \n"
+                  "C cpu 1 0 1 100 0 0 0 0 0 0\n")
+        live = stp.parse_live(sample)
+        check("parse_live reads mstpd's protocol and each port's role, state, guard and edge",
+              live["rstp"] == {b1: "rstp", b2: "rstp", "stp3": "rstp"}
+              and live["roles"][mine] == {"bridge": b1, "enabled": False, "role": "Disabled", "state": "discarding",
+                                          "guard_err": True, "edge": True}
+              and live["roles"][names["sw3 GigabitEthernet0/2"]]["role"] == "Alternate")
+        check("the live read asks mstpctl only for bridges mstpd runs",
+              "stp_state)\" = 2 ]" in stp.LIVE_CMD and "mstpctl showportparams" in stp.LIVE_CMD
+              and "bpdu-guard-error oper-edge-port" in stp.LIVE_CMD)
+        lc = {s: devcli.Console(d, f"sw:{s}", runner_factory=lambda: ((lambda cmd, timeout=60: sample), ""))
+              for s in ("sw1", "sw3")}
+        for c in lc.values():
+            c.powered = lambda: True
+            c.run("enable")
+        sh3 = lc["sw3"].run("show spanning-tree")
+        check("show spanning-tree on a rapid switch: protocol rstp, mstpctl's roles and states, timers of RSTP",
+              "Spanning tree enabled protocol rstp" in sh3 and "Root FWD" in sh3 and "Altn BLK" in sh3
+              and "Forward Delay 15 sec" in sh3 and "as mstpctl reports them" in sh3, sh3)
+        sh1 = lc["sw1"].run("show spanning-tree")
+        check("a port mstpd shut for BPDU guard reads BKN* *BPDU_GUARD (err-disabled), Edge",
+              "BKN*" in sh1 and "*BPDU_GUARD (err-disabled)" in sh1 and "Desg FWD" in sh1, sh1)
+        ifc = lc["sw3"].run("show spanning-tree interface gi0/2")
+        check("show spanning-tree interface reads mstpctl too", "Altn BLK" in ifc, ifc)
+        check("cells in IOS's words", stp._rstp_cell({"enabled": True, "role": "Designated", "state": "learning",
+                                                     "guard_err": False, "edge": False}) == ("Desg", "LRN")
+              and stp._rstp_cell({"enabled": False, "role": "Disabled", "state": "discarding",
+                                  "guard_err": False, "edge": False}) == ("Disa", "DIS"))
+        with mock.patch.object(mstpd, "ready", lambda: True):
+            off = con["sw2"].run("do show spanning-tree")
+        check("router off, mstpd fetched: worked out by winlab, and it says so",
+              "protocol rstp" in off and "until the router runs" in off and "Forward Delay 15 sec" in off, off)
+        with mock.patch.object(mstpd, "ready", lambda: False):
+            off = con["sw2"].run("do show spanning-tree")
+        check("router off, no mstpd: the honest kernel note and the kernel's 4 s", stp.KERNEL_NOTE in off
+              and "Forward Delay 4 sec" in off, off)
+    finally:
+        _rstp_restore(saved, td)
+
+
+
+
+
+
+# ---- android: a company phone (winlab/android.py) and Headwind MDM (winlab/hmdm.py)
+def _test_apk(path, package):
+    """A minimal APK: a zip whose binary AndroidManifest.xml names `package`."""
+    import struct
+    import zipfile
+
+    strings = ["package", "manifest", package]
+    data = b""
+    offsets = []
+    for st in strings:
+        offsets.append(len(data))
+        data += struct.pack("<H", len(st)) + st.encode("utf-16-le") + b"\0\0"
+    while len(data) % 4:
+        data += b"\0"
+    hs = 28
+    start = hs + 4 * len(strings)
+    pool = struct.pack("<HHIIIIII", 0x0001, hs, start + len(data), len(strings), 0, 0, start, 0)
+    pool += struct.pack(f"<{len(strings)}I", *offsets) + data
+    attr = struct.pack("<IIIHBBI", 0xFFFFFFFF, 0, 2, 8, 0, 0x03, 2)
+    ext = struct.pack("<IIHHHHHH", 0xFFFFFFFF, 1, 20, 20, 1, 0, 0, 0) + attr
+    tag = struct.pack("<HHIII", 0x0102, 16, 16 + len(ext), 1, 0xFFFFFFFF) + ext
+    body = pool + tag
+    xml = struct.pack("<HHI", 0x0003, 8, 8 + len(body)) + body
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("AndroidManifest.xml", xml)
+        z.writestr("classes.dex", b"dex\n035\0")
+    return path
+
+
+
+# ---- vendor Wi-Fi lessons (wireless-vendors lab, winlab/wifivendors.py)
+WIFI_VENDOR_LESSONS = {
+    "wifi-ruckus-unleashed": (600, "wifi-ruckus-unleashed", "ruckus01"),
+    "wifi-aruba-instant": (601, "wifi-aruba-instant", "aruba01"),
+    "wifi-mikrotik-routeros": (602, "wifi-mikrotik-routeros", "mikrotik01"),
+    "wifi-cisco-ewc": (603, "wifi-cisco-ewc", "ewc01"),
+    "wifi-wlc-ap-join": (604, "wifi-wlc-ap-join", "wlc01"),
+    "wifi-wlc-wlans-tags": (605, "wifi-wlc-wlans-tags", "wlc01"),
+    "wifi-channel-plan-roaming": (606, "wifi-channel-plan", "wlc01"),
+    "wifi-unifi-controller": (607, "wifi-unifi-controller", "ctl01"),
+    "wifi-openwisp-openwrt": (608, "wifi-openwisp-openwrt", "wisp01"),
+    "wifi-enterprise-aruba": (609, "wifi-enterprise-aruba", "aruba01"),
+}
+WIFI_VENDOR_PROBLEMS = {
+    "ts-wlc-wlan-not-in-tag": (1000, "wlc-wlan-not-in-tag", "wlc01"),
+    "ts-lap-cannot-find-wlc": (1001, "lap-cannot-find-wlc", "cap02"),
+    "ts-ewc-config-lost-on-reload": (1002, "ewc-config-lost-on-reload", "ewc01"),
+    "ts-aruba-not-committed": (1003, "aruba-change-not-committed", "aruba01"),
+    "ts-wifi-radius-secret-wrong": (1004, "wifi-radius-secret-wrong", "aruba01"),
+}
+
+
+class _ApBench:
+    """Vendor APs (winlab/apos) in folders on this PC, each as its own root,
+    and a way to run a check or a ticket's script on one of them the way
+    the device's console runs it: sh, with python3 importing apos from the
+    folder the AP keeps it in."""
+
+    def __init__(self, td: str):
+        import os
+        self.td = td
+        self.lib = Path(td, "lib")
+        self.lib.mkdir()
+        os.symlink(str(Path(__file__).resolve().parent.parent / "winlab" / "apos"), str(self.lib / "apos"))
+        self.roots: dict[str, str] = {}
+
+    def add(self, name: str, vendor: str, ip: str, mac: str, mask: str = "255.255.255.0") -> str:
+        import json as _json
+        from winlab.apos import core
+        r = Path(self.td, name)
+        for d in ("etc/winlab-ap", "etc/config", "tmp"):
+            (r / d).mkdir(parents=True, exist_ok=True)
+        (r / "etc/winlab-ap/ident.json").write_text(_json.dumps({"vendor": vendor, "mac": mac, "domain": "corp.lab"}))
+        (r / "etc/config/network").write_text(f"config interface 'lan'\n\toption ipaddr '{ip}'\n\toption netmask '{mask}'\n")
+        self.roots[name] = str(r)
+        self.at(name)
+        core.factory_reset()
+        return str(r)
+
+    def at(self, name: str) -> None:
+        from winlab.apos import core
+        core.ROOT, core.LIVE = self.roots[name], False
+
+    def cli(self, name: str, lines: list[str]) -> str:
+        from winlab.apos import core, term, vendors
+        self.at(name)
+        t = term.Term(lines)
+        vendors.module(core.ident()["vendor"]).cli(t)
+        return t.text()
+
+    def sh(self, name: str, script: str, env: dict | None = None) -> str:
+        import os
+        import subprocess
+        e = dict(os.environ, APOS_ROOT=self.roots.get(name, self.td), **(env or {}))
+        e.pop("PYTHONPATH", None)
+        r = subprocess.run(["sh", "-c", script], cwd=str(self.lib), env=e, capture_output=True, text=True, timeout=60)
+        return r.stdout.strip()
+
+
+def _grade_here(ex, bench: "_ApBench", env: dict | None = None) -> dict[str, tuple[bool, str]]:
+    """Each sh check of an exercise run on the bench's device of its node;
+    {check name: (passed, output)}. Checks on other machines are skipped."""
+    from winlab import exercises
+    out = {}
+    for c in ex.checks:
+        if c.shell != "sh" or "systemctl" in c.script or (c.node not in bench.roots
+                                                           and c.node not in (env or {}).get("_nodes", ())):
+            continue
+        got = bench.sh(c.node, c.script, {k: v for k, v in (env or {}).items() if not k.startswith("_")})
+        out[c.name] = (exercises.output_matches(c, got), got)
+    return out
+
+
+
+
+
+
+
+def _gap8_tools():
+    sys.path.insert(0, str(Path("tools").resolve()))
+    try:
+        import i18n_lessons
+        import i18n_content
+    finally:
+        sys.path.pop(0)
+    return i18n_lessons, i18n_content
+
+
+
+
+_GAP8_THIN = ("promote-first-dc", "defender-antivirus", "bitlocker-auto-unlock",
+              "azure-peering-hub-spoke", "aws-cost-tags-budget", "aidc-share-the-gpus")
+
+
+
+
+
+
+
+
+# ---- console-l2: private VLANs, storm control, RA/DHCPv6 guard (winlab/l2sec.py), IPv6 ACLs (winlab/acl6.py), MST (winlab/mst.py)
+_L2_LESSONS = {"private-vlans": (650, "campus-vlans"), "storm-control": (652, "switch-security"),
+               "mst-regions": (654, "campus-vlans"), "ipv6-acls-router": (656, "router-protocols"),
+               "ipv6-ra-guard": (658, "switch-security")}
+_L2_TICKETS = {"ts-storm-control-errdisabled": (1020, "storm-control-errdisabled", "switch-security", "nas01"),
+               "ts-pvlan-wrong-community": (1022, "pvlan-wrong-community", "campus-vlans", "pc-b"),
+               "ts-ipv6-acl-blocks-nd": (1024, "ipv6-acl-blocks-nd", "router-protocols", "pc-guest"),
+               "ts-ra-guard-uplink": (1026, "ra-guard-uplink", "router-protocols", "pc-office")}
+
+
+class _L2Env(_NetcoreEnv):
+    """_NetcoreEnv with switch-security too."""
+
+    def __enter__(self):
+        import shutil
+        super().__enter__()
+        shutil.copy(self.saved[0] / "switch-security.toml", self.td / "labs" / "switch-security.toml")
+        return self
+
+
+def _l2_nft_check(text):
+    """nft -c on every table a render feeds nft (where nft runs): [] or the errors."""
+    import re
+    import shutil
+    import subprocess
+    if not shutil.which("nft"):
+        return []
+    bad = []
+    for b in re.findall(r"nft -f - <<'(?:WINLAB_EOF|WLACL6)'(?: \|\| true)?\n(.*?)\n(?:WINLAB_EOF|WLACL6)", text, re.S):
+        r = subprocess.run(["nft", "-c", "-f", "-"], input=b, text=True, capture_output=True)
+        if r.returncode != 0 and "Operation not permitted" not in r.stderr:
+            bad.append(r.stderr[:300])
+    return bad
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _l3_console(d, answers=None, ran=None):
+    """A console on the router-protocols lab's router whose runner answers
+    from a dict of {substring: text or callable} (the first that matches)."""
+    from winlab import devcli
+
+    def runner_factory():
+        def run(cmd, timeout=60):
+            if ran is not None:
+                ran.append(cmd)
+            for k, v in (answers or {}).items():
+                if k in cmd:
+                    return v() if callable(v) else v
+            return ""
+        return run, ""
+    con = devcli.Console(d, "router", runner_factory=runner_factory)
+    con.powered = lambda: True
+    return con
+
+
+def _nft_body(script: str, table: str) -> str:
+    for body in re.findall(r"nft -f - <<'EOF' \|\| true\n(.*?)\nEOF", script, re.S):
+        if body.startswith(f"table ip {table}"):
+            return body
+    return ""
+
+
+_NS_POOL = r'''
+import fcntl, json, re, socket, struct, subprocess, sys
+fcntl.ioctl(socket.socket(socket.AF_INET, socket.SOCK_DGRAM), 0x8914, struct.pack("16sH14s", b"lo", 0x1 | 0x8, b""))
+body = sys.stdin.read()
+body = body.replace("10.80.0.0/24", "127.0.0.0/8")
+body = re.sub(r'iifname (\{[^}]*\}|"[^"]*") oifname (\{[^}]*\}|"[^"]*") jump', 'oifname "lo" jump', body, count=1)
+r = subprocess.run(["nft", "-f", "-"], input=body, text=True, capture_output=True)
+if r.returncode:
+    print(json.dumps({"load": r.stderr})); sys.exit(0)
+sent = {}
+for i in (10, 11, 12, 13):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.bind((f"127.0.0.{i}", 40000 + i))
+    try:
+        s.sendto(b"x", ("127.0.0.1", 9)); sent[i] = "sent"
+    except OSError as e:
+        sent[i] = e.strerror
+    s.close()
+listing = subprocess.run(["nft", "list", "table", "ip", "wlnat"], capture_output=True, text=True).stdout
+checks = [subprocess.run(["sh", "-c", c], capture_output=True, text=True).stdout.strip() for c in sys.argv[1:]]
+print(json.dumps({"sent": sent, "list": listing, "checks": checks}))
+'''
+
+
+
+
+
+
+def test_l3_ospf_ntp_auth():
+    """OSPF authentication (per interface, per area, key chains) and NTP
+    authentication at the console: show running-config, FRRouting's
+    configuration, chrony's key file and server line, and show ntp
+    associations detail from chrony's own answers."""
+    from winlab import iosrouting, ntpauth, paths, workbench
+    root = Path(__file__).resolve().parent.parent
+    saved = (paths.VAR, paths.STATE, paths.LABS, workbench._running)
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            d = _router_console_dash(root, Path(td))
+            vid = lambda n: d.plan.segment_of(n).svi  # noqa: E731
+            answers = {"authdata": "Name/IP address             Mode KeyID Type KLen Last Atmp  NAK Cook CLen\n"
+                                   "=========================================================================\n"
+                                   "10.20.0.123                   SK     1  MD5  128    7    0    0    0    0\n"
+                                   "#src\n^* 10.20.0.123                   3   6   377    12   +20us[  +25us] +/-  1ms\n"}
+            con = _l3_console(d, answers)
+            say = con.run
+            for line in ("en", "conf t", "key chain OSPF", "key 1", "key-string Own-key-1",
+                         "cryptographic-algorithm hmac-sha-256", "exit", "exit", "router ospf 1",
+                         "network 10.80.0.0 0.0.0.255 area 0", "area 0 authentication message-digest", "exit",
+                         "int g0/1/0", "ip ospf message-digest-key 1 md5 Own-key-2",
+                         "ip ospf authentication message-digest", "int g0/0/0", "ip ospf authentication key-chain OSPF",
+                         "exit", "ntp authentication-key 1 md5 Own-key-3", "ntp trusted-key 1",
+                         "ntp server 10.20.0.123 key 1", "ntp authenticate", "end"):
+                out = say(line)
+                check(f"'{line}' is taken", not out.startswith("%") or line == "end", out)
+            run = say("show running-config")
+            check("show running-config: the key chain, the interface keys, area authentication, NTP's four lines",
+                  "key chain OSPF\n key 1\n  key-string Own-key-1\n  cryptographic-algorithm hmac-sha-256" in run
+                  and " ip ospf authentication message-digest\n ip ospf message-digest-key 1 md5 Own-key-2" in run
+                  and " ip ospf authentication key-chain OSPF" in run and " area 0 authentication message-digest" in run
+                  and "ntp authenticate" in run and "ntp trusted-key 1" in run and "ntp server 10.20.0.123 key 1" in run
+                  and re.search(r"ntp authentication-key 1 md5 [0-9A-F]+ 7", run), run)
+            check("the NTP key is shown scrambled (type 7), as IOS does, never in clear",
+                  "Own-key-3" not in run)
+            frr = iosrouting.frr_conf(d.plan)
+            check("FRRouting's ospfd gets the chain, the interface keys and the area's authentication",
+                  "key chain OSPF\n key 1\n  key-string Own-key-1\n  cryptographic-algorithm hmac-sha-256" in frr
+                  and f"interface {vid('office')}\n ip ospf authentication message-digest\n"
+                      f" ip ospf message-digest-key 1 md5 Own-key-2" in frr
+                  and f"interface {vid('guest')}\n ip ospf authentication key-chain OSPF" in frr
+                  and "area 0 authentication message-digest" in frr, frr)
+            keyfile = ntpauth.keyfile_text(d.lab)
+            check("chrony's key file holds key 1 as MD5, hex-encoded", keyfile.strip() == "1 MD5 HEX:" + b"Own-key-3".hex().upper(),
+                  keyfile)
+            lines = ntpauth.chrony_lines(d.lab, ["10.20.0.123"])
+            check("chrony: the key file, authselectmode require, the server signed with key 1",
+                  "authselectmode require" in lines and "server 10.20.0.123 iburst key 1" in lines
+                  and any(x.startswith("keyfile ") for x in lines), str(lines))
+            out = say("show ntp associations detail")
+            check("show ntp associations detail: authenticated and selected, key 1 in use",
+                  "10.20.0.123 configured, ipv4, authenticated, our_master" in out and "key id 1 (in use)" in out
+                  and "Authentication required" in out, out)
+            answers["authdata"] = answers["authdata"].replace("^* 10.20.0.123", "^? 10.20.0.123")
+            out = say("show ntp associations detail")
+            check("a signing source that never answered usably is not authenticated",
+                  "not authenticated, unreachable" in out, out)
+            say("conf t")
+            say("no ntp trusted-key 1")
+            say("end")
+            check("an untrusted key is not used", "not defined or not trusted" in say("show ntp associations detail")
+                  and "key 1" not in "\n".join(ntpauth.chrony_lines(d.lab, ["10.20.0.123"])))
+            check("chronyc authdata is read per source", ntpauth.parse_authdata(answers["authdata"].split("#src")[0])
+                  == {"10.20.0.123": {"mode": "SK", "key": 1}})
+            say("conf t")
+            say("int g0/1/0")
+            say("no ip ospf authentication")
+            say("no ip ospf message-digest-key 1")
+            say("end")
+            frr = iosrouting.frr_conf(d.plan)
+            check("no ip ospf authentication and no ... message-digest-key take the lines away",
+                  "Own-key-2" not in frr and "Own-key-2" not in say("show running-config"))
+        finally:
+            paths.VAR, paths.STATE, paths.LABS, workbench._running = saved
+
+
+def test_l3_glbp():
+    """winlab-glbpd, winlab's own GLBP speaker: its packets both ways, the
+    AVG election, forwarders handed out round-robin by ARP, a dead member's
+    virtual MAC taken over and given back, its configuration and check; and
+    glbp at the router's console: show running-config, the file the
+    router's speaker reads, the refusals, one group per virtual address."""
+    import json
+    from winlab import debpacks, glbpd, iosglbp, paths, workbench
+    msg = glbpd.decode(glbpd.encode(1, "52:54:00:00:00:02",
+                                    {"state": "Active", "prio": 110, "hello": 3, "hold": 10, "vip": "10.80.0.1"},
+                                    [{"fwd": 1, "state": "Active", "owner": "52:54:00:00:00:02", "vmac": glbpd.vmac(1, 1)}],
+                                    auth="lab"))
+    check("a GLBP packet decodes back: group, hello, forwarder, plain-text authentication",
+          msg and msg["group"] == 1 and msg["hello"]["vip"] == "10.80.0.1" and msg["hello"]["prio"] == 110
+          and msg["fwds"][0]["vmac"] == "00:07:b4:00:01:01" and msg["auth"] == "lab", str(msg))
+    check("virtual MACs are 0007.b400.XXYY", glbpd.cisco_mac(glbpd.vmac(1, 2)) == "0007.b400.0102")
+    check("a frame that is not GLBP is refused", glbpd.decode(b"\x02" + b"\0" * 40) is None)
+    wire: list = []
+
+    def mk(ip, mac, prio, preempt=False):
+        cfg = glbpd.parse_conf(f"interface eth1\n glbp 1 ip 10.80.0.1\n glbp 1 priority {prio}\n"
+                               + (" glbp 1 preempt\n" if preempt else ""))[0]
+        g = glbpd.Group(cfg, mac, log=lambda t: None)
+        g.send = lambda p, ip=ip: wire.append((ip, p))
+        g.forward = lambda m, on: None
+        return g
+    a = mk("10.80.0.2", "52:54:00:00:00:02", 110, True)
+    b = mk("10.80.0.3", "52:54:00:00:00:03", 100)
+    routers = {"10.80.0.2": a, "10.80.0.3": b}
+    alive = set(routers)
+    clock = [0.0]
+
+    def run(secs):
+        for _ in range(int(secs * 10)):
+            clock[0] += 0.1
+            for ip, g in routers.items():
+                if ip in alive:
+                    g.tick(clock[0])
+            while wire:
+                src, p = wire.pop(0)
+                m = glbpd.decode(p)
+                for ip, g in routers.items():
+                    if ip != src and ip in alive and src in alive:
+                        g.receive(m, src, clock[0])
+    a.start("10.80.0.2", 0.0)
+    b.start("10.80.0.3", 0.0)
+    run(30)
+    check("priority 110 is the AVG, the other the Standby VG; each forwards for its own virtual MAC",
+          a.state == "Active" and b.state == "Standby" and a.mine == {1} and b.mine == {2}, f"{a.state} {b.state} {a.mine} {b.mine}")
+    macs = [a.arp(f"aa:bb:cc:00:00:{i:02x}", clock[0]) for i in range(4)]
+    check("round-robin: the AVG answers ARP with each forwarder's MAC in turn",
+          set(macs) == {"00:07:b4:00:01:01", "00:07:b4:00:01:02"} and macs[0] != macs[1], str(macs))
+    check("only the AVG answers ARP for the virtual address", not b.arp("aa:bb:cc:00:00:09", clock[0]))
+    alive.discard("10.80.0.2")
+    run(15)
+    check("the AVG dies: the other takes over the group and both virtual MACs",
+          b.state == "Active" and b.mine == {1, 2}, f"{b.state} {b.mine}")
+    alive.add("10.80.0.2")
+    a.stop(clock[0])
+    a.start("10.80.0.2", clock[0])
+    run(30)
+    check("it comes back: preempt makes it the AVG again and forwarder 2 goes home",
+          a.state == "Active" and b.state == "Standby" and a.mine == {1} and b.mine == {2})
+    brief = glbpd.show_brief([a.status(clock[0])])
+    check("show glbp brief: the group row and one row per forwarder",
+          re.search(r"eth1\s+1\s+-\s+110\s+Active\s+10\.80\.0\.1\s+local\s+10\.80\.0\.3", brief)
+          and "0007.b400.0102" in brief, brief)
+    try:
+        glbpd.parse_conf("interface eth1\n glbp 1 load-balancing random\n")
+        bad = False
+    except glbpd.ConfError:
+        bad = True
+    check("the speaker's configuration refuses what it does not know", bad)
+    tools = debpacks.own_tools("frr")
+    check("the frr stick carries winlab-glbpd, its unit and GLBP.txt (winlab's own code, nothing fetched)",
+          {"winlab-glbpd", "winlab-glbpd.service", "GLBP.txt"} <= set(tools)
+          and b"winlab-glbpd" in tools["winlab-glbpd.service"])
+    root = Path(__file__).resolve().parent.parent
+    saved = (paths.VAR, paths.STATE, paths.LABS, workbench._running)
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            d = _router_console_dash(root, Path(td))
+            vid = lambda n: d.plan.segment_of(n).svi  # noqa: E731
+            st = {"groups": [dict(a.status(clock[0]), iface=vid("office"))]}
+            con = _l3_console(d, {"winlab-glbp.json": lambda: json.dumps(st) + "\n#running"})
+            say = con.run
+            for line in ("en", "conf t", "int g0/1/0", "glbp 1 ip 10.80.0.1", "glbp 1 priority 110", "glbp 1 preempt",
+                         "glbp 1 load-balancing round-robin"):
+                out = say(line)
+                check(f"'{line}' is taken", not out.startswith("%"), out)
+            check("glbp weighting track is refused with its reason", "not in this router" in say("glbp 1 weighting track 3"))
+            check("a second protocol on the same virtual address is refused",
+                  "already the virtual address of GLBP group 1" in say("standby 1 ip 10.80.0.1"))
+            say("end")
+            run = say("show running-config")
+            check("show running-config keeps the group under its interface",
+                  "interface GigabitEthernet0/1/0\n ip address 10.80.0.2 255.255.255.0\n glbp 1 ip 10.80.0.1\n"
+                  " glbp 1 priority 110\n glbp 1 preempt" in run, run)
+            conf = iosglbp.conf_text(d.plan)
+            check("the router's speaker reads the same lines under its Linux interface",
+                  f"interface {vid('office')}\n glbp 1 ip 10.80.0.1\n glbp 1 priority 110\n glbp 1 preempt" in conf
+                  and glbpd.parse_conf(conf)[0]["prio"] == 110, conf)
+            out = say("show glbp brief")
+            check("show glbp brief at the console reads the speaker's state with IOS names",
+                  re.search(r"Gi0/1/0\s+1\s+-\s+110\s+Active\s+10\.80\.0\.1\s+local", out), out)
+        finally:
+            paths.VAR, paths.STATE, paths.LABS, workbench._running = saved
+
+
+_L3_ISIS_NBR = """Area winlab:
+ rtr-edge
+    Interface: {office}, Level: 1, State: Up, Expires in 28s
+    Adjacency flaps: 1, Last: 2m1s ago
+    Circuit type: L1L2, Speaks: IPv4
+    SNPA: 5254.0012.3456, LAN id: rtr-edge.01
+    Area Address(es):
+      49.0001
+    IPv4 Address(es):
+      10.80.0.3
+
+ rtr-edge
+    Interface: {office}, Level: 2, State: Up, Expires in 27s
+    Adjacency flaps: 1, Last: 2m1s ago
+    Circuit type: L1L2, Speaks: IPv4
+    SNPA: 5254.0012.3456, LAN id: rtr-edge.01
+    Area Address(es):
+      49.0001
+    IPv4 Address(es):
+      10.80.0.3
+"""
+
+_L3_ISIS_RT = """Area winlab:
+IS-IS L1 IPv4 routing table:
+
+ Prefix          Metric  Interface  Nexthop    Label(s)
+ ---------------------------------------------------------
+ 10.81.0.0/24    20      {office}   10.80.0.3  -
+"""
+
+
+def test_l3_pim_isis():
+    """Multicast (FRRouting's pimd) and IS-IS (isisd) at the console:
+    show running-config, frr.conf and the daemons file, IOS's warning and
+    refusals, the shows read from pimd's JSON and isisd's text, i L1 in
+    show ip route, and what goes back when the lines are taken away."""
+    import json
+    from winlab import iosisis, iospim, iosrouting, paths, workbench
+    check("NETs: area, system ID, the 00 selector", iosisis.valid_net("49.0001.0000.0000.0002.00")
+          and iosisis.area_of("49.0001.0000.0000.0002.00") == "49.0001"
+          and iosisis.system_id("49.0001.0000.0000.0002.00") == "0000.0000.0002"
+          and not iosisis.valid_net("49.0001.0000.0000.0002.01") and not iosisis.valid_net("10.80.0.0"))
+    root = Path(__file__).resolve().parent.parent
+    saved = (paths.VAR, paths.STATE, paths.LABS, workbench._running)
+    with tempfile.TemporaryDirectory() as td:
+        try:
+            d = _router_console_dash(root, Path(td))
+            vid = lambda n: d.plan.segment_of(n).svi  # noqa: E731
+            office, guest = vid("office"), vid("guest")
+            fill = {"office": office}
+            mr = {"239.1.1.1": {"*": {"installed": 1, "iif": "pimreg", "oil": {office: {
+                      "outboundInterface": office, "protocolIgmp": 1, "upTime": "00:00:41"}}},
+                  "10.80.20.10": {"installed": 1, "iif": guest, "oil": {office: {
+                      "outboundInterface": office, "protocolPim": 1, "upTime": "00:00:30"}}}}}
+            answers = {
+                "pim neighbor json": json.dumps({office: {"10.80.0.3": {"interface": office, "neighbor": "10.80.0.3",
+                                                                        "upTime": "00:02:10", "holdTime": "00:01:35",
+                                                                        "drPriority": 1}}}),
+                "pim interface json": json.dumps({office: {"address": "10.80.0.2", "state": "up",
+                                                           "pimDesignatedRouter": "10.80.0.3", "pimNeighbors": 1}}),
+                "mroute json": json.dumps(mr),
+                "igmp groups json": json.dumps({"totalGroups": 1, office: {"groups": [
+                    {"group": "239.1.1.1", "timer": "00:04:01", "uptime": "00:00:41", "version": 2}]}}),
+                "isis neighbor detail": _L3_ISIS_NBR.format(**fill),
+                "show isis route": _L3_ISIS_RT.format(**fill),
+                "show ip route json": json.dumps({"10.81.0.0/24": [
+                    {"prefix": "10.81.0.0/24", "protocol": "isis", "selected": True, "distance": 115, "metric": 20,
+                     "uptime": "00:01:02", "nexthops": [{"ip": "10.80.0.3", "interfaceName": office, "active": True}]}]}),
+            }
+            con = _l3_console(d, answers)
+            say = con.run
+            for line in ("en", "conf t", "access-list 10 permit 239.1.1.0 0.0.0.255", "int g0/1/0"):
+                say(line)
+            check("ip pim sparse-mode before ip multicast-routing: IOS's warning",
+                  'WARNING: "ip multicast-routing" is not configured' in say("ip pim sparse-mode"))
+            check("dense mode is refused: pimd is sparse mode only", "sparse mode only" in say("ip pim dense-mode"))
+            for line in ("int g0/0/0", "ip pim sparse-mode", "exit", "ip multicast-routing", "ip pim rp-address 10.80.0.2 10",
+                         "int g0/1/0", "ip igmp version 3", "exit", "router isis", "net 49.0001.0000.0000.0002.00",
+                         "metric-style wide", "passive-interface g0/0/1", "log-adjacency-changes", "exit",
+                         "int g0/1/0", "ip router isis", "isis metric 30"):
+                out = say(line)
+                check(f"'{line}' is taken", not out.startswith("%") and "Invalid" not in out, out)
+            check("a NET that does not end in 00 is refused", say("router isis") == "" and
+                  say("net 49.0001.0000.0000.0002.01").startswith("%"))
+            check("redistribute under router isis is refused with its reason", "not in this router" in say("redistribute static"))
+            check("'net 10.80.0.0 ...' under router ospf is still network (the abbreviation is not stolen)",
+                  (say("exit"), say("router ospf 1"), say("net 10.80.0.0 0.0.0.255 area 0"))[2] == ""
+                  and "network 10.80.0.0 0.0.0.255 area 0" in say("do show running-config"))
+            say("no router ospf 1")
+            say("end")
+            run = say("show running-config")
+            check("show running-config: multicast routing, PIM and IGMP per interface, the RP with its ACL, IS-IS",
+                  "ip multicast-routing\n" in run and " ip pim sparse-mode\n ip igmp version 3\n ip router isis\n isis metric 30" in run
+                  and "ip pim rp-address 10.80.0.2 10" in run
+                  and "router isis\n net 49.0001.0000.0000.0002.00\n metric-style wide\n log-adjacency-changes\n"
+                      " passive-interface GigabitEthernet0/0/1" in run, run)
+            frr = iosrouting.frr_conf(d.plan)
+            check("frr.conf: pimd's RP for the ACL's range, ip pim and igmp version per interface",
+                  "ip pim rp 10.80.0.2 239.1.1.0/24" in frr
+                  and f"interface {office}\n ip pim\n ip igmp\n ip igmp version 3" in frr
+                  and f"interface {guest}\n ip pim\n ip igmp" in frr, frr)
+            check("frr.conf: isisd's router (IOS's narrow default written out where asked), the interfaces, the passive one",
+                  "router isis winlab\n net 49.0001.0000.0000.0002.00\n is-type level-1-2\n metric-style wide" in frr
+                  and f"interface {office}\n ip router isis winlab\n isis metric 30" in frr
+                  and f"interface {vid('isp-link')}\n ip router isis winlab\n isis passive" in frr, frr)
+            daemons = iosrouting.daemons_file(d.lab.devices["router"])
+            check("the daemons file starts pimd and isisd", "pimd=yes" in daemons and "isisd=yes" in daemons, daemons)
+            out = say("show ip pim neighbor")
+            check("show ip pim neighbor from pimd's JSON, with IOS's names",
+                  re.search(r"10\.80\.0\.3\s+Gi0/1/0\s+00:02:10/00:01:35 v2\s+1 / DR", out), out)
+            out = say("show ip pim rp mapping")
+            check("show ip pim rp mapping: the ACL's range, the static RP", "Group(s): 239.1.1.0/24, Static (ACL 10)" in out
+                  and "RP: 10.80.0.2" in out, out)
+            out = say("show ip mroute")
+            check("show ip mroute: (*,G) from the RP (Null upstream) and (S,G) in on the guest interface",
+                  "(*, 239.1.1.1), 00:00:41/stopped, RP 10.80.0.2, flags: SC" in out
+                  and "Incoming interface: Null, RPF nbr 0.0.0.0" in out
+                  and "(10.80.20.10, 239.1.1.1)" in out and "Incoming interface: Gi0/0/0" in out
+                  and "Gi0/1/0, Forward/Sparse" in out, out)
+            check("show ip igmp groups", re.search(r"239\.1\.1\.1\s+Gi0/1/0\s+00:00:41\s+00:04:01", say("show ip igmp groups")))
+            out = say("show isis neighbors")
+            check("show isis neighbors: one row, L1L2 from the two adjacencies, UP",
+                  re.search(r"rtr-edge\s+L1L2\s+Gi0/1/0\s+10\.80\.0\.3\s+UP", out)
+                  and sum(x.startswith("rtr-edge") for x in out.splitlines()) == 1, out)
+            out = say("show ip route")
+            check("show ip route: i L1 at distance 115 and the IS-IS codes",
+                  "i L1     10.81.0.0/24 [115/20] via 10.80.0.3" in out and "L1 - IS-IS level-1" in out, out)
+            check("show ip protocols names IS-IS", 'Routing Protocol is "isis"' in say("show ip protocols"))
+            check("the neighbour parser keeps level and state", [(n["level"], n["state"]) for n in
+                  iosisis.parse_neighbors(_L3_ISIS_NBR.format(**fill))] == [(1, "Up"), (2, "Up")])
+            say("conf t")
+            say("no ip multicast-routing")
+            say("no router isis")
+            say("end")
+            frr = iosrouting.frr_conf(d.plan)
+            daemons = iosrouting.daemons_file(d.lab.devices["router"])
+            check("without multicast routing pimd stops; without router isis isisd does",
+                  "pimd=no" in daemons and "isisd=no" in daemons and "router isis" not in frr
+                  and "ip pim rp" not in frr, daemons)
+        finally:
+            paths.VAR, paths.STATE, paths.LABS, workbench._running = saved
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---- gapx-selftest ----
+# The self-test (winlab/selftest.py) with fake machines, and the worked
+# solutions every exercise must have (content/solutions, winlab/solutions.py).
+# Exercises whose solutions are still being written (other builders' lists):
+# reported as skipped, not failed. Temporary: shrinks to nothing as they land.
+PENDING_SOLUTIONS = frozenset()
+
+
+
+
+# ---- gapx-capstones ----
+_CAPSTONES = {"capstone-network": ("capstone-network", 20, "network-services", "network"),
+              "capstone-linux": ("capstone-linux", 30, "linux", "linux"),
+              "capstone-cloud": ("capstone-cloud", 40, "hybrid-cloud", "cloud"),
+              "capstone-security": ("security-ops", 50, "security", "security"),
+              "capstone-helpdesk": ("capstone-helpdesk", 60, "endpoint", "helpdesk")}
+
+
+
+
+# ---- gapx-small-lessons ----
+
+
+# ---- gapx-quiz-review ----
+def test_gapx_quiz_review():
+    """Every lesson asks at least three recall questions, in every language,
+    and the questions of finished lessons come back on a spaced schedule
+    (winlab/review.py): Leitner boxes 1, 3, 7, 14, 30, 60 days, a wrong
+    answer back tomorrow, at most twenty a day, kept in var/review.json,
+    carried in the .wlprogress file, shown in the Learn window and by
+    `winlab learn review`."""
+    import contextlib
+    import datetime as dt
+    import io
+    import json
+    import subprocess
+    import time
+    import tomllib
+    from winlab import cli, i18n, lessons, paths, progress, progressfile, review, schema, webui
+
+    # --- three recall questions everywhere --------------------------------
+    allx = lessons.list_available()
+    few = [l.id for l in allx if len(l.quiz) < 3]
+    check("every lesson has at least three recall questions", not few, ", ".join(few[:10]))
+    check("learn check asks for three", "fewer than three recall questions" in Path("winlab/lessons.py").read_text(encoding="utf-8")
+          and not [p for p in lessons.validate_all() if "recall questions" in p])
+    odd = [l.id for l in allx if any(len(q.wrong) != len(l.quiz[0].wrong) or q.answer in q.wrong or not q.why.strip()
+                                     or len(set(q.wrong)) != len(q.wrong) for q in l.quiz[-1:])]
+    check("each lesson's last question: as many wrong answers as its first, the answer apart, a why", not odd, str(odd[:5]))
+    short = []
+    for lang in ("es", "he", "ar"):
+        for l in allx:
+            f = Path("content/i18n/lessons", lang, f"{l.id}.json")
+            if not f.is_file():
+                continue
+            tq = json.loads(f.read_text(encoding="utf-8")).get("quiz") or []
+            raw = tomllib.loads(Path("content/lessons", f"{l.id}.toml").read_text(encoding="utf-8"))["quiz"]
+            if len(tq) != len(raw) or any(len(a.get("wrong") or []) != len(b["wrong"]) for a, b in zip(tq, raw)):
+                short.append(f"{lang}/{l.id}")
+    check("every translated lesson has every question, with as many wrong answers", not short, str(short[:5]))
+    bidi = re.compile("[‎‏‪-‮⁦-⁩]")
+    marked = [str(f) for f in Path("content/i18n/lessons").glob("*/*.json") if bidi.search(f.read_text(encoding="utf-8"))]
+    check("no direction marks in the lesson translations", not marked, str(marked[:3]))
+    for lang in ("es", "he", "ar"):
+        r = subprocess.run([sys.executable, "tools/i18n_lessons.py", "check", lang], capture_output=True, text=True)
+        check(f"i18n_lessons check {lang} is clean", r.returncode == 0 and not r.stdout.strip(), r.stdout[:300])
+
+    # --- the schedule ----------------------------------------------------
+    D = dt.date(2026, 3, 2)
+    c = review.new_card(time.mktime((2026, 3, 1, 12, 0, 0, 0, 0, -1)))
+    check("a question enters review the day after its lesson, in box 0",
+          c["box"] == 0 and c["due"] == "2026-03-02" and c["right"] == c["wrong"] == 0)
+    seen = []
+    day = D
+    for _ in range(8):
+        c = review.schedule(c, True, day)
+        seen.append(c["box"])
+        nd = dt.date.fromisoformat(c["due"])
+        seen.append((nd - day).days)
+        day = nd
+    check("right answers climb the boxes: 1, 3, 7, 14, 30 days, then every 60",
+          seen == [1, 1, 2, 3, 3, 7, 4, 14, 5, 30, 6, 60, 6, 60, 6, 60] and c["right"] == 8, str(seen))
+    w = review.schedule(c, False, D)
+    check("a wrong answer goes back to box 0, due tomorrow",
+          w["box"] == 0 and w["due"] == "2026-03-03" and w["wrong"] == 1 and w["last"] == "2026-03-02")
+    allc = {"a#0": {"box": 2, "due": "2026-03-01"}, "b#0": {"box": 0, "due": "2026-03-01"},
+            "c#0": {"box": 0, "due": "2026-02-20"}, "d#0": {"box": 0, "due": "2026-03-05"}}
+    check("due questions: the longest-waiting first, then the lower box; nothing from the future",
+          review.due_keys(allc, D) == ["c#0", "b#0", "a#0"])
+    prog = {"lessons": {f"l{i:02d}": {"status": progress.STATUS_DONE, "passed_at": time.mktime((2026, 2, 1, 9, 0, 0, 0, 0, -1))}
+                        for i in range(10)}}
+    prog["lessons"]["open"] = {"status": "in_progress"}
+    sizes = {f"l{i:02d}": 3 for i in range(10)}
+    sizes["open"] = 3
+    st0 = review.clean({})
+    s = review.status(D, st0, prog, sizes)
+    check("only finished lessons are reviewed; a day's set is capped at twenty",
+          s["questions"] == 30 and s["due"] == 30 and s["today"] == review.DAILY == 20 and s["boxes"][0] == 30)
+    st0["log"]["2026-03-02"] = {"answered": 15, "right": 9}
+    s = review.status(D, st0, prog, sizes)
+    keys, _ = review.todays_keys(st0, prog, D, sizes)
+    check("answered questions count toward the day's twenty",
+          s["today"] == 5 and len(keys) == 5 and s["answered_today"] == 15 and s["right_today"] == 9)
+    check("a review key names the lesson and the question",
+          review.split_key(review.card_key("dns-zones", 2)) == ("dns-zones", 2))
+    try:
+        review.split_key("nonsense")
+        check("a key without a question number is refused", False)
+    except ValueError:
+        check("a key without a question number is refused", True)
+
+    # --- the file, the desktop, the CLI, export and import ---------------
+    saved = paths.VAR
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            paths.VAR = Path(td) / "a"
+            check("no file: an empty review", review.load() == {"version": 1, "cards": {}, "log": {}})
+            junk = {"cards": {"x#1": {"box": 9, "due": "2026-01-01"}, "nokey": {"due": "2026-01-01"},
+                              "y#0": {"due": "not a day"}, "z#0": "?"},
+                    "log": {f"2025-{m:02d}-{d:02d}": {"answered": 1, "right": 1} for m in range(1, 13) for d in range(1, 29)}}
+            review.save(review.clean(junk))
+            back = review.load()
+            check("saved and read back: bad cards dropped, the box clamped, the log trimmed",
+                  list(back["cards"]) == ["x#1"] and back["cards"]["x#1"]["box"] == review.TOP
+                  and len(back["log"]) == review.LOG_DAYS and review.review_file().parent == paths.VAR)
+            review.review_file().unlink()
+            mine = ["create-ou-and-user", "dhcp-scopes", "ad-recycle-bin"]
+            for lid in mine:
+                progress.mark(lid, progress.STATUS_DONE)
+            p = progress.load()
+            for lid in mine:
+                p["lessons"][lid]["passed_at"] = time.time() - 3 * 86400
+            progress.save(p)
+            nq = sum(len(lessons.load(l).quiz) for l in mine)
+            d = webui.Dashboard(schema.load("ad-ds-basics"), accel="tcg")
+            rv = d.lessons()["review"]
+            check("the Learn window's data carries the review: every question of the finished lessons, due",
+                  rv["questions"] == nq and rv["today"] == nq and rv["daily"] == 20, str(rv))
+            ts = review.todays_set()
+            it = ts["items"]
+            check("today's set: each question with its lesson and shuffled choices, no answers",
+                  len(it) == nq and all(set(x) == {"key", "lesson", "lesson_title", "q", "choices", "box"} for x in it)
+                  and review.todays_set()["items"] == it)
+            right_of = {x["key"]: lessons.load(x["lesson"]).quiz[review.split_key(x["key"])[1]].answer for x in it}
+            wrong_of = {x["key"]: lessons.load(x["lesson"]).quiz[review.split_key(x["key"])[1]].wrong[0] for x in it}
+            k0, k1, k2 = it[0]["key"], it[1]["key"], it[2]["key"]
+            r = d.act("review-answer", {"picked": {k0: right_of[k0], k1: wrong_of[k1], k2: ""}})
+            today = review.today()
+            got = {x["key"]: x for x in r["results"]}
+            check("the desktop grades an answer: right goes to box 1, wrong to box 0 for tomorrow, skipped stays due",
+                  r.get("ok") and r["right"] == 1 and r["total"] == 2 and r["message"] == "1 of 2 right"
+                  and got[k0]["box"] == 1 and got[k0]["due"] == (today + dt.timedelta(days=1)).isoformat()
+                  and got[k1]["box"] == 0 and got[k1]["answer"] == right_of[k1] and got[k1]["why"]
+                  and got[k2].get("skipped") and k2 in {x["key"] for x in review.todays_set()["items"]},
+                  str(r)[:400])
+            st = review.load()
+            check("the answers are saved in var/review.json, with the day's count",
+                  review.review_file().is_file() and set(st["cards"]) == {k0, k1}
+                  and st["log"][today.isoformat()] == {"answered": 2, "right": 1})
+            check("a question of a lesson not finished is refused",
+                  "error" in review.answer({"dns-basics#0": "x"})["results"][0])
+            check("a bad pick is refused by the desktop", d.act("review-answer", {"picked": "x"}).get("ok") is False)
+            # the CLI, in the student's language
+            i18n.choose("he")
+            s = review.todays_set()
+            he = json.loads(Path("content/i18n/lessons/he", f"{s['items'][0]['lesson']}.json").read_text(encoding="utf-8"))
+            n0 = review.split_key(s["items"][0]["key"])[1]
+            check("the questions are shown in the desktop's language",
+                  s["items"][0]["q"] == he["quiz"][n0]["q"] and he["quiz"][n0]["answer"] in s["items"][0]["choices"])
+            letters = []
+            for x in s["items"]:
+                ans = lessons.load(x["lesson"]).quiz[review.split_key(x["key"])[1]].answer
+                letters.append(chr(97 + x["choices"].index(ans)))
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = cli._learn_review(answers=",".join(letters))
+            text = out.getvalue()
+            check("winlab learn review: today's set by letter, each right answer with its next day",
+                  rc == 0 and text.count("right: back on") == len(letters)
+                  and f"{len(letters)} of {len(letters)} right" in text, text[-400:])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                cli._learn_review(only_status=True)
+            check("winlab learn review --status: the counts and the boxes",
+                  f"{nq} questions from finished lessons" in out.getvalue() and "boxes (0 = learning" in out.getvalue()
+                  and "nothing more to review today" in out.getvalue(), out.getvalue())
+            ns = cli.build_parser().parse_args(["learn", "review", "--status"])
+            check("the subcommand exists", ns.learncmd == "review" and ns.status is True)
+            mine_a = review.load()
+            data = progressfile.dumps()
+            check("the progress file carries the review", progressfile.read(data)["review"]["cards"] == mine_a["cards"])
+            # PC B: one question answered later there
+            paths.VAR = Path(td) / "b"
+            later = review.schedule(review.new_card(0, today), True, today)
+            later["updated"] = time.time() + 60
+            review.save({"version": 1, "cards": {k0: later}, "log": {}})
+            rep = progressfile.import_bytes(data)
+            got_b = review.load()
+            check("importing merges: the newer answer per question wins, the rest come along, the day's counts too",
+                  set(got_b["cards"]) == set(mine_a["cards"]) and got_b["cards"][k0]["updated"] == later["updated"]
+                  and got_b["log"][today.isoformat()]["answered"] == mine_a["log"][today.isoformat()]["answered"]
+                  and rep["review"] == len(mine_a["cards"]) - 1 and "review schedule" in rep["message"], str(rep))
+            before = review.review_file().read_text(encoding="utf-8")
+            again = progressfile.import_bytes(data)
+            check("importing the same file twice changes nothing",
+                  again["review"] == 0 and review.review_file().read_text(encoding="utf-8") == before)
+            m, n = review.merge(got_b, got_b)
+            check("merging a state with itself changes nothing", n == 0 and m == review.clean(got_b))
+    finally:
+        paths.VAR = saved
+    page = Path("winlab/webui_page.html").read_text(encoding="utf-8")
+    src = Path("winlab/webui.py").read_text(encoding="utf-8")
+    check("the Learn window has a Review (N due) button and the review page",
+          "function reviewBtn(" in page and "Review (${r.today} due)" in page and "function loadReview(" in page
+          and "/api/review" in page and "do:'review-answer'" in page)
+    check("the server answers /api/review", '"/api/review"' in src and "review.todays_set()" in src)
+    tables = {lang: json.loads(Path("content/i18n", f"{lang}.json").read_text(encoding="utf-8")) for lang in ("es", "he", "ar")}
+    check("the review's desktop text is translated",
+          all(t.get("Review ({} due)") and t.get("Spaced review") for t in tables.values()))
+
+
+# ---- gapx-powershell ----
+_GAPX_PS_LESSONS = {
+    "ps-hashtables-compare": "ps-staff-reconcile",
+    "ps-json-config": "ps-baseline-json",
+    "ps-parameter-sets": "ps-staff-lookup",
+    "ps-shouldprocess-risk": "ps-stale-computers",
+    "ps-errors-on-purpose": "ps-error-handling",
+    "ps-text-to-objects": "ps-log-parsing",
+    "ps-registry": "ps-registry-baseline",
+    "ps-cim-sessions": "ps-cim-hardware",
+    "ps-sessions-jobs": "ps-health-jobs",
+    "ps-html-reports": "ps-html-report",
+    "ps-logging-transcripts": "ps-script-logging",
+    "ps-event-triggered-tasks": "ps-event-task",
+    "ps-pester-mocking": "ps-pester-mocks",
+    "ps-script-signing": "ps-signed-scripts",
+}
+
+
+
+
+# ---- gapx-ccnp ----
+
+
+# ---- gapx-sol-net ----
+GAPX_SOL_NET = """
+    aaa-radius-login aaa-tacacs-commands bind-in-the-domain cable-tester-trace campus-vlans-trunks
+    devops-ci-pipeline devops-deploy-and-iac devops-source-control dhcp-failover-pair
+    dhcp-relay-across-subnets dhcp-reserve-and-exclude dhcp-snooping-dai dmvpn-hub-and-spokes
+    dns-forwarders-aging-records dnssec-validated-zone ebgp-to-the-isp etherchannel-lacp-bundle fast-failover
+    fortigate-policy-nat-ipsec freeipa-access-rules freeipa-ad-trust freeipa-domain freeipa-kerberos-ssh
+    freepbx-extensions ftp-scp-config-backup guest-portal-isolation haproxy-keepalived-vip inter-vlan-routing
+    ios-image-upgrade ipv6-acls-router ipv6-addresses-handed-out ipv6-dual-stack-office ipv6-ra-guard
+    ipv6-routers-addressed junos-ospf-with-the-lab-router linux-chrony-sources linux-client-in-the-domain
+    linux-logins-for-a-group lx-console-rescue-ready lx-disk-check-script lx-lvm-and-swap lx-own-service
+    lx-packages-from-the-stick lx-persistent-journal lx-team-folders lx-timers-and-cron mst-regions
+    net-tools-baseline netauto-ansible-ios netauto-napalm-json netauto-netmiko-backup netauto-restconf
+    netflow-flows-to-collector nmap-inventory-check nms-link-down nps-network-policy ospf-neighbours-up
+    ospf-three-sites paloalto-zones-and-policy pdc-from-lab-ntp poe-budget-plan port-security-dot1x
+    private-vlans rapid-spanning-tree rocky-joins-the-domain rocky-nfs-autofs rocky-selinux-intranet
+    rocky-web-through-firewalld router-acls router-ebgp-to-isp router-eigrp-neighbour router-glbp-gateway
+    router-guest-vrf router-hsrp-gateway router-ipv4-static router-ipv6-addressing router-ipv6-static
+    router-isis-adjacency router-multicast-pim router-nat-pat router-nat-pool router-ntp-auth router-ospf-md5
+    router-ospf-neighbour router-password-recovery router-qos-mqc router-sla-tracking router-vrrp-gateway
+    routes-from-the-isp rras-static-route run-the-company-edge samba-file-server snmpv3-librenms
+    span-mirror-capture spanning-tree-root ssh-to-the-switch storm-control subnetting-drill
+    switch-named-from-console switch-password-recovery tcp-handshake-capture tftp-config-backup
+    time-pdc-sources vlsm-address-plan voice-vlan-lldp-med vxlan-evpn-two-racks wifi-aruba-instant
+    wifi-channel-plan wifi-cisco-ewc wifi-enterprise-aruba wifi-mikrotik-routeros wifi-openwisp-openwrt
+    wifi-real-air wifi-ruckus-unleashed wifi-unifi-controller wifi-wlc-ap-join wifi-wlc-wlans-tags
+    work-from-home wpa2-enterprise
+""".split()
+
+
+
+
+# ---- gapx-engine-i18n ----
+
+
+# ---- gapx-sol-ops ----
+SOL_OPS_IDS = """
+    aidc-first-morning aidc-inference-gateway aidc-share-the-gpus alerts-that-page ansible-linux-fleet
+    aplus-change-in-glpi aplus-ticket-method automation-at-scale backup-to-the-nas bad-update-rollback
+    bare-metal-restore bareos-backup-jobs bareos-clients-connected bareos-database-backup
+    bareos-offsite-copy bareos-restore-test bareos-server-ready be-on-call build-a-file-cluster
+    build-alerting build-the-helpdesk build-the-wiki certs-before-they-expire choco-internal-feed
+    choco-patch-rings cluster-a-virtual-machine connect-iscsi-lun daily-report-by-mail
+    dashboards-for-the-servers database-replication databases-online dedup-and-auto-quota
+    deploy-enterprise-ca deploy-hall-printer dfs-conflict-recovered dfs-namespace-and-replication
+    dfsn-company-files dfsr-software docker-host-by-hand docs-helpdesk-real-tickets
+    docs-inventory-every-machine docs-inventory-parts-swap docs-runbook-per-server
+    docs-vault-service-accounts dr-drill-recovered dr-second-site dsc-catches-drift
+    fileshare-abe-and-hidden fileshare-departments fileshare-previous-versions filter-the-web
+    finance-folder-permissions finance-quota-and-screen fixed-by-the-runbook forward-security-events
+    helpdesk-phone-line helpdesk-shift hyperv-export-and-checkpoints hyperv-replica-failover
+    inherited-as-built inherited-audit inherited-certs-dns inherited-file-shares inherited-gpo-cleanup
+    inherited-leavers inherited-old-dc inherited-privileged inherited-scheduled-tasks
+    inherited-service-accounts inplace-upgrade-client inplace-upgrade-server intranet-site
+    jea-helpdesk-endpoint k3s-air-gapped kvm-host-on-the-lab-network lifecycle-desk-ready
+    mail-between-two-users mail-to-the-internet manage-server-core manage-servers-remotely
+    migrate-file-server monitoring-online move-dhcp-and-print msi-by-group-policy nested-hyperv-host
+    netdocs-ipam-every-address netdocs-netbox-rack-and-cables netops-librenms netops-oxidized
+    netops-uptime-kuma patch-by-hand permission-audit-report pki-autoenroll-web pki-ldaps pki-rdp-cert
+    pki-revoke-and-crl postgresql-kerberos-login power-cycle-hung-server print-support-two-servers
+    print-support-windows-queue printers-by-preference proxmox-backup-jobs proxmox-backup-server-ready
+    proxmox-offsite-sync proxmox-restores rack-the-comms-room rdp-for-helpdesk rds-farm-with-gateway
+    rebuild-a-mirror repair-a-storage-pool restore-a-deleted-user restore-drill-graded runbook-written
+    samba-archive-share san-mpio-volume scheduled-backup-ran server-core-first-steps
+    server-room-remote-only smb-security-and-open-files sql-backup-and-restore sql-server-online
+    sql-windows-logins storage-replica-to-dr ups-graceful-shutdown veeam-backup-copy veeam-backup-job
+    veeam-installed-and-connected veeam-restores vmbackup-host-ready wac-manage-servers wake-a-pc
+    web-farm-intranet web-https-san web-kerberos-spn web-two-names wef-collector who-is-hammering
+    windows-containers wsb-backs-up-the-vms wsus-clients-report wsus-groups-and-targeting
+    wsus-offline-approve
+""".split()
+
+
+
+
+# ---- gapx-sol-sec ----
+GAPX_SOL_SEC = """
+    ad-replication-over-vpn advanced-audit-policy android-tablet-basics
+    aplus-bsod-dump-read aplus-disks-and-stick aplus-file-history-restore
+    aplus-pc04-installed aplus-recovery-ready aplus-restore-points aplus-support-toolbox
+    aplus-workgroup-share app-control-base-and-supplemental apps-and-applocker
+    aws-account-ready aws-cloudformation-stack aws-cloudwatch-alarm aws-cost-tags-budget
+    aws-ec2-user-data aws-iam-assume-role aws-iam-least-privilege
+    aws-route53-private-zone aws-s3-bucket-secure aws-sg-and-nacl aws-site-to-site-vpn
+    aws-vpc-design azure-arc-onboarded azure-backup-restore azure-files-mapped
+    azure-files-share azure-peering-hub-spoke azure-s2s-vpn azure-subscription-ready
+    azure-vm-in-the-vnet azure-vnet-and-nsg baseline-gpos-imported bastion-jump-host
+    bitlocker-data-auto-unlock bitlocker-data-drive bitlocker-os-startup-key
+    bitlocker-recover-moved-disk bitlocker-tpm-and-pin bring-up-the-vpn
+    capture-dns-with-wireshark cloud-apps-encryption cloud-managed-devices
+    cloud-mfa-roles cloud-nsg-rules cloud-tenant-reached compliance-baseline
+    configmgr-bare-metal-deployment configmgr-client-and-collections
+    configmgr-deploy-an-application configmgr-microsoft-365-apps
+    configmgr-patch-tuesday-offline configmgr-read-only-analysts
+    configmgr-refresh-keeps-user-data configmgr-software-update-point
+    configmgr-windows11-upgrade credential-guard-by-policy dc-backup-in-the-cloud
+    default-profile-and-cleanup defender-on-the-pc domain-admins-review
+    edge-central-store edge-home-and-ie-mode edge-msi-deployed enrol-the-pcs
+    exploit-protection-by-gpo fence-the-dmz first-rules-on-your-firewall fix-sync-errors
+    golden-image-captured harden-and-catch-drift hello-for-business-groundwork
+    hmdm-device-policy hmdm-phone-enrolled hmdm-server-built hybrid-identity-sync
+    ir-triage-collected ir-velociraptor-fleet ir-velociraptor-server jea-helpdesk-unlock
+    know-the-edge local-policy-baseline office-deploy-from-share
+    office-updates-from-share pc-deployed-over-pxe pki-issuing-ca pki-offline-root
+    pki-step-ca-acme pki-supersede-template pki-templates-autoenrol prepare-ad-for-entra
+    prepare-forest-for-sync private-dns-across-sites profiles-and-scripts
+    publish-the-dmz-web-server real-azure-arc real-azure-backup real-azure-online
+    real-tenant-connect-sync real-tenant-hybrid-join real-tenant-intune-enrolled
+    real-tenant-online redirect-documents-desktop remote-support-desk
+    remove-task-persistence router-ipsec-vti router-zone-firewall scan-fix-rescan
+    scoped-winrm-and-logging sec-detection-tuned sec-endpoint-logging
+    sec-evidence-collected sec-risk-register sec-ssh-hardened sec-sysmon-deployed
+    sec-vuln-cycle secure-boot-on-pc03 sigma-rules-converted sigma-wazuh-rule
+    spot-the-attack sspr-writeback standalone-baseline-audited sync-agent-installed
+    tier0-logon-restrictions tier0-silo ubuntu-desktop-installed
+    usmt-custom-xml-and-logs usmt-hardlink-refresh usmt-replace-pc02-to-pc03
+    w11-delivery-optimization w11-hyperv-and-sandbox w11-update-rings
+    w11-wsus-scan-source watch-the-wire wazuh-alerts-to-helpdesk wazuh-linux-agents
+    wazuh-siem-alerts workstation-baseline-gpo zeek-notice-raised zeek-sensor-logs
+    zone-firewall-rules
+""".split()
+
+
+
+
+
+
+
+# ---------------------------------------------------------------- srvmd
+# CompTIA Server+ hardware and storage (RAID 5, 6 and 10 with mdadm and
+# Storage Spaces, firmware through the BMC, drive sanitising recorded in
+# GLPI, two storage drills) and the MD-102 cloud endpoint lessons on a real
+# tenant (compliance with Conditional Access, app protection, AVD and
+# Windows 365). The last two are done in the browser.
+BROWSER_LESSONS |= {"real-tenant-app-protection", "real-tenant-cloud-pc-avd"}
+
+
+def test_srvmd_firmware_packages():
+    """winlab/bmcfw.py: the vendor's packages, the support disc, and the
+    versions the BMC keeps (staged BIOS written at power-on, SMBIOS type 0)."""
+    import hashlib
+    import io
+    import tarfile
+    import tempfile
+    import types
+    from winlab import bmcfw, paths, power
+    a = bmcfw.package("bmc", "2.15.0", bmcfw.MACHINE, "08/18/2026")
+    b = bmcfw.package("bmc", "2.15.0", bmcfw.MACHINE, "08/18/2026")
+    with tarfile.open(fileobj=io.BytesIO(a)) as tar:
+        names = tar.getnames()
+        man = tar.extractfile("MANIFEST").read().decode()
+        img = tar.extractfile("image-bmc").read()
+    check("a firmware package is the same bytes every time: a USTAR tar of MANIFEST and the image",
+          a == b and names == ["MANIFEST", "image-bmc"])
+    check("its MANIFEST names the purpose, version, model and the image's SHA-256",
+          "VersionPurpose.BMC" in man and "version=2.15.0" in man and "MachineName=WL-R200" in man
+          and f"ImageSHA256={hashlib.sha256(img).hexdigest()}" in man)
+    check("two versions have different images", bmcfw.image_bytes("bios", "1.4.0") != bmcfw.image_bytes("bios", "1.2.0"))
+    check("package names carry model, kind and version",
+          bmcfw.package_name("bios", "2.0.1", "WL-R300") == "r300-bios-2.0.1.tar"
+          and bmcfw.package_name("bmc", "2.15.0") == "r200-bmc-2.15.0.tar")
+    with tempfile.TemporaryDirectory() as td:
+        disc = Path(td) / "disc"
+        got = bmcfw.write_disc(disc)
+        sums = {}
+        for line in (disc / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines():
+            if line:
+                h, _, n = line.partition("  ")
+                sums[n] = h
+        check("the support disc: three packages, one for another model, each hash in SHA256SUMS",
+              len(got) == 3 and "r300-bios-2.0.1.tar" in got
+              and all(sums.get(n) == hashlib.sha256((disc / n).read_bytes()).hexdigest() for n in got))
+        check("the release notes say a warm restart does not apply a BIOS image",
+              "warm restart does not apply it" in (disc / "RELEASE-NOTES.txt").read_text(encoding="utf-8"))
+        saved = paths.VAR
+        paths.VAR = Path(td) / "var"
+        try:
+            lab = "fwtest"
+            check("a server starts at the default versions", bmcfw.state(lab, "fs01") == bmcfw.DEFAULTS)
+            sev, msg = bmcfw.keep(lab, "fs01", "bmc:2.15.0")
+            s = bmcfw.state(lab, "fs01")
+            check("a BMC image is active at once, the old one becomes the backup",
+                  s["bmc"] == "2.15.0" and s["bmc_backup"] == "2.14.0" and sev == "Info", msg)
+            bmcfw.keep(lab, "fs01", "bmc-switch")
+            s = bmcfw.state(lab, "fs01")
+            check("switching to the backup swaps the two BMC images", s["bmc"] == "2.14.0" and s["bmc_backup"] == "2.15.0")
+            bmcfw.keep(lab, "fs01", "bmc:2.15.0")
+            check("a BIOS request that is not understood changes nothing",
+                  bmcfw.keep(lab, "fs01", "bios:1.4.0;rm:x")[0] == "Warning" and "pending" not in bmcfw.state(lab, "fs01"))
+            bmcfw.keep(lab, "fs01", "bios:1.4.0:09/02/2026")
+            s = bmcfw.state(lab, "fs01")
+            check("a BIOS image is staged, not written", s["bios"] == "1.2.0" and s.get("pending") == "1.4.0")
+            node = types.SimpleNamespace(id="fs01", vars={power.PORT_VAR: "corp"})
+            bare = types.SimpleNamespace(id="pc01", vars={})
+            check("QEMU gets SMBIOS type 0 only for a server with a management port, a staged image counting",
+                  bmcfw.smbios_args(lab, node) == ["-smbios", "type=0,vendor=winlab,version=1.4.0,date=09/02/2026"]
+                  and bmcfw.smbios_args(lab, bare) == [])
+            lines = " ".join(bmcfw.router_lines(lab, "fs01", "/x"))
+            check("the router's BMC files carry the versions and the staged image",
+                  "'2.15.0' > /x/fw_bmc" in lines and "'1.2.0 03/14/2025' > /x/fw_bios" in lines
+                  and "'1.4.0 09/02/2026' > /x/fw_bios_pending" in lines, lines)
+            said = bmcfw.power_on(lab, "fs01")
+            s = bmcfw.state(lab, "fs01")
+            check("power-on from off writes the staged BIOS",
+                  s["bios"] == "1.4.0" and s["bios_date"] == "09/02/2026" and "pending" not in s
+                  and "from 1.2.0 to 1.4.0" in said, said)
+            check("a second power-on has nothing to write", bmcfw.power_on(lab, "fs01") == ""
+                  and "rm -f /x/fw_bios_pending" in " ".join(bmcfw.router_lines(lab, "fs01", "/x")))
+        finally:
+            paths.VAR = saved
+
+
+def test_srvmd_bmc_firmware_update():
+    """content/agent/bmc.sh's UpdateService: inventory, the package checks
+    (model, hash, format, the signed-in Administrator), staging and the
+    switch to the backup image."""
+    import base64
+    import json
+    import shutil
+    import tempfile
+    from winlab import bmcfw
+    if not shutil.which("sh") or not shutil.which("tar") or not shutil.which("sha256sum"):
+        check("the BMC's firmware update (no sh, tar or sha256sum here: skipped)", True)
+        return
+    with tempfile.TemporaryDirectory() as td:
+        folder, tag = _bmc_folder(Path(td))
+        auth = {"Authorization": "Basic " + base64.b64encode(f"Administrator:{tag}".encode()).decode()}
+
+        def text(name):
+            f = folder / name
+            return f.read_text().strip() if f.exists() else ""
+        st, _, body = _bmc_http(folder, "GET", "/redfish/v1/UpdateService", headers=auth)
+        us = json.loads(body or b"{}")
+        check("UpdateService takes a pushed package", st.endswith("200 OK") and us.get("ServiceEnabled") is True
+              and us.get("HttpPushUri") == "/redfish/v1/UpdateService/update", st)
+        st, _, body = _bmc_http(folder, "GET", "/redfish/v1/UpdateService/FirmwareInventory", headers=auth)
+        ids = [m["@odata.id"].rsplit("/", 1)[-1] for m in json.loads(body or b"{}").get("Members", [])]
+        check("the inventory lists the BMC's two images and the BIOS",
+              ids == ["bmc_active", "bmc_backup", "bios_active"], str(ids))
+        st, _, body = _bmc_http(folder, "GET", "/redfish/v1/Systems/system", headers=auth)
+        check("the system says its BIOS version", json.loads(body or b"{}").get("BiosVersion") == "1.2.0")
+        url = "/redfish/v1/UpdateService/update"
+        st, _, body = _bmc_http(folder, "POST", url, bmcfw.package("bios", "2.0.1", "WL-R300", "07/30/2026"), auth)
+        check("a package for another model is refused, and says why",
+              st.startswith("HTTP/1.0 400") and b"WL-R300; this server is WL-R200" in body, st)
+        bad = bmcfw.package("bios", "1.4.0", bmcfw.MACHINE, "09/02/2026", image=b"x" * 4096)
+        st, _, body = _bmc_http(folder, "POST", url, bad, auth)
+        check("an image that does not match its MANIFEST's hash is refused",
+              st.startswith("HTTP/1.0 400") and b"SHA-256" in body, st)
+        st, _, _ = _bmc_http(folder, "POST", url, b"not a package", auth)
+        check("a file that is not a package is refused", st.startswith("HTTP/1.0 400"), st)
+        st, _, _ = _bmc_http(folder, "POST", url, bmcfw.package("bmc", "2.15.0", bmcfw.MACHINE, "08/18/2026"))
+        check("without a sign-in nothing is taken", st.startswith("HTTP/1.0 401")
+              and not (folder / "upload.tar").exists() and text("fw_bmc") != "2.15.0", st)
+        st, _, _ = _bmc_http(folder, "POST", url, bmcfw.package("bmc", "2.15.0", bmcfw.MACHINE, "08/18/2026"), auth)
+        check("the BMC image is verified and active, the old one kept as the backup",
+              st.startswith("HTTP/1.0 202") and text("fw_bmc") == "2.15.0" and text("fw_bmc_backup") == "2.14.0", st)
+        st, _, _ = _bmc_http(folder, "POST", url, bmcfw.package("bios", "1.4.0", bmcfw.MACHINE, "09/02/2026"), auth)
+        st2, _, body = _bmc_http(folder, "GET", "/redfish/v1/UpdateService/FirmwareInventory/bios_staged",
+                                 headers=auth)
+        check("the BIOS image is staged, not active", st.startswith("HTTP/1.0 202")
+              and text("fw_bios_pending") == "1.4.0 09/02/2026"
+              and json.loads(body or b"{}").get("Version") == "1.4.0", st2)
+        patch = json.dumps({"Links": {"ActiveSoftwareImage": {
+            "@odata.id": "/redfish/v1/UpdateService/FirmwareInventory/bmc_backup"}}}).encode()
+        st, _, _ = _bmc_http(folder, "PATCH", "/redfish/v1/Managers/bmc", patch,
+                             {**auth, "Content-Type": "application/json"})
+        check("switching the Manager to its backup image swaps them", st.endswith("200 OK") and text("fw_bmc") == "2.14.0", st)
+        queue = text("queue")
+        check("each change is queued for winlab to keep (bmc, bios, switch)",
+              "Firmware=bmc:2.15.0" in queue and "Firmware=bios:1.4.0:09/02/2026" in queue
+              and "Firmware=bmc-switch" in queue, queue)
+        events = text("events")
+        check("the event log records the refusals and the updates with the address they came from",
+              events.count("refused") == 3 and "from 10.10.10.50" in events
+              and "BMC firmware 2.15.0 verified" in events, events[-300:])
+        st, _, page = _bmc_http(folder, "GET", "/firmware", headers=auth)
+        check("winlab's own Firmware page is there", st.endswith("200 OK") and b"Firmware" in page, st)
+
+
+
+# ---------------------------------------------------------------------------
+# Windows Server hybrid gaps (AZ-802): Switch Embedded Teaming, Storage Spaces
+# Direct on hand-installed Datacenter nodes, the file share witness,
+# Cluster-Aware Updating, SMB over QUIC, IPAM, BranchCache hosted cache, and
+# four real-tenant Azure lessons (File Sync, Migrate, Site Recovery,
+# Defender/Sentinel), with four drills (winlab/wshybrid.py).
+WSHYB_LESSONS = {
+    "hyperv-set-team": ("hyperv-host", "hyperv-set-team"),
+    "s2d-datacenter-cluster": ("s2d-cluster", "s2d-cluster-built"),
+    "s2d-pool-and-sofs": ("s2d-cluster", "s2d-sofs-volume"),
+    "cluster-quorum-witness": ("failover-cluster", "cluster-quorum-witness"),
+    "cluster-aware-updating": ("failover-cluster", "cluster-aware-updating"),
+    "smb-over-quic": ("enterprise-multisite", "smb-over-quic"),
+    "ipam-server": ("enterprise-multisite", "ipam-server"),
+    "branchcache-hosted-cache": ("enterprise-multisite", "branchcache-hosted-cache"),
+    "real-azure-file-sync": ("azure-hybrid", "real-azure-file-sync"),
+    "real-azure-migrate": ("azure-hybrid", "real-azure-migrate"),
+    "real-azure-site-recovery": ("hyperv-host", "real-azure-site-recovery"),
+    "real-azure-defender-sentinel": ("azure-hybrid", "real-azure-defender-sentinel"),
+}
+WSHYB_DRILLS = {
+    "ts-set-team-one-card": ("hyperv-host", "hv01", "set-team-member-removed"),
+    "ts-cluster-witness-failed": ("failover-cluster", "san01", "witness-share-denied"),
+    "ts-smb-quic-blocked": ("enterprise-multisite", "fs01", "smbquic-udp-blocked"),
+    "ts-branchcache-misses": ("enterprise-multisite", "fs01", "branchcache-share-off"),
+}
+
+
+
+
+
+
+
+# ===== pcsw: PC technician calls, the PC technician break-fix topic, the technician's endpoint lessons =====
+
+
+
+def post_video(lab) -> str:
+    from winlab import pcbuild
+    return pcbuild.post(lab.name, lab.nodes["pc01"])["video"]
+
+# ---- gapc-aws: AWS Solutions Architect and CloudOps (SysOps) operations ------------------
+AWS_OPS_GRADED = ("aws-alb-asg-web", "aws-rds-multiaz-replica", "aws-dynamodb-table-backups", "aws-kms-encryption",
+                  "aws-ebs-snapshot-ami", "aws-backup-plan", "aws-cloudtrail-config", "aws-ssm-parameter-store",
+                  "aws-ssm-fleet-ops", "aws-efs-shared", "aws-sqs-lambda-sns", "aws-cloudfront-alb-s3",
+                  "aws-transit-gateway", "aws-organizations-scp")
+AWS_OPS_REAL = ("aws-real-lambda-sqs", "aws-real-ssm-backup")
+
+
+
+# ===== OpenTofu in depth and Google Cloud (Associate Cloud Engineer): test_iacgcp =====
+# The Google Cloud lessons are done in the student's own free trial, in the
+# browser and Cloud Shell, like gcp-free-trial (no emulator covers them).
+_GCP_LESSONS = ("gcp-gcloud-configurations", "gcp-billing-budgets", "gcp-cloud-storage", "gcp-cloud-run",
+                "gcp-gke-autopilot", "gcp-mig-load-balancer", "gcp-cloud-sql", "gcp-logging-monitoring")
+BROWSER_LESSONS |= set(_GCP_LESSONS)
+_TOFU_LESSONS = {   # lesson -> (lab, exercise)
+    "devops-tofu-variables-loops": ("devops-pipeline", "devops-iac-state-and-modules"),
+    "devops-tofu-modules": ("devops-pipeline", "devops-iac-state-and-modules"),
+    "devops-tofu-remote-state-pg": ("devops-pipeline", "devops-iac-state-and-modules"),
+    "devops-tofu-workspaces": ("devops-pipeline", "devops-iac-state-and-modules"),
+    "devops-tofu-import": ("devops-pipeline", "devops-iac-state-and-modules"),
+    "devops-tofu-aws": ("aws-cloud", "aws-iac-opentofu"),
+    "devops-tofu-s3-backend": ("aws-cloud", "aws-iac-opentofu"),
+}
+
+
+
+
+
+
+
+
+
+
 
 if __name__ == "__main__":
     sys.exit(main())

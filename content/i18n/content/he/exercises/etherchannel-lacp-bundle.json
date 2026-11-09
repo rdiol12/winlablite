@@ -1,0 +1,17 @@
+{
+ "Two cables to the floor switch, bundled with LACP": "שני כבלים למתג הקומה, מאוגדים עם LACP",
+ "The floor switch hangs off corp's switch by one cable, and the second cable\nyou added is blocked by spanning tree. Bundle the two into one port-channel\nwith LACP, so both carry traffic and spanning tree sees one link, and spread\nthe conversations over the members by IP address. The checks read the\nrouter, where each switch's port-channel is a Linux bond and the two bonds\nspeak LACP to each other.": "מתג הקומה מחובר למתג של corp בכבל אחד, והכבל השני שהוספת חסום על ידי spanning tree. אגד את שניהם ל-port-channel אחד עם LACP, כך ששניהם יישאו תעבורה ו-spanning tree יראה קישור אחד, ופזר את השיחות בין החברים לפי כתובת IP. הבדיקות קוראות את הנתב, שבו ה-port-channel של כל מתג הוא bond של Linux ושני ה-bonds מדברים LACP זה עם זה.",
+ "On the Workbench add a switch, cable its uplink (Gi0/1) into corp's switch, and drag a second cable between the same two switches": "בשולחן רשת הוסף מתג, חבר את קישור ה-uplink שלו (Gi0/1) למתג של corp, וגרור כבל שני בין אותם שני מתגים",
+ "On corp's switch: interface range over its two ports to the new switch, channel-group 1 mode active": "במתג של corp: interface range על שני הפורטים שלו אל המתג החדש, channel-group 1 mode active",
+ "On the new switch: interface range gi0/1 - 2, channel-group 1 mode active (or passive)": "במתג החדש: interface range gi0/1 - 2, channel-group 1 mode active (או passive)",
+ "On both: port-channel load-balance src-dst-ip": "בשניהם: port-channel load-balance src-dst-ip",
+ "Check with show etherchannel summary that Po1 is SU and both members are P, and save both switches": "בדוק עם show etherchannel summary ש-Po1 במצב SU ושני החברים במצב P, ושמור את שני המתגים",
+ "a port-channel runs LACP: an 802.3ad bond with two members": "port-channel מריץ LACP: bond מסוג 802.3ad עם שני חברים",
+ "interface range gi0/2 - 3 (the two ports to the other switch), channel-group 1 mode active. mode on makes a bond without LACP; this check wants LACP.": "interface range gi0/2 - 3 (שני הפורטים אל המתג השני), channel-group 1 mode active. mode on יוצר bond בלי LACP; הבדיקה הזו דורשת LACP.",
+ "LACP is negotiated: both members are in the active aggregator, with a partner": "LACP נוהל בהצלחה: שני החברים נמצאים ב-aggregator הפעיל, עם שותף",
+ "Both ends need a channel-group, and at least one must be active: passive with passive never forms. show etherchannel summary on both switches should say Po1(SU) with members (P).": "שני הצדדים צריכים channel-group, ולפחות אחד מהם חייב להיות active: passive מול passive לעולם לא נוצר. show etherchannel summary בשני המתגים צריך להציג Po1(SU) עם חברים (P).",
+ "spanning tree sees one link and forwards on it": "spanning tree רואה קישור אחד ומעביר דרכו",
+ "show spanning-tree on the new switch: one row, Po1, FWD. A blocking Gi port means one cable is still outside the bundle (a mode that does not bundle, or a third cable).": "show spanning-tree במתג החדש: שורה אחת, Po1, FWD. פורט Gi חסום אומר שכבל אחד עדיין מחוץ לאגד (מצב שלא מאגד, או כבל שלישי).",
+ "the conversations are spread by IP address": "השיחות מפוזרות לפי כתובת IP",
+ "port-channel load-balance src-dst-ip, in configure terminal, on both switches (show etherchannel load-balance).": "port-channel load-balance src-dst-ip, ב-configure terminal, בשני המתגים (show etherchannel load-balance)."
+}

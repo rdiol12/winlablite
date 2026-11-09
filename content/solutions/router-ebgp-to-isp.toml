@@ -1,0 +1,104 @@
+[solution]
+exercise = "router-ebgp-to-isp"
+notes = "Self-contained: the OSPF of router-ospf-neighbour first (rtr-edge needs its default route from OSPF), then BGP. rtr-isp gets its own frr pack stick."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+media router-protocols rtr-edge pack frr
+'''
+
+[[step]]
+node = "rtr-edge"
+shell = "sh"
+script = '''
+mkdir -p /mnt/winlab-pack
+mount LABEL=WLPACK /mnt/winlab-pack
+echo 'deb [trusted=yes] file:/mnt/winlab-pack ./' > /etc/apt/sources.list.d/winlab-pack.list
+apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- update
+DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools traceroute
+umount /mnt/winlab-pack
+echo net.ipv4.ip_forward=1 > /etc/sysctl.d/90-router.conf
+sysctl --system
+sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons
+
+systemctl restart frr
+'''
+timeout = 1200
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+router ospf 1
+router-id 2.2.2.2
+network 10.80.0.0 0.0.0.255 area 0
+end
+write memory
+'''
+wait = 10
+
+[[step]]
+node = "rtr-edge"
+shell = "sh"
+script = '''
+vtysh -c 'configure terminal' -c 'router ospf' -c 'ospf router-id 3.3.3.3' -c 'network 10.80.0.0/24 area 0' -c 'network 10.81.0.0/24 area 0' -c 'end' -c 'write memory'
+'''
+wait = 60
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+media router-protocols rtr-isp pack frr
+'''
+
+[[step]]
+node = "rtr-isp"
+shell = "sh"
+script = '''
+mkdir -p /mnt/winlab-pack
+mount LABEL=WLPACK /mnt/winlab-pack
+echo 'deb [trusted=yes] file:/mnt/winlab-pack ./' > /etc/apt/sources.list.d/winlab-pack.list
+apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- update
+DEBIAN_FRONTEND=noninteractive apt-get install -y frr frr-pythontools traceroute
+umount /mnt/winlab-pack
+echo net.ipv4.ip_forward=1 > /etc/sysctl.d/90-router.conf
+sysctl --system
+sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons
+
+systemctl restart frr
+'''
+timeout = 1200
+
+[[step]]
+node = "rtr-isp"
+shell = "sh"
+script = '''
+vtysh -c 'configure terminal' -c 'router bgp 65100' -c 'bgp router-id 9.9.9.9' -c 'no bgp ebgp-requires-policy' -c 'neighbor 198.51.100.1 remote-as 65000' -c 'address-family ipv4 unicast' -c 'network 203.0.113.0/24' -c 'exit-address-family' -c 'end' -c 'write memory'
+'''
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+router bgp 65000
+bgp router-id 2.2.2.2
+neighbor 198.51.100.2 remote-as 65100
+neighbor 198.51.100.2 description ISP
+address-family ipv4
+network 10.80.0.0 mask 255.255.255.0
+network 10.81.0.0 mask 255.255.255.0
+exit-address-family
+exit
+router ospf 1
+default-information originate always
+end
+write memory
+'''
+wait = 60

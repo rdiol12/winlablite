@@ -38,6 +38,61 @@ elif ! ip -4 addr show dev "$ifc" | grep -q inet; then
     udhcpc -b -i "$ifc" -x "hostname:$WINLAB_HOSTNAME" >/dev/null 2>&1 &
 fi
 
+# ---- LLDP-MED: the switch port tells the phone its voice VLAN ---------------
+# As a desk phone does out of the box, it speaks LLDP-MED as a voice endpoint
+# (class III) and asks for a voice network policy. When its switch port
+# advertises one (switchport voice vlan <n>, with lldp run on the switch), the
+# phone moves onto that VLAN: its frames tagged with the number, its address
+# from DHCP there. Without one it stays where it is, untagged. lldpcli on the
+# phone shows what it heard: lldpcli show neighbors details.
+if command -v lldpd >/dev/null 2>&1; then
+    modprobe 8021q 2>/dev/null
+    mkdir -p /etc/lldpd.d
+    echo 'configure med policy application voice unknown' > /etc/lldpd.d/winlab-phone.conf
+    pkill -x lldpd 2>/dev/null
+    lldpd -M 3 -I "$ifc" >/dev/null 2>&1 || log 'lldpd did not start: no voice VLAN from the switch'
+    cat > /usr/local/bin/winlab-phone-vlan <<'VLAN'
+#!/bin/sh
+# The voice VLAN the switch port advertises (LLDP-MED), followed: the phone
+# moves onto it, and back off it when the port stops advertising it.
+ifc="$1"; host="$2"; ip4="$3"; gw="$4"; cur=""
+while :; do
+    vid=$(lldpcli -f keyvalue show neighbors ports "$ifc" details 2>/dev/null |
+          awk -F= '/\.lldp-med\.policy\.apptype=/{a=$2} /\.lldp-med\.policy\.vlan\.vid=/{if (a == "Voice") {print $2; exit}}')
+    case "$vid" in *[!0-9]*) vid="";; esac
+    if [ "$vid" != "$cur" ]; then
+        if [ -n "$cur" ]; then
+            pkill -f "udhcpc .*-i $ifc\.$cur " 2>/dev/null
+            ip link del "$ifc.$cur" 2>/dev/null
+        fi
+        if [ -n "$vid" ]; then
+            logger -t winlab-phone "voice VLAN $vid learnt from the switch port (LLDP-MED)"
+            pkill -f "udhcpc .*-i $ifc " 2>/dev/null
+            ip -4 addr flush dev "$ifc"
+            ip link add link "$ifc" name "$ifc.$vid" type vlan id "$vid" && ip link set "$ifc.$vid" up
+            udhcpc -b -i "$ifc.$vid" -x "hostname:$host" >/dev/null 2>&1 &
+        else
+            logger -t winlab-phone "no voice VLAN from the switch port any more: back on the untagged network"
+            if [ -n "$ip4" ]; then
+                ip addr replace "$ip4" dev "$ifc"; [ -n "$gw" ] && ip route replace default via "$gw"
+            else
+                udhcpc -b -i "$ifc" -x "hostname:$host" >/dev/null 2>&1 &
+            fi
+        fi
+        cur="$vid"
+    fi
+    sleep 10
+done
+VLAN
+    chmod 755 /usr/local/bin/winlab-phone-vlan
+    pkill -f '[w]inlab-phone-vlan' 2>/dev/null
+    static=""
+    [ -n "$WINLAB_NIC0_IP" ] && static="$WINLAB_NIC0_IP/$WINLAB_NIC0_PREFIX"
+    setsid /usr/local/bin/winlab-phone-vlan "$ifc" "$WINLAB_HOSTNAME" "$static" "$WINLAB_NIC0_GW" </dev/null >/dev/null 2>&1 &
+else
+    log 'lldpd is not on the package volume: the phone cannot learn a voice VLAN (prepare the router again in Setup)'
+fi
+
 # ---- the phone's flash: its settings and the softphone's keyring ----------
 disks=""
 for d in $(ls /dev/sd? /dev/vd? 2>/dev/null | sort); do

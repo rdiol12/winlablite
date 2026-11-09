@@ -1,0 +1,71 @@
+{
+ "title": "OSPF בנתב המעבדה: שכן מעבר ל-LAN של המשרד",
+ "summary": "הפעל OSPF במסוף של נתב המעבדה ובנתב Ubuntu עם FRRouting, ראה אותם בוחרים נתב מיועד ב-LAN משותף, השאר את שאר הממשקים שקטים, והגע לרשת של הסדנה שאף אחד לא הקליד אליה נתיב.",
+ "why": "רוב הרשתות שתפגוש הן תערובת: נתב Cisco בליבה, ומשהו\nאחר לצידו, חומת אש, מכונת Linux, נתב של יצרן אחר. הם מסכימים על\nנתיבים כי הם מדברים באותו פרוטוקול פתוח, ו-OSPF הוא זה שכולם\nמדברים. כאן נתב המעבדה מוגדר כמו נתב Cisco, במסוף\nשלו (router ospf 1, network ... area 0), והנתב שלידו הוא Ubuntu\nעם FRRouting, שמוגדר ב-vtysh. הם נפגשים ב-LAN של המשרד, מקטע\nשידור, ולכן הם גם בוחרים נתב מיועד, מה שקישור נקודה לנקודה לעולם לא\nעושה.\n\nמה ש-winlab עושה מתחת, כדי שתדע עם מה אתה מדבר: נתב המעבדה\nהופך את מה שאתה מקליד לתצורת FRRouting ומריץ אותה. ה-hellos,\nהחלפת מסדי הנתונים והנתיבים אמיתיים; show ip ospf neighbor במסוף\nקורא את הטבלה של FRRouting עצמו. שני הבדלים מנתב Cisco אמיתי הם\nכנים: מספר התהליך (router ospf 1) הוא תווית, כי הנתב הזה מריץ\nתהליך OSPF אחד לכל VRF, ו-router eigrp נדחה, כי EIGRP הוא הפרוטוקול של Cisco עצמה\nואף נתב Linux לא מדבר בו מספיק טוב כדי ללמד אותו.",
+ "concepts": [
+  "network <address> <wildcard> area <n> (IOS) ו-network <prefix> area <n> (FRRouting) שניהם בוחרים ממשקים לפי כתובת; 0.0.0.255 הוא ה-wildcard של /24",
+  "Router ID: הגדר אותו ביד (router-id ב-IOS, ospf router-id ב-FRRouting); שינוי נכנס לתוקף רק אחרי clear ip ospf process",
+  "ב-LAN שידור הנתבים בוחרים נתב מיועד (DR) וגיבוי (BDR): עדיפות הממשק הגבוהה ביותר מנצחת, אחריה ה-router ID הגבוה ביותר, ובחירה לעולם לא נערכת מחדש רק כי הופיע נתב טוב יותר",
+  "ip ospf priority 0 פירושו לעולם לא DR; ip ospf cost קובע כמה עולה לחצות ממשק (העלות הכוללת הנמוכה ביותר מנצחת)",
+  "passive-interface default עוצר hellos בכל ממשק; no passive-interface <if> מפעיל אותם היכן שיש שכן. הרשת של ממשק פסיבי עדיין מפורסמת",
+  "נתיבי O ב-show ip route נושאים [110/<cost>]: מרחק מנהלי 110, ואז עלות ה-OSPF להגיע לשם"
+ ],
+ "steps": [
+  "הפעל את rtr-edge, pc-office ו-pc-edge, והדלק את הרשת. התחבר ל-rtr-edge כ-ubuntu עם הסיסמה של המעבדה (המפתח בשורת המשימות מחזיק אותה). rtr-edge הוא Ubuntu Server טרי: eth0 הוא 10.81.0.1/24 (edge-lan, הסדנה), eth1 הוא 10.80.0.3/24 (office). בדוק עם ip -br addr.",
+  "התקן FRRouting ב-rtr-edge מזיכרון חבילת ה-frr (למעבדה אין אינטרנט): במכונות פתח את ההגדרות של rtr-edge ולחץ על חבר את זיכרון החבילות frr. ואז sudo mkdir -p /mnt/winlab-pack; sudo mount LABEL=WLPACK /mnt/winlab-pack; cat /mnt/winlab-pack/README.txt ופעל לפיו כדי להתקין frr frr-pythontools traceroute. אחר כך שלוף את הזיכרון (הגדרות): rtr-isp צריך אותו בשיעור הבא.",
+  "גרום ל-rtr-edge להעביר חבילות בין הכרטיסים שלו: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf, ואז sudo sysctl --system. הפעל את שירות ה-OSPF של FRRouting: sudo sed -i 's/^ospfd=no/ospfd=yes/' /etc/frr/daemons, ואז sudo systemctl restart frr.",
+  "הסתכל קודם על הבעיה. ב-pc-office, ping -c 2 10.81.0.10 (pc-edge) נכשל: שער ברירת המחדל של pc-office הוא נתב המעבדה (10.80.0.2), ונתב המעבדה מעולם לא שמע על 10.81.0.0/24. לחץ פעמיים על הנתב בשולחן רשת (או במפת רשת) כדי לפתוח את המסוף שלו: enable, show ip route. שלוש רשתות מחוברות (C) ותו לא. show ip interface brief מציג איזה ממשק הוא איזה: GigabitEthernet0/1/0 הוא המשרד (10.80.0.2), GigabitEthernet0/0/0 רשת האורחים, GigabitEthernet0/0/1 הקישור לספק האינטרנט.",
+  "OSPF בנתב המעבדה: configure terminal, router ospf 1. ההנחיה הופכת ל-Router(config-router)#. הקלד router-id 2.2.2.2, ואז network 10.80.0.0 0.0.0.255 area 0. השאר את זה כך בינתיים והקלד end. בפעם הראשונה שמוגדר פרוטוקול ניתוב הנתב מתקין FRRouting מנפח החבילות של המעבדה, אז תן לו כמה שניות.",
+  "OSPF ב-rtr-edge: sudo vtysh, configure terminal, router ospf, ospf router-id 3.3.3.3, network 10.80.0.0/24 area 0, network 10.81.0.0/24 area 0, end, write memory. אותו רעיון במילים של FRRouting: קידומת במקום כתובת ו-wildcard.",
+  "ראה אותם נפגשים. במסוף של הנתב: show ip ospf neighbor. 3.3.3.3 מופיע ב-GigabitEthernet0/1/0, קודם ב-INIT או 2WAY, ואז EXSTART ו-EXCHANGE, ואחרי כ-40 שניות (טיימר ההמתנה לפני בחירה) FULL/DR או FULL/BDR. ב-vtysh ב-rtr-edge, show ip ospf neighbor מציג את 2.2.2.2 מהצד השני.",
+  "עכשיו הנתיבים: ב-show ip route במסוף של הנתב יש O 10.81.0.0/24 [110/20] via 10.80.0.3, GigabitEthernet0/1/0. ב-pc-office, ping -c 2 10.81.0.10 עונה, ו-traceroute -n 10.81.0.10 מציג 10.80.0.2, ואז 10.80.0.3, ואז את המחשב. אף אחד לא הקליד נתיב.",
+  "הפוך את נתב המעבדה ל-DR בכוונה. במסוף שלו: configure terminal, interface g0/1/0, ip ospf priority 200, end. show ip ospf neighbor: שום דבר לא משתנה, כי OSPF לא עורך בחירה חדשה כשמופיע נתב טוב יותר. כפה אחת: clear ip ospf process במסוף (הצד של rtr-edge אומר שהשכן שלו נפל וחזר). אחרי 40 השניות rtr-edge מופיע כ-FULL/BDR ב-show ip ospf neighbor במסוף, ולכן נתב המעבדה הוא ה-DR.",
+  "השאר את OSPF מחוץ לממשקים שבהם אף נתב לא אמור להיות. במסוף: configure terminal, router ospf 1, passive-interface default, no passive-interface g0/1/0, end. עשה אותו דבר ב-rtr-edge עבור כרטיס הסדנה שלו: ב-vtysh, configure terminal, interface eth0, ip ospf passive, end, write memory. show ip protocols במסוף מציג את הממשקים הפסיביים ואת הרשתות ש-OSPF מנתב עבורן.",
+  "קרא את השאר: show ip ospf interface brief (כל ממשק, האזור שלו, העלות, תפקיד DR או BDR והשכנים), show ip ospf database (LSA נתב אחד לכל נתב, LSA רשת מה-DR), show running-config | section router ospf. במסוף, write memory שומר את זה להפעלה הבאה של הרשת.",
+  "לחץ על בדוק את העבודה שלי: הוא קורא את שכן ה-OSPF ואת הנתיבים של נתב המעבדה, את התצוגה של rtr-edge, איזה נתב הוא ה-DR, ושולח ping מ-pc-office ל-pc-edge."
+ ],
+ "pitfalls": [
+  "שכן תקוע ב-INIT או שאין כלום: שני הקצוות חייבים להסכים על רשת משנה, אזור, וטיימרי hello ו-dead. show ip ospf interface בשני הקצוות (המסוף ו-vtysh) מדפיס את הטיימרים זה לצד זה.",
+  "wildcard אינו מסכה: network 10.80.0.0 255.255.255.0 area 0 היא הוראה שונה (ושגויה). הנתב דוחה wildcards עם חורים.",
+  "router-id שהוקלד אחרי שהשכנים עלו לא עושה כלום עד clear ip ospf process; המסוף אומר זאת.",
+  "passive-interface default בנתב המעבדה בלי no passive-interface g0/1/0 משתיק גם את המשרד: השכן נופל אחרי מרווח ה-dead (40 שניות).",
+  "ההגדרות שהוקלדו במסוף הן התצורה הפעילה: write memory, אחרת ההפעלה הבאה של הרשת תחזיר את תצורת האתחול. ב-rtr-edge, write memory ב-vtysh שומר את /etc/frr/frr.conf."
+ ],
+ "verify": [
+  "שכני ה-OSPF של נתב המעבדה (הטבלה של FRRouting עצמו)",
+  "נתיבים שנתב המעבדה למד דרך OSPF, ב-kernel שלו",
+  "pc-office מגיע לסדנה"
+ ],
+ "quiz": [
+  {
+   "q": "איזה wildcard הולך עם network 10.80.0.0 כדי להתאים לכל 10.80.0.0/24 ב-router ospf של IOS?",
+   "answer": "0.0.0.255",
+   "wrong": [
+    "255.255.255.0",
+    "0.0.0.0",
+    "255.255.255.255"
+   ],
+   "why": "wildcard מסמן את הסיביות שמותר להן להיות שונות: האוקטט האחרון של /24."
+  },
+  {
+   "q": "אתה מעלה את עדיפות ה-OSPF של נתב אחרי שה-DR נבחר. מה קורה?",
+   "answer": "כלום עד שהשכנות או התהליך מופעלים מחדש: OSPF לא מדיח את ה-DR",
+   "wrong": [
+    "הוא הופך ל-DR מיד",
+    "ה-DR הישן הופך ל-BDR ב-hello הבא",
+    "שניהם הופכים ל-DR"
+   ],
+   "why": "הבחירה נערכת כשנתב מצטרף למקטע, לא כשעדיפות משתנה."
+  },
+  {
+   "q": "מה passive-interface עושה לרשת של ממשק?",
+   "answer": "היא עדיין מפורסמת, אבל שם לא נשלחים ולא נענים hellos",
+   "wrong": [
+    "היא כבר לא מפורסמת",
+    "היא מפורסמת כנתיב חיצוני",
+    "היא מוסרת מטבלת הניתוב"
+   ],
+   "why": "פסיבי מרחיק שכנים מהממשק; הרשת נשארת ב-OSPF."
+  }
+ ]
+}

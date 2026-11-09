@@ -1,0 +1,20 @@
+{
+ "The office's gateway survives a router: VRRP between the lab router and rtr-edge": "השער של המשרד שורד נפילת נתב: VRRP בין נתב המעבדה ל-rtr-edge",
+ "The office's PCs should use a gateway address that no single router owns.\nMake 10.80.0.1 a VRRP (version 2) virtual address of group 1, shared by the\nlab router (priority 110, the master) and rtr-edge (the backup), and point\npc-office at it. The checks read both routers' kernels (which one holds the\nvirtual MAC up), the PC's route and ARP entry, and ping through the virtual\ngateway.": "המחשבים של המשרד צריכים להשתמש בכתובת שער שאף נתב יחיד לא מחזיק.\nהפוך את 10.80.0.1 לכתובת וירטואלית של VRRP (גרסה 2) בקבוצה 1, המשותפת ל-\nנתב המעבדה (עדיפות 110, ה-master) ול-rtr-edge (הגיבוי), והפנה את\npc-office אליה. הבדיקות קוראות את הליבות של שני הנתבים (מי מחזיק את\nה-MAC הווירטואלי פעיל), את הנתיב ואת רשומת ה-ARP של המחשב, ו-ping דרך השער\nהווירטואלי.",
+ "On the router's console, interface g0/1/0: vrrp 1 ip 10.80.0.1, vrrp 1 priority 110": "במסוף הנתב, interface g0/1/0: vrrp 1 ip 10.80.0.1, vrrp 1 priority 110",
+ "On rtr-edge: vrrpd on, a macvlan on eth1 with MAC 00:00:5e:00:01:01 and 10.80.0.1/24, and in vtysh interface eth1: vrrp 1 version 2, vrrp 1 ip 10.80.0.1": "ב-rtr-edge: vrrpd מופעל, macvlan על eth1 עם MAC 00:00:5e:00:01:01 ו-10.80.0.1/24, וב-vtysh interface eth1: vrrp 1 version 2, vrrp 1 ip 10.80.0.1",
+ "pc-office's default gateway is 10.80.0.1 (its netplan file), and it reaches pc-edge": "שער ברירת המחדל של pc-office הוא 10.80.0.1 (קובץ ה-netplan שלו), והוא מגיע ל-pc-edge",
+ "Shut the lab router's g0/1/0 once and watch rtr-edge take over; bring it back": "כבה פעם אחת את g0/1/0 של נתב המעבדה וצפה ב-rtr-edge לוקח פיקוד; החזר אותו",
+ "the lab router is master: its virtual MAC interface is up and holds 10.80.0.1": "נתב המעבדה הוא ה-master: ממשק ה-MAC הווירטואלי שלו פעיל ומחזיק את 10.80.0.1",
+ "interface g0/1/0, vrrp 1 ip 10.80.0.1 and vrrp 1 priority 110 on the console; show vrrp brief says Master. Backup instead: rtr-edge has a higher priority, or the lab router hears nothing (version 2 on both).": "interface g0/1/0, vrrp 1 ip 10.80.0.1 ו-vrrp 1 priority 110 במסוף; show vrrp brief אומר Master. אם במקום זאת Backup: ל-rtr-edge יש עדיפות גבוהה יותר, או שנתב המעבדה לא שומע דבר (גרסה 2 בשניהם).",
+ "the lab router's group has priority 110": "לקבוצה של נתב המעבדה יש עדיפות 110",
+ "vrrp 1 priority 110 under interface g0/1/0 on the console": "vrrp 1 priority 110 תחת interface g0/1/0 במסוף",
+ "rtr-edge is in group 1 for 10.80.0.1, speaking version 2": "rtr-edge נמצא בקבוצה 1 עבור 10.80.0.1, ומדבר בגרסה 2",
+ "vrrpd=yes in /etc/frr/daemons and restart frr; in vtysh: interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory": "vrrpd=yes ב-/etc/frr/daemons והפעל מחדש את frr; ב-vtysh: interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory",
+ "rtr-edge is backup: its virtual interface is held down": "rtr-edge הוא הגיבוי: הממשק הווירטואלי שלו מוחזק כבוי",
+ "No such interface: make the macvlan on eth1 with address 00:00:5e:00:01:01 and 10.80.0.1/24 (the lesson's steps). Not held down: rtr-edge thinks it is master, so it does not hear the lab router (version, group, or the lab router's interface is shut).": "אין ממשק כזה: צור את ה-macvlan על eth1 עם הכתובת 00:00:5e:00:01:01 ו-10.80.0.1/24 (השלבים של השיעור). לא מוחזק כבוי: rtr-edge חושב שהוא ה-master, ולכן הוא לא שומע את נתב המעבדה (גרסה, קבוצה, או שהממשק של נתב המעבדה כבוי).",
+ "pc-office uses the virtual gateway": "pc-office משתמש בשער הווירטואלי",
+ "via: 10.80.0.1 under routes in /etc/netplan/50-cloud-init.yaml, then sudo netplan apply. ip neigh show 10.80.0.1 should give the virtual MAC, 00:00:5e:00:01:01.": "via: 10.80.0.1 תחת routes ב-/etc/netplan/50-cloud-init.yaml, ולאחר מכן sudo netplan apply. ip neigh show 10.80.0.1 אמור להחזיר את ה-MAC הווירטואלי, 00:00:5e:00:01:01.",
+ "pc-office reaches pc-edge through the virtual gateway": "pc-office מגיע ל-pc-edge דרך השער הווירטואלי",
+ "OSPF from the first lesson must still be up: the master needs a route to 10.81.0.0/24": "OSPF מהשיעור הראשון חייב עדיין לפעול: ה-master צריך נתיב אל 10.81.0.0/24"
+}

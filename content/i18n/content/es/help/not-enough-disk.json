@@ -1,0 +1,15 @@
+{
+ "Not enough disk space": "No hay suficiente espacio en disco",
+ "Common problems": "Problemas comunes",
+ "disk": "disco",
+ "space": "espacio",
+ "full": "lleno",
+ "free": "libre",
+ "storage": "almacenamiento",
+ "drive": "unidad",
+ "images": "imágenes",
+ "move": "mover",
+ "gb": "gb",
+ "Where the space goes, and how to keep the machines on another drive.": "A dónde va el espacio y cómo mantener las máquinas en otra unidad.",
+ "A Windows Server base takes about 8 GB and a Windows 11 base about 9 GB. Each machine you boot adds 2 to 6 GB, and an ISO takes about 6 GB while its base is being prepared. Setup wants about 40 GB free.\n\n**Make room**\n\n- Delete machines you no longer need, and checkpoints you will not go back to (`winlab snap <lab> list`, then `winlab snap <lab> rm <name>`).\n- Remove ISOs you added and no longer use, from Images.\n\n**Keep the images on a bigger drive**\n\nThe image store can live on any drive. Put this in a file called winlab.local.toml in the winlab folder, then move the images folder there:\n\n```\n[store]\nimages = \"D:/winlab-images\"\n```\n\nSetting the WINLAB_IMAGES environment variable does the same.": "Una base de Windows Server ocupa unos 8 GB y una base de Windows 11 unos 9 GB. Cada máquina que arrancas añade de 2 a 6 GB, y una ISO ocupa unos 6 GB mientras se prepara su base. La instalación quiere unos 40 GB libres.\n\n**Haz espacio**\n\n- Elimina las máquinas que ya no necesites y los puntos de control a los que no vayas a volver (`winlab snap <lab> list`, después `winlab snap <lab> rm <name>`).\n- Quita las ISO que añadiste y ya no usas, desde Imágenes.\n\n**Guarda las imágenes en una unidad más grande**\n\nEl almacén de imágenes puede estar en cualquier unidad. Pon esto en un archivo llamado winlab.local.toml en la carpeta de winlab y después mueve allí la carpeta de imágenes:\n\n```\n[store]\nimages = \"D:/winlab-images\"\n```\n\nDefinir la variable de entorno WINLAB_IMAGES hace lo mismo."
+}

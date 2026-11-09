@@ -1,0 +1,91 @@
+{
+ "title": "קדם את בקר התחום הראשון",
+ "summary": "הפוך שרת רגיל לבקר התחום של שורש היער, עם DNS.",
+ "why": "Active Directory הוא מסד הנתונים שכל שירות Windows אחר סומך עליו: מי המשתמש,\nאיזה מחשב מורשה להיכנס, איזו מדיניות חלה. בקר התחום הראשון יוצר את היער,\nהדומיין והסכמה, והוא חייב להריץ DNS, כי לקוחות מוצאים בקרי תחום דרך רשומות\nשירות של DNS, לא דרך שידורים או רשימה שמישהו הקליד. דומיין שה-DNS שלו שגוי\nנכשל בדרכים שנראות כמו כל דבר חוץ מ-DNS.\n\nהקידום הוא פקודה אחת, אבל הבחירות שהוא מקבע נשארות לכל חיי היער: שם ה-DNS,\nשם ה-NetBIOS, הרמה הפונקציונלית, היכן נמצאים מסד הנתונים ו-SYSVOL. הבן כל\nאחת לפני שאתה לוחץ Enter; אף אחד לא משנה שם של יער.",
+ "concepts": [
+  "יער, דומיין, עץ: היער הוא גבול האבטחה; דומיין הוא יחידת שכפול וניהול בתוכו",
+  "רמה פונקציונלית: באילו תכונות של Windows Server הדומיין רשאי להשתמש; נקבעת לפי ה-DC הוותיק ביותר שאתה מתכוון לשמור",
+  "רשומות SRV: _ldap._tcp.dc._msdcs.<domain> היא הדרך שבה לקוח מגלה DC; הקידום רושם אותן ב-DNS",
+  "סיסמת DSRM: סיסמת ה-Administrator המקומי שמשמשת כשהספרייה לא מקוונת לצורך תיקון",
+  "תפקידי FSMO: חמישה תפקידי מאסטר יחיד שה-DC הראשון מחזיק (סכמה, שמות, RID, אמולטור PDC, תשתית)",
+  "Test-ADDSForestInstallation מריץ את כל בדיקות הדרישות המוקדמות של Install-ADDSForest בלי לשנות דבר"
+ ],
+ "steps": [
+  "הפעל את dc01 לבד (שאר המכונות צריכות אותו קודם) והיכנס בתור ה-Administrator המקומי. ב-PowerShell: Get-NetIPConfiguration. אתה אמור לראות IPv4Address 10.10.10.10 ו-IPv4DefaultGateway 10.10.10.1; Get-NetIPInterface -AddressFamily IPv4 מראה Dhcp Disabled על מתאם ה-Ethernet. כתובת DHCP כאן פירושה לעצור ולתקן אותה קודם.",
+  "כוון את ה-DNS לשרת עצמו: Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses 127.0.0.1 (השתמש בכינוי ש-Get-NetAdapter מראה). Get-DnsClientServerAddress -AddressFamily IPv4 מציג עכשיו 127.0.0.1. עדיין אף אחד לא עונה שם; שרת ה-DNS שתתקין עוד רגע יענה.",
+  "בדוק את השם לפני שהוא ננעל: $env:COMPUTERNAME אמור להציג DC01. אם לא, Rename-Computer -NewName dc01 -Restart עכשיו: שינוי שם של בקר תחום מאוחר יותר הוא נוהל בפני עצמו.",
+  "התקן את התפקיד והכלים שלו: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools. אתה אמור לראות Success True ו-Restart Needed No; Get-WindowsFeature AD-Domain-Services מציג [X]. השרת עדיין אינו DC: התפקיד הוא רק הקבצים הבינאריים.",
+  "עשה חזרה קודם: Test-ADDSForestInstallation -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString). הקלד סיסמת DSRM משלך. צפה ל-Status Success עם שתי אזהרות: ברירת המחדל הקריפטוגרפית עבור Windows NT 4.0, ושלא ניתן ליצור האצלת DNS (ל-corp.lab אין אזור אב להאציל ממנו, וזה רגיל ביער של מעבדה).",
+  "קדם: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. הוא מגדיר DNS, יוצר את מסד הנתונים ואת SYSVOL, ומאתחל את עצמו. ההפעלה הראשונה כ-DC איטית (Applying computer settings): חכה לה.",
+  "היכנס בתור CORP\\Administrator (הסיסמה של ה-Administrator המקומי הפכה לסיסמה של הדומיין). Get-ADDomain | Format-List DNSRoot, NetBIOSName, DomainMode, PDCEmulator, ואחר כך Get-ADForest | Format-List Name, ForestMode, SchemaMaster. אתה אמור לראות corp.lab, CORP ו-dc01.corp.lab בכל תפקיד. רשום את הרמות הפונקציונליות: הן קובעות מה ה-Windows Server הישן ביותר שיוכל אי פעם להיות DC כאן.",
+  "הסתכל על ה-DNS: Get-DnsServerZone מציג את corp.lab ואת _msdcs.corp.lab עם IsDsIntegrated True (האזורים חיים ב-AD ומשוכפלים איתו). Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab עונה dc01.corp.lab בפורט 389: כך כל לקוח ימצא את ה-DC. Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv מציג את השאר.",
+  "בדוק מה הופך DC ל-DC: Get-SmbShare מציג NETLOGON ו-SYSVOL (DC מכריז על עצמו רק אחרי ש-SYSVOL משותף), Get-Service NTDS, DNS, Netlogon, Kdc כולם Running, ו-netdom query fsmo מציין את DC01 לכל חמשת התפקידים.",
+  "הרץ dcdiag /q: בלי פלט פירושו שכל הבדיקות עברו. אם הוא מדפיס משהו, קרא קודם את שם הבדיקה (Advertising, FrsEvent, DFSREvent, SystemLog) ותקן אותה לפני שתמשיך; אזהרה ביומן System בדקות הראשונות אחרי הקידום אפשר לבדוק שוב עם dcdiag /test:systemlog. אחר כך לחץ על בדוק את העבודה שלי."
+ ],
+ "pitfalls": [
+  "קידום DC שה-DNS שלו מצביע על מפענח חיצוני משאיר את רשומות ה-SRV לא רשומות; הפנה קודם את ה-DNS ל-DC עצמו.",
+  "DC עם כתובת DHCP הוא פצצה מתקתקת: הכתובת משתנה וכל הלקוחות מאבדים את הדומיין.",
+  "סיסמת DSRM אינה סיסמת ה-Administrator של הדומיין. רשום אותה במקום שתמצא באסון.",
+  "שם בעל תווית אחת (corp במקום corp.lab) או דומיין ציבורי שאינו שלך (corp.com) הוא יער שתחיה איתו לנצח: השתמש בשם תחת דומיין שבשליטתך, או בשם שמור כמו .lab במעבדה.",
+  "שינוי שם השרת אחרי הקידום כבר אינו Rename-Computer: תן לו שם לפני Install-ADDSForest.",
+  "אם SYSVOL ו-NETLOGON חסרים אחרי ההפעלה מחדש, ה-DC לא סיים את השכפול הראשון של SYSVOL ואינו מכריז על עצמו: קרא את יומן האירועים DFS Replication לפני כל דבר אחר."
+ ],
+ "verify": [
+  "דומיין שורש היער",
+  "המארח הזה הוא DC",
+  "אזור DNS של הדומיין",
+  "מי מחזיק בתפקידי FSMO"
+ ],
+ "quiz": [
+  {
+   "q": "איזה סוג רשומת DNS לקוחות מבקשים כדי למצוא בקר תחום?",
+   "answer": "רשומות SRV כמו _ldap._tcp.dc._msdcs.<domain>",
+   "wrong": [
+    "רשומת ה-MX של הדומיין",
+    "רשומת PTR של ה-DC",
+    "רשומת ה-SOA"
+   ],
+   "why": "הקידום רושם את רשומות ה-SRV; לקוחות מאתרים DC דרכן."
+  },
+  {
+   "q": "למה משמשת סיסמת DSRM?",
+   "answer": "לכניסה מקומית כשהספרייה לא מקוונת לצורך תיקון",
+   "wrong": [
+    "היא סיסמת ה-Administrator של הדומיין",
+    "לצירוף מחשבים לדומיין",
+    "להצפנת SYSVOL"
+   ],
+   "why": "ל-Directory Services Restore Mode יש סיסמת Administrator מקומית משלו."
+  },
+  {
+   "q": "למה DC לעולם לא צריך לקבל את הכתובת שלו מ-DHCP?",
+   "answer": "אם הכתובת משתנה, הלקוחות מאבדים את הדומיין כי רשומות ה-DNS וה-SRV מצביעות על הישנה",
+   "wrong": [
+    "DHCP לא יכול לחלק כתובות שרתים",
+    "AD מסרב להיות מותקן במכונות DHCP בכל הגרסאות",
+    "זה מאט את השכפול"
+   ],
+   "why": "DC נמצא לפי הכתובת שלו; היא חייבת להיות סטטית."
+  },
+  {
+   "q": "Test-ADDSForestInstallation מזהיר שלא ניתן ליצור האצלה עבור שרת ה-DNS הזה. מה אתה עושה?",
+   "answer": "כלום: לאזור של יער חדש אין אזור אב להאציל ממנו",
+   "wrong": [
+    "עוצר ומתקין DNS ידנית קודם",
+    "מכוון את ה-DNS של השרת לפותר באינטרנט",
+    "משתמש במקום זאת בפרמטר -DomainNetbiosName"
+   ],
+   "why": "האזהרה חשובה רק כשיש אזור אב שאמור להאציל לאזור החדש."
+  },
+  {
+   "q": "אחרי הקידום, אילו שני שיתופים חייבים להיות לבקר תחום לפני שלקוחות יכולים להשתמש בו?",
+   "answer": "SYSVOL ו-NETLOGON",
+   "wrong": [
+    "ADMIN$ ו-C$",
+    "IPC$ ו-print$",
+    "NTDS ו-DNS"
+   ],
+   "why": "DC מכריז על עצמו רק אחרי ש-SYSVOL משותף; NETLOGON מחזיק את סקריפטי הכניסה."
+  }
+ ]
+}

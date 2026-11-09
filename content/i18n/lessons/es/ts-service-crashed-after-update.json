@@ -1,0 +1,58 @@
+{
+ "title": "Un servicio falló de noche y nadie lo reinició",
+ "summary": "Tras los parches de la noche, el DNS del DC está caído; nadie lo detuvo y no volvió.",
+ "why": "Los servidores rara vez se rompen mientras los miras. Se rompen a las 03:00, después de que las actualizaciones los reiniciaran, y siguen rotos hasta que el primero que llega llama al soporte técnico. Que un fallo cueste cinco minutos o cinco horas depende de una opción que la mayoría de los administradores nunca mira: qué hace el Service Control Manager cuando un servicio muere. Sin opciones de recuperación no hace nada, el servicio sigue caído y el registro System anota en silencio el evento 7034. Esta lección es la mañana siguiente: encuentra qué cayó y cuándo, recupéralo y configura las opciones de recuperación para que el próximo fallo se reinicie solo.",
+ "concepts": [
+  "El tipo de inicio Automatic tiene que ver con el arranque; las opciones de recuperación, con los fallos",
+  "Eventos 7031 y 7034 del registro System: un servicio terminó inesperadamente, con o sin acción de recuperación",
+  "sc.exe qfailure y sc.exe failure: leer y establecer las acciones de recuperación de un servicio",
+  "Relacionar un fallo con un cambio (el historial de actualizaciones) para la nota del incidente"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break dc01 service-crashed-after-update). No leas todavía las pistas.",
+  "Desde pc01, resuelve un nombre del dominio (Resolve-DnsName dc01) y comprueba que falla. Anota la hora.",
+  "En dc01, lista los servicios automáticos que no están en ejecución y lee en el registro System qué les pasó.",
+  "Recupera el servicio y después configura las opciones de recuperación para que un fallo lo reinicie. Pulsa Verificar mi arreglo: comprueba la máquina.",
+  "Escribe la nota del incidente: qué falló, cuándo, por qué siguió caído y qué cambiaste para que se recupere solo la próxima vez."
+ ],
+ "pitfalls": [
+  "Iniciar el servicio y quedarse ahí: funciona hasta el siguiente fallo, que volverá a esperarte.",
+  "Cambiar el tipo de inicio a Automatic (Delayed Start) y llamarlo solución: el tipo de inicio no es lo que ocurre ante un fallo."
+ ],
+ "verify": [
+  "el servicio y sus opciones de recuperación",
+  "los fallos de la noche en el registro System"
+ ],
+ "quiz": [
+  {
+   "q": "Un servicio con tipo de inicio Automatic falla a las 03:00. Sin opciones de recuperación, ¿qué pasa?",
+   "answer": "Sigue detenido hasta que alguien lo inicie",
+   "wrong": [
+    "Windows lo reinicia al cabo de un minuto",
+    "El servidor se reinicia",
+    "Vuelve a iniciarse en el siguiente inicio de sesión"
+   ],
+   "why": "El tipo de inicio solo dice qué pasa al arrancar."
+  },
+  {
+   "q": "¿Qué comando muestra lo que hace el Service Control Manager cuando un servicio falla?",
+   "answer": "sc.exe qfailure <service>",
+   "wrong": [
+    "Get-Service <service> | Format-List *",
+    "sc.exe query <service>",
+    "Get-WinEvent -LogName Setup"
+   ],
+   "why": "qfailure lista el periodo de restablecimiento y las acciones: reiniciar, ejecutar un programa, reiniciar el equipo."
+  },
+  {
+   "q": "El evento 7034 en el registro System significa que…",
+   "answer": "el servicio terminó inesperadamente",
+   "wrong": [
+    "un administrador detuvo el servicio",
+    "el servicio no se pudo instalar",
+    "la contraseña de la cuenta del servicio caducó"
+   ],
+   "why": "El 7031 dice lo mismo junto con la acción de recuperación que se tomó."
+  }
+ ]
+}

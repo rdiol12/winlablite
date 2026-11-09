@@ -120,7 +120,7 @@ def _write(raw: dict, dest: Path, name: str, keep: Lab | None = None) -> Lab:
     except (LabError, KeyError, TypeError, ValueError) as exc:
         raise NetFileError(f"the network in that file does not load: {exc}") from None
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".toml.tmp")
+    tmp = editor._tmp_for(dest)
     tmp.write_text(text, encoding="utf-8")
     try:
         lab = schema.load(tmp)
@@ -147,6 +147,12 @@ def open_bytes(data: bytes, name: str = "") -> Lab:
                                f"called {name}; delete that folder or choose another name")
     else:
         name = _free_name(str(raw.get("lab", {}).get("name") or manifest.get("lab") or "network"))
+    # A file from elsewhere never opens a way out of the lab: its switches
+    # come in Private, and the Virtual Switch Manager changes them on purpose.
+    for net in raw.get("network", []) or []:
+        if isinstance(net, dict):
+            net.pop("vswitch", None)
+            net.pop("host_ports", None)
     return _write(raw, paths.LABS / f"{name}.toml", name)
 
 

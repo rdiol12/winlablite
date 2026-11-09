@@ -1,0 +1,32 @@
+[solution]
+exercise = "finance-folder-permissions"
+notes = "The Company share is the file role's (map-a-drive builds on it); step 2 makes it first if fs01 has none."
+after = ["promote-first-dc", "join-a-member"]
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+if (-not (Get-ADGroup -Filter "Name -eq 'G-Finance'")) { New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security }
+'''
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+if (-not (Get-SmbShare -Name Company -ErrorAction SilentlyContinue)) {
+  if (-not (Get-Volume -DriveLetter D -ErrorAction SilentlyContinue)) {
+    $d = Get-Disk | Where-Object { $_.PartitionStyle -eq 'RAW' } | Select-Object -First 1
+    Initialize-Disk -Number $d.Number -PartitionStyle GPT
+    New-Partition -DiskNumber $d.Number -UseMaximumSize -DriveLetter D | Format-Volume -FileSystem NTFS -NewFileSystemLabel Data -Confirm:$false
+  }
+  New-Item D:\Shares\Company -ItemType Directory -Force | Out-Null
+  New-SmbShare -Name Company -Path D:\Shares\Company -ChangeAccess 'CORP\Domain Users' -FullAccess 'CORP\Domain Admins' | Out-Null
+}
+New-Item D:\Shares\Company\Finance -ItemType Directory -Force | Out-Null
+icacls D:\Shares\Company\Finance /inheritance:r
+icacls D:\Shares\Company\Finance /grant 'CORP\G-Finance:(OI)(CI)M' 'BUILTIN\Administrators:(OI)(CI)F' 'NT AUTHORITY\SYSTEM:(OI)(CI)F'
+icacls D:\Shares\Company\Finance /remove:g Users 'Authenticated Users' Everyone 'CORP\Domain Users'
+Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force
+icacls D:\Shares\Company\Finance
+'''

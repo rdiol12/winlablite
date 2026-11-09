@@ -1285,6 +1285,13 @@ DRILL_HINTS = (
     "EventID=6008)]]\". chkdsk C: /scan checks the volume the cut interrupted.",
 )
 
+
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 CLEAN_PS = (
     "$b = Get-WinEvent -FilterHashtable @{LogName='System'; Id=6005} -MaxEvents 1 -ErrorAction SilentlyContinue; "
     "$t = if ($b) { $b.TimeCreated.AddMinutes(-2) } else { (Get-Date).AddDays(-1) }; "
@@ -1348,7 +1355,7 @@ def drill_view(lab) -> dict:
 
 
 def _hint(lab, i: int, dr: dict) -> str:
-    return DRILL_HINTS[i].replace("{server}", name_of(lab, dr["server"]))
+    return _pt(DRILL_HINTS[i]).replace("{server}", name_of(lab, dr["server"]))
 
 
 def drill_hint(lab) -> dict:

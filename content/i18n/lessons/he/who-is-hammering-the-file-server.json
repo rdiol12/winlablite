@@ -1,0 +1,80 @@
+{
+ "title": "מי מעמיס על שרת הקבצים?",
+ "summary": "שרת הקבצים איטי והמשרד עמוס: קרא את העומס עם Resource Monitor, Get-SmbSession, Get-SmbOpenFile ומוני ביצועים, ואז מצא את האדם ואת העבודה שמאחוריו.",
+ "why": "\"כונן K: איטי היום\" היא אחת השיחות שכל מנהל מקבל, והתשובה כמעט אף פעם אינה \"קנה שרת גדול יותר\".\nמשהו או מישהו משתמש בו יותר מהרגיל: סורק ששומר כל עמוד כקובץ חדש, ישיבה מוקלטת שהועתקה לתיקיית\nהמחלקה ואז לתיקייה אישית, כלי סנכרון שנתקע בלולאה. העבודה היא לעבור מ\"איטי\" לשם ולסיבה, עם ראיות,\nלפני שמישהו נוגע בהגדרה.\n\nל-Windows יש את כל מה שצריך לכך בשרת עצמו. Resource Monitor מראה אילו קבצים נקראים ונכתבים עכשיו ומי\nמחובר לפורט 445. Get-SmbSession מציג כל סשן לקוח עם החשבון והמחשב שלו, Get-SmbOpenFile כל קובץ פתוח\nועל ידי מי. מוני הביצועים של SMB Server מודדים את הבתים לכל שיתוף ולכל סשן, ויומן מונים שומר אותם כדי\nשתוכל להראות איך נראה אחר הצהריים. הקבצים עצמם אומרים את השאר: הגודל שלהם, מתי נכתבו, והבעלים שלהם,\nהחשבון שיצר אותם.\n\nבמעבדה הזו העומס אמיתי: העובדים שקלטת עובדים על שרת הקבצים כל היום (חלון משרד), ובאחר צהריים עמוס\nחלקם מעתיקים סריקות והקלטות גדולות לתיקיית המחלקה שלהם והלאה לתיקייה האישית שלהם. אתה מגלה מי, מהשרת,\nכמו שהיית עושה בעבודה.",
+ "concepts": [
+  "Resource Monitor (resmon): הלשונית Disk מציינת את הקבצים שנקראים ונכתבים (כתיבות SMB מופיעות תחת System), הרשימה TCP Connections בלשונית Network מראה מי מחובר לפורט 445",
+  "Get-SmbSession: שורה לכל סשן לקוח עם ClientUserName, ClientComputerName, NumOpens וכמה זמן הוא קיים",
+  "Get-SmbOpenFile: כל קובץ שלקוח מחזיק פתוח בשרת, עם ה-Path וה-ClientUserName שלו; Close-SmbOpenFile סוגר אחד, וזה רק לעתים רחוקות הצעד הראשון הנכון",
+  "ערכות המונים SMB Server Shares ו-SMB Server Sessions: Data Bytes/sec, Read Bytes/sec ו-Write Bytes/sec לכל שיתוף ולכל סשן",
+  "יומן מונים (Data Collector Set) שנוצר עם logman שומר את הדגימות בקובץ .blg: הראיה לאיך נראה העומס, שנקראת בחזרה עם Import-Counter או Performance Monitor",
+  "הבעלים של קובץ (Get-Acl ... .Owner) הוא החשבון שיצר אותו: קבצים גדולים וחדשים והבעלים שלהם מצביעים על האדם; שם הקובץ והתיקייה מצביעים על העבודה"
+ ],
+ "steps": [
+  "לפני שמתחילים: העובדים צריכים לעבוד על fs01 (השיעור onboard-new-starters: חשבונות, תיקיות מחלקה בשיתוף Company, תיקיות אישיות, סיסמאות ראשונות שהוקלדו ב-משרד > רשימת העובדים). בחלון משרד הפעל את יום העבודה והפוך אותו לאחר צהריים עמוס: יום עמוס פעיל, ושעון המעבדה בשמירות של סוף היום (winlab clock jump 16:30 ביום חול). ההעתקות הגדולות מגיעות אז.",
+  "ב-fs01, התחל קודם בראיות, יומן מונים של עומס שרת הקבצים כל 15 שניות: logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" \"\\PhysicalDisk(*)\\Disk Bytes/sec\" \"\\Processor(_Total)\\% Processor Time\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, ואז logman start FileServerLoad. logman query FileServerLoad מציג אותו כ-Running.",
+  "הסתכל בזמן אמת: Get-Counter -Counter '\\SMB Server Shares(*)\\Data Bytes/sec' -SampleInterval 5 -MaxSamples 6. המופע העמוס ביותר הוא השיתוף שמעמיסים עליו (Company, או Home$ כשההעתקות ממשיכות לתיקיות האישיות).",
+  "מי מחובר: Get-SmbSession | Sort-Object NumOpens -Descending | Format-Table ClientUserName, ClientComputerName, NumOpens, SecondsExists. הרץ את זה כמה פעמים בדקות העמוסות: סשנים באים והולכים בזמן שאנשים עובדים.",
+  "מה הם מחזיקים פתוח: Get-SmbOpenFile | Format-Table ClientUserName, Path -AutoSize. העתקה גדולה בתהליך נראית כאדם אחד שמחזיק קובץ גדול אחד בתיקיית המחלקה שלו.",
+  "Resource Monitor: הרץ resmon ב-fs01. בלשונית Disk, Disk Activity ממוין לפי Write (B/sec) מציין את הקבצים שנכתבים ממש עכשיו; בלשונית Network, TCP Connections על פורט מקומי 445 מציג את הלקוחות וכמה כל אחד שולח.",
+  "תן לקבצים לדבר: Get-ChildItem -Path D:\\Shares -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round($_.Length / 1MB, 1)}}, LastWriteTime, @{n='Owner';e={(Get-Acl -LiteralPath $_.FullName).Owner}}. הגדולים והחדשים והבעלים שלהם הם האדם שלך; שם הקובץ אומר מה העבודה.",
+  "התאם ביניהם: החשבון של הבעלים נמצא ב-ClientUserName של Get-SmbSession, מחשב הלקוח הוא המחשב שהאדם יושב מולו (Resolve-DnsName על הכתובת שלו אם הסשן מציג אחת), והפיד של חלון משרד אומר מה הוא עשה באותה דקה.",
+  "רשום את זה ב-fs01 ב-C:\\winlab\\hammering.txt, עובדה אחת בכל שורה: account <their sAMAccountName>, pc <the computer they work from>, file <the full path of the big file on fs01>, job <what they were doing, in a few words>.",
+  "עצור את היומן וקרא אותו בחזרה: logman stop FileServerLoad; Import-Counter -Path (Get-ChildItem C:\\PerfLogs -Recurse -Filter 'FileServerLoad*.blg' | Select-Object -First 1).FullName | ForEach-Object CounterSamples | Where-Object Path -like '*smb server shares*' | Sort-Object CookedValue -Descending | Select-Object -First 5 Timestamp, InstanceName, CookedValue. או פתח את ה-.blg ב-Performance Monitor. אחר כך לחץ על בדוק את העבודה שלי."
+ ],
+ "pitfalls": [
+  "סגירת סשנים או קבצים פתוחים כדי שהשרת יהיה שוב מהיר: האדם מאבד את העבודה שלו ועושה אותה שוב חמש דקות אחר כך. ברר קודם; התיקון הוא שיחה איתו, מכסה, או העברת העבודה, לא Close-SmbSession.",
+  "מבט אחד אינו ראיה. סשנים וקבצים פתוחים משתנים כל כמה שניות; יומן מונים לאורך התקופה העמוסה הוא מה שמראים למנהל.",
+  "Get-SmbSession שרץ פעם אחת, ברגע הלא נכון, לא מראה כלום: העתקה של כמה מגה-בייטים נגמרת תוך שניות. צפה בדקות העמוסות, והשתמש בבעלים ובזמנים של הקבצים למה שכבר קרה.",
+  "הבעלים של קובץ שנכתב על ידי מנהל הוא Administrators, לא האדם: רק קבצים שהעובדים כתבו בעצמם מציינים אותם.",
+  "מופעי מונים קיימים רק כל עוד משהו משתמש בהם: מופע של SMB Server Sessions מופיע עם הסשן ונעלם איתו."
+ ],
+ "verify": [
+  "מי מחובר עכשיו לשרת הקבצים",
+  "הקבצים הפתוחים",
+  "הקבצים הגדולים ביותר בשיתופים והבעלים שלהם",
+  "יומן המונים"
+ ],
+ "quiz": [
+  {
+   "q": "בשרת הקבצים, איזה cmdlet מציג כל סשן לקוח עם החשבון והמחשב שלו?",
+   "answer": "Get-SmbSession",
+   "wrong": [
+    "Get-SmbShare",
+    "Get-NetTCPConnection -LocalPort 3389",
+    "Get-SmbMapping"
+   ],
+   "why": "Get-SmbSession מציג ClientUserName ו-ClientComputerName לכל סשן; Get-SmbMapping הוא התצוגה של הלקוח על הכוננים שלו."
+  },
+  {
+   "q": "איזו ערכת מונים מודדת את הבתים לכל שיתוף בשרת קבצים SMB?",
+   "answer": "SMB Server Shares (Data Bytes/sec לכל שיתוף)",
+   "wrong": [
+    "SMB Client Shares",
+    "Network Adapter(*)\\Bytes Total/sec",
+    "LogicalDisk(*)\\% Free Space"
+   ],
+   "why": "ל-SMB Server Shares יש מופע אחד לכל שיתוף; SMB Client Shares הוא הצד של הלקוח, ומוני המתאם לא מתחלקים לפי שיתוף."
+  },
+  {
+   "q": "קובץ של 12 MB הופיע בתיקיית Finance לפני עשר דקות. מה מציין את החשבון שכתב אותו?",
+   "answer": "הבעלים שלו: (Get-Acl -LiteralPath <file>).Owner",
+   "wrong": [
+    "ה-LastAccessTime שלו",
+    "ההרשאות של השיתוף",
+    "Get-SmbShare -Name Finance"
+   ],
+   "why": "החשבון שיוצר קובץ הופך לבעלים שלו, אלא אם הוא מנהל, שהקבצים שלו שייכים ל-Administrators."
+  },
+  {
+   "q": "למה להפעיל יומן מונים לפני שמתחילים לחפש?",
+   "answer": "סשנים וקבצים פתוחים משתנים מרגע לרגע; היומן הוא הראיה לכל התקופה העמוסה",
+   "wrong": [
+    "Get-SmbSession עובד רק כשיומן רץ",
+    "בלעדיו המונים מתאפסים",
+    "Resource Monitor צריך אותו"
+   ],
+   "why": "יומן שנוצר עם logman שומר את הדגימות בקובץ .blg שאפשר לקרוא בחזרה עם Import-Counter או להציג ב-Performance Monitor."
+  }
+ ]
+}

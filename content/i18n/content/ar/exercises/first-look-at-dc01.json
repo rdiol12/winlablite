@@ -1,0 +1,13 @@
+{
+ "First look: sign in to dc01 and ask it about itself": "نظرة أولى: سجّل الدخول إلى dc01 واسأله عن نفسه",
+ "Before any Windows topic, get to a machine and ask it questions. Start dc01,\nsign in on its own screen as Administrator, open PowerShell (not the ISE)\nand ask Windows what it is and whether its gateway answers. winlab grades\nwhat dc01 itself remembers: who is signed in at its screen, and what its\nPowerShell history holds.": "قبل أي موضوع في Windows، صِل إلى جهاز واطرح عليه أسئلة. شغّل dc01،\nوسجّل الدخول على شاشته بحساب Administrator، وافتح PowerShell (لا ISE)\nواسأل Windows ما هو وهل تجيب بوابته. يقيّم winlab\nما يتذكره dc01 نفسه: من سجّل الدخول على شاشته، وما يحفظه\nسجل PowerShell فيه.",
+ "Start dc01 and sign in on its screen as Administrator, with the lab password from the key in the taskbar": "شغّل dc01 وسجّل الدخول على شاشته بحساب Administrator، بكلمة مرور المختبر من المفتاح في شريط المهام",
+ "In PowerShell on dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion": "في PowerShell على dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion",
+ "In the same window: ipconfig, then Test-NetConnection 10.10.10.1 (the lab router, dc01's default gateway)": "في النافذة نفسها: ipconfig، ثم Test-NetConnection 10.10.10.1 (موجّه المختبر، البوابة الافتراضية لـ dc01)",
+ "Administrator is signed in on dc01's screen": "Administrator مسجّل الدخول على شاشة dc01",
+ "Double-click dc01 in Machines, send Ctrl+Alt+Del from the window's menu and sign in as Administrator; the desktop must be up (explorer running)": "انقر نقرًا مزدوجًا على dc01 في Machines، وأرسل Ctrl+Alt+Del من قائمة النافذة وسجّل الدخول بحساب Administrator؛ يجب أن يكون سطح المكتب ظاهرًا (explorer يعمل)",
+ "PowerShell on dc01 was asked what the machine is": "سُئل PowerShell على dc01 ما هو الجهاز",
+ "Run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion in a PowerShell window on dc01 (the ISE keeps no history file)": "شغّل Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion في نافذة PowerShell على dc01 (لا يحفظ ISE ملف سجل)",
+ "dc01's gateway was tested from inside dc01": "اختُبرت بوابة dc01 من داخل dc01",
+ "In PowerShell on dc01: Test-NetConnection 10.10.10.1 (or ping 10.10.10.1); PingSucceeded True means the lab router answers": "في PowerShell على dc01: Test-NetConnection 10.10.10.1 (أو ping 10.10.10.1)؛ تعني PingSucceeded True أن موجّه المختبر يجيب"
+}

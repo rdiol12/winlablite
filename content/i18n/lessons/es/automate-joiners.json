@@ -1,0 +1,67 @@
+{
+ "title": "Automatiza las altas a partir del CSV de RR. HH.",
+ "summary": "Convierte el bucle Import-Csv de una sola vez en un script por el que pasa solo la hoja semanal de RR. HH.: con validaciones, con registro y seguro de ejecutar dos veces.",
+ "why": "La primera vez que llegan nuevos empleados, un bucle en la consola está bien (la lección onboard-new-starters). A la tercera semana es una tarea que sale mal el día que no estás: RR. HH. envía a la misma persona dos veces, un departamento del que nadie avisó a TI, una errata en un nombre de usuario. Un script de altas es el mismo bucle con las comprobaciones que un administrador cuidadoso hace a ojo: ¿existe ya la cuenta?, ¿tiene grupo el departamento?, ¿están todas las columnas? Lo que pasa se crea; lo que falla se escribe en un registro con palabras con las que RR. HH. puede actuar; la hoja se mueve para que nunca se procese dos veces, y una tarea programada lo ejecuta cada mañana.\n\nPulsa Romper y la hoja de esta semana de RR. HH. aparece en C:\\HR\\Joiners en dc01, la carpeta de entrega a la que apunta su recurso compartido. Seis filas: un departamento todavía no tiene grupo y una persona aparece dos veces en la hoja.",
+ "concepts": [
+  "Una carpeta de entrega: RR. HH. escribe, el script de TI lee, una carpeta Processed guarda lo que se hizo y una carpeta Logs explica por qué algo no se hizo",
+  "Idempotencia: una segunda ejecución con la misma hoja no cambia nada, porque el script omite las cuentas que ya existen (Get-ADUser -Filter sobre SamAccountName)",
+  "Validar antes de crear: el grupo G- del departamento debe existir, el SamAccountName debe estar libre, las columnas obligatorias deben estar rellenas",
+  "Una primera contraseña que nadie escribe: generada para cada persona, establecida con -ChangePasswordAtLogon y entregada por otro canal (nunca en el registro)",
+  "Ejecución desatendida: una tarea programada como SYSTEM en el DC (o una gMSA con derechos delegados), Start-Transcript o un archivo de registro por ejecución, y LastTaskResult para vigilarla"
+ ],
+ "steps": [
+  "Pulsa Romper (o winlab break dc01 hr-joiners-drop). Lee la hoja: Import-Csv C:\\HR\\Joiners\\joiners-*.csv | Format-Table DisplayName, Department, SamAccountName.",
+  "Compárala con el directorio: Get-ADGroup -Filter \"Name -like 'G-*'\" | Select-Object Name. Anota el departamento sin grupo y la persona que aparece dos veces.",
+  "Crea las carpetas que usa el script: New-Item -ItemType Directory C:\\Scripts, C:\\HR\\Joiners\\Processed, C:\\HR\\Joiners\\Logs -Force.",
+  "Escribe C:\\Scripts\\New-Starters.ps1 en un editor (notepad o PowerShell ISE). Su estructura: $log = Join-Path C:\\HR\\Joiners\\Logs ('run-' + (Get-Date -Format yyyyMMdd-HHmm) + '.log'); foreach ($file in Get-ChildItem C:\\HR\\Joiners -Filter *.csv -File) { foreach ($r in Import-Csv $file.FullName) { ... }; Move-Item $file.FullName C:\\HR\\Joiners\\Processed -Force }.",
+  "Dentro del bucle de filas, comprueba antes de crear: if (Get-ADUser -Filter \"SamAccountName -eq '$($r.SamAccountName)'\") { Add-Content $log \"skip $($r.SamAccountName): exists\"; continue }; $g = 'G-' + ($r.Department -replace ' ', ''); if (-not (Get-ADGroup -Filter \"Name -eq '$g'\")) { Add-Content $log \"refuse $($r.SamAccountName): no group $g\"; continue }.",
+  "Crea la cuenta con una primera contraseña generada al azar para cada persona ($first = ConvertTo-SecureString -AsPlainText -Force ([guid]::NewGuid().ToString('N').ToUpper() + '-' + [guid]::NewGuid().ToString('N'))); New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $first -ChangePasswordAtLogon $true -Enabled $true; Add-ADGroupMember $g -Members $r.SamAccountName; Add-Content $log \"created $($r.SamAccountName)\".",
+  "Ejecútalo una vez a mano: powershell -NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1. Lee el registro y comprueba las cuentas con Get-ADUser -Filter * -SearchBase 'OU=Staff,DC=corp,DC=lab' -Properties Department | Format-Table SamAccountName, Department, Enabled.",
+  "Demuestra que es seguro ejecutarlo dos veces: copia la hoja procesada de vuelta en C:\\HR\\Joiners y vuelve a ejecutar el script. El registro dice skip en cada fila; no aparece nada nuevo.",
+  "Prográmalo: Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\\Scripts\\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM -RunLevel Highest. Start-ScheduledTask 'New starters', y después (Get-ScheduledTaskInfo 'New starters').LastTaskResult es 0.",
+  "Cuéntale a RR. HH. lo de Marketing con sus propias palabras (la línea del registro) y luego pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "Un script sin la comprobación de 'exists' falla a mitad de la segunda ejecución o, peor aún, crea tbecker2 porque alguien 'arregló' el error con un contador.",
+  "Escribir las primeras contraseñas en el registro o en un CSV: los registros los lee más gente de la que crees. Entrega la contraseña por teléfono o en persona y obliga a la persona a cambiarla en el primer inicio de sesión.",
+  "Un nombre de departamento con espacio (Front desk) se convierte en G-Frontdesk en un sitio y en G-FrontDesk en otro; normalízalo en una sola línea del script y usa ese valor en todas partes.",
+  "Nunca dejes que la tarea programada ejecute un script que cualquiera puede editar: en C:\\Scripts solo deben poder escribir los administradores; si no, quien pueda cambiar el script ejecuta código como SYSTEM en un DC."
+ ],
+ "verify": [
+  "las altas de esta semana",
+  "la carpeta de entrega, las hojas procesadas y los registros",
+  "la tarea y su último resultado"
+ ],
+ "quiz": [
+  {
+   "q": "RR. HH. envía a la misma persona en dos hojas. ¿Qué evita que el script de altas falle o cree un duplicado?",
+   "answer": "Comprueba si el SamAccountName existe y, si es así, omite la fila",
+   "wrong": [
+    "New-ADUser sobrescribe la cuenta existente",
+    "Import-Csv elimina las filas duplicadas",
+    "La tarea programada se ejecuta solo una vez por hoja"
+   ],
+   "why": "Comprobar antes de crear hace que el script sea idempotente: ejecutarlo dos veces no cambia nada la segunda vez."
+  },
+  {
+   "q": "Una fila indica un departamento que no tiene grupo. ¿Qué debe hacer el script?",
+   "answer": "Rechazar la fila y registrar el motivo, para que RR. HH. o TI corrijan la causa",
+   "wrong": [
+    "Crear el usuario sin grupo",
+    "Crear al vuelo el grupo que falta",
+    "Detener toda la ejecución"
+   ],
+   "why": "Inventar grupos a partir de una hoja de cálculo hace crecer el directorio por accidente; una fila rechazada con un motivo es una pregunta para una persona."
+  },
+  {
+   "q": "¿Dónde debe estar la primera contraseña de un nuevo empleado?",
+   "answer": "Entregada por otro canal, con la opción de cambiarla en el siguiente inicio de sesión activada",
+   "wrong": [
+    "En el registro de la ejecución, para que el soporte técnico pueda leerla",
+    "En el CSV que envía RR. HH.",
+    "En el campo Description de la cuenta"
+   ],
+   "why": "Los registros y las descripciones los pueden leer muchos; la primera contraseña solo vive hasta que la persona inicia sesión y elige la suya."
+  }
+ ]
+}

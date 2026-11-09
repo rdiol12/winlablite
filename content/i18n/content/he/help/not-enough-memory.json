@@ -1,0 +1,15 @@
+{
+ "Not enough memory to start the machines": "אין מספיק זיכרון כדי להפעיל את המכונות",
+ "Common problems": "בעיות נפוצות",
+ "memory": "זיכרון",
+ "ram": "ram",
+ "not enough memory": "אין מספיק זיכרון",
+ "won't start": "לא עולה",
+ "refuses": "מסרב",
+ "low-memory": "זיכרון נמוך",
+ "lean": "רזה",
+ "thrash": "עומס",
+ "slow": "איטי",
+ "What to do when winlab says the machines do not fit.": "מה לעשות כש-winlab אומר שהמכונות לא נכנסות.",
+ "Before anything boots, winlab compares what the machines need with the memory free on this PC right now. If they do not fit, it trims the servers for that run, and if they still do not fit it says so instead of letting the PC grind to a halt.\n\n- **Start only what the lesson needs.** Use Start these machines in the Lab guide (or `winlab learn start <lesson>`), not the whole lab.\n- **Turn machines off** that the current lesson does not use, in Machines.\n- **Close other programs** on this PC, especially browsers with many tabs. They take memory the machines could use.\n- **Use the Low-memory profile** (the switch in the Start menu, or Settings for this lab). It turns off what an isolated machine gets nothing from, so a server works in 1.5 GB. It takes effect the next time a machine is set up.\n\nAn 8 GB PC runs every one- and two-machine lesson. See System requirements for more.": "לפני שמשהו עולה, winlab משווה את מה שהמכונות צריכות לזיכרון הפנוי במחשב הזה ברגע זה. אם הן לא נכנסות, הוא מקצץ את השרתים להרצה הזו, ואם הן עדיין לא נכנסות הוא אומר זאת במקום לתת למחשב להיתקע.\n\n- **הפעל רק את מה שהשיעור צריך.** השתמש בהפעל את המכונות האלה במדריך המעבדה (או `winlab learn start <lesson>`), לא במעבדה כולה.\n- **כבה מכונות** שהשיעור הנוכחי לא משתמש בהן, במכונות.\n- **סגור תוכניות אחרות** במחשב הזה, במיוחד דפדפנים עם הרבה כרטיסיות. הם תופסים זיכרון שהמכונות יכלו להשתמש בו.\n- **השתמש בפרופיל זיכרון נמוך** (המתג בתפריט התחל, או בהגדרות של המעבדה הזו). הוא מכבה את מה שמכונה מבודדת לא מרוויחה ממנו כלום, כך ששרת עובד ב-1.5 GB. הוא נכנס לתוקף בפעם הבאה שמכונה מוכנה.\n\nמחשב עם 8 GB מריץ כל שיעור של מכונה אחת ושתי מכונות. ראה דרישות מערכת למידע נוסף."
+}

@@ -1,0 +1,15 @@
+{
+ "A partner domain, aging on, and one static record": "Un dominio asociado, envejecimiento activado y un registro estático",
+ "A partner company's names live at partner.lab, served by their DNS server at\n10.10.10.99; your users must resolve them without asking the Internet. Your\nown zone collects stale records from machines that left years ago, and the\nintranet needs a name that never ages out.": "Los nombres de una empresa asociada están en partner.lab, servidos por su servidor DNS en\n10.10.10.99; tus usuarios deben resolverlos sin preguntar a Internet. Tu\npropia zona acumula registros obsoletos de máquinas que se fueron hace años, y la\nintranet necesita un nombre que nunca caduque.",
+ "Add a conditional forwarder for partner.lab to 10.10.10.99": "Añade un reenviador condicional para partner.lab hacia 10.10.10.99",
+ "Turn on aging for the corp.lab zone (the server-wide scavenging setting is up to you)": "Activa el envejecimiento para la zona corp.lab (la configuración de limpieza de todo el servidor queda a tu criterio)",
+ "Create a static A record intranet.corp.lab pointing at 10.10.10.20": "Crea un registro A estático intranet.corp.lab que apunte a 10.10.10.20",
+ "partner.lab is a conditional forwarder": "partner.lab es un reenviador condicional",
+ "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Add-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "it forwards to the partner's server": "reenvía al servidor del asociado",
+ "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99": "Set-DnsServerConditionalForwarderZone -Name partner.lab -MasterServers 10.10.10.99",
+ "aging is on for corp.lab": "el envejecimiento está activado para corp.lab",
+ "Set-DnsServerZoneAging -Name corp.lab -Aging $true (no-refresh and refresh default to 7 days each)": "Set-DnsServerZoneAging -Name corp.lab -Aging $true (no-refresh y refresh son de 7 días cada uno por defecto)",
+ "intranet is a static record for 10.10.10.20": "intranet es un registro estático para 10.10.10.20",
+ "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; a static record has no Timestamp, so scavenging never removes it": "Add-DnsServerResourceRecordA -ZoneName corp.lab -Name intranet -IPv4Address 10.10.10.20; un registro estático no tiene Timestamp, así que la limpieza nunca lo elimina"
+}

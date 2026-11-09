@@ -1,0 +1,18 @@
+{
+ "A Finance folder only Finance can open, invisible to everyone else": "Una carpeta Finance que solo Finance puede abrir, invisible para todos los demás",
+ "Finance keeps its files inside the Company share. Only the finance team may\nread or change them, and other staff should not even see the folder. Do it\nwith a group on the folder's NTFS ACL and access-based enumeration on the\nshare, not with a second share.": "Finance guarda sus archivos dentro del recurso compartido Company. Solo el equipo de finanzas puede\nleerlos o modificarlos, y el resto del personal ni siquiera debería ver la carpeta. Hazlo\ncon un grupo en la ACL NTFS de la carpeta y la enumeración basada en el acceso en el\nrecurso compartido, no con un segundo recurso compartido.",
+ "On dc01, create the global security group G-Finance": "En dc01, crea el grupo de seguridad global G-Finance",
+ "On fs01, create D:\\Shares\\Company\\Finance, disable inheritance and remove the inherited entries": "En fs01, crea D:\\Shares\\Company\\Finance, deshabilita la herencia y quita las entradas heredadas",
+ "Grant G-Finance Modify on the folder; keep Administrators and SYSTEM Full Control; no Users, Domain Users, Authenticated Users or Everyone": "Concede a G-Finance Modificar en la carpeta; mantén Administrators y SYSTEM con Control total; nada de Users, Domain Users, Authenticated Users ni Everyone",
+ "Make sure access-based enumeration is on for the Company share": "Asegúrate de que la enumeración basada en el acceso esté activada en el recurso compartido Company",
+ "G-Finance exists": "G-Finance existe",
+ "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security": "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security",
+ "Finance does not inherit from Company": "Finance no hereda de Company",
+ "icacls D:\\Shares\\Company\\Finance /inheritance:r removes inherited entries; the Security tab's Advanced > Disable inheritance does the same": "icacls D:\\Shares\\Company\\Finance /inheritance:r quita las entradas heredadas; Advanced > Disable inheritance en la pestaña Security hace lo mismo",
+ "G-Finance has Modify": "G-Finance tiene Modificar",
+ "icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'": "icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'",
+ "nobody else is let in": "no se deja entrar a nadie más",
+ "icacls lists every entry; remove the broad ones with icacls <folder> /remove:g Users (and Authenticated Users, Everyone)": "icacls enumera cada entrada; quita las amplias con icacls <folder> /remove:g Users (y Authenticated Users, Everyone)",
+ "access-based enumeration is on": "la enumeración basada en el acceso está activada",
+ "Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force": "Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force"
+}

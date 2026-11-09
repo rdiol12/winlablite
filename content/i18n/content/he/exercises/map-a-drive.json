@@ -1,0 +1,14 @@
+{
+ "Map a network drive with Group Policy": "מפה כונן רשת באמצעות מדיניות קבוצתית",
+ "Sales wants the company share as drive S: on every logon. Do it once, centrally,\nwith a Group Policy Preference, not with a logon script on each PC. Drive maps\nare a *user* setting, so the GPO links to the OU that holds the users. Builds\non create-ou-and-user (OU=Sales, jdoe) and on the file role's Company share on\nfs01.": "המכירות רוצים את שיתוף החברה ככונן S: בכל כניסה. עשה זאת פעם אחת, באופן מרכזי,\nעם העדפת מדיניות קבוצתית, לא עם סקריפט כניסה בכל מחשב. מיפויי כוננים\nהם הגדרת *משתמש*, ולכן ה-GPO מקושר ל-OU שמכיל את המשתמשים. מתבסס\nעל create-ou-and-user (OU=Sales, jdoe) ועל השיתוף Company של תפקיד הקבצים ב-\nfs01.",
+ "Create a GPO named 'Map S Drive'": "צור GPO בשם 'Map S Drive'",
+ "In User Configuration > Preferences > Drive Maps, map S: to \\\\fs01\\Company (action Update, reconnect on)": "ב-User Configuration > Preferences > Drive Maps, מפה את S: אל \\\\fs01\\Company (פעולה Update, התחברות מחדש מופעלת)",
+ "Link the GPO to OU=Sales": "קשר את ה-GPO ל-OU=Sales",
+ "Log on to pc01 as jdoe and confirm S: appears (gpupdate /force if needed)": "היכנס ל-pc01 כ-jdoe וודא ש-S: מופיע (gpupdate /force אם צריך)",
+ "GPO is linked to OU=Sales": "ה-GPO מקושר ל-OU=Sales",
+ "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'": "New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'",
+ "S: maps to the fs01 Company share": "S: ממופה לשיתוף Company של fs01",
+ "The path is the share's UNC path, \\\\fs01\\Company; the drive letter is S": "הנתיב הוא נתיב ה-UNC של השיתוף, \\\\fs01\\Company; אות הכונן היא S",
+ "jdoe can reach the share": "jdoe יכול להגיע לשיתוף",
+ "A mapped drive to a share the user cannot open fails silently at logon": "כונן ממופה לשיתוף שהמשתמש לא יכול לפתוח נכשל בשקט בכניסה"
+}

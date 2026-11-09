@@ -36,7 +36,7 @@ NVRAM_BYTES = 33554432
 # Settings that are the device's hardware or its state, not its
 # configuration: where its cables are, what is err-disabled now.
 PHYSICAL = ("rport:", "cable:", "rports", "console", "xcable:", "port:", "psec-err:", "psec-stuck:",
-            "stp-err:", "errdis-cause:", "psec-viol:", "power", "ec-err:")
+            "stp-err:", "errdis-cause:", "psec-viol:", "power", "ec-err:", "aaa-names")
 _SCRAMBLE = "dsfd;kfoA,.iyewrkldJKDHSUBsgvca69834ncxv9873254k;fg87"
 _STD = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 _CISCO = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -142,6 +142,10 @@ def ask(con, kind: str, prompt: str, secret: bool = False, tries: int = 3, **dat
 
 def begin(con) -> str:
     """A session starting on the console: the login the line asks for."""
+    from . import aaa  # aaa new-model: the method lists decide (winlab/aaa.py)
+    said = aaa.begin(con, "con") if not con.s.authed else None
+    if said is not None:
+        return said
     how = console_login(con.lab, con.device)
     if how and not con.s.authed:
         if how == "local":
@@ -211,7 +215,7 @@ def answer(con, line: str) -> str:
     if kind == "erase":
         if text.lower() not in ("", "y", "yes", "confirm"):
             return ""
-        erase(con.lab, con.device)
+        erase(con.lab, _key(con))
         return "[OK]\nErase of nvram: complete"
     if kind == "reload-save":
         w = text.lower()
@@ -296,7 +300,7 @@ def write(con) -> str:
     body = "\n".join(text[2:]) if len(text) > 2 else "\n".join(text)
     body = body.replace("Current configuration", "", 1).lstrip(" :0123456789bytes\n")
     snap["text"] = body
-    data.setdefault("devices", {})[con.device] = snap
+    data.setdefault("devices", {})[_key(con)] = snap
     _save_store(lab.name, data)
     return "Building configuration...\n[OK]"
 
@@ -316,10 +320,16 @@ def startup_text(lab, device: str) -> str:
     return f"Using {len(body)} out of {NVRAM_BYTES} bytes\n{body}"
 
 
+def _key(con) -> str:
+    """Where a console's device keeps its startup configuration: its own
+    devices key (an extra router's is router:<id>, winlab/routers.py)."""
+    return getattr(con, "dev_key", con.device)
+
+
 def unsaved(con) -> bool:
     """Whether the running configuration differs from the startup one."""
     data = load(con.lab.name) or {}
-    snap = (data.get("devices") or {}).get(con.device)
+    snap = (data.get("devices") or {}).get(_key(con))
     now = snapshot(con.lab, con.device)
     if not snap or snap.get("erased"):
         return has_config(con.lab, con.device)
@@ -369,8 +379,17 @@ def revert(lab, device: str, snap: dict | None) -> bool:
 
 
 def _devices(lab) -> list[str]:
-    from . import devcli
-    return [devcli.ROUTER] + [f"sw:{s}" for s in devcli.switches(lab)]
+    from . import devcli, routers
+    return ([devcli.ROUTER] + [routers.key(r) for r in routers.extra(lab)]
+            + [f"sw:{s}" for s in devcli.switches(lab)])
+
+
+def _as_seen(lab, dev: str):
+    """(the lab as the device sees it, its device name there): an extra
+    router is the router on its own view of the lab."""
+    from . import routers
+    rid = routers.rid_of(dev)
+    return (routers.view(lab, rid), "router") if rid else (lab, dev)
 
 
 def power_on(lab) -> bool:
@@ -378,9 +397,12 @@ def power_on(lab) -> bool:
     configuration. The first time (a lab from before startup
     configurations), what each device has is kept as written. Returns
     whether the lab file changed."""
+    from . import iosboot  # each device starts: its image, the register (0x2142 ignores NVRAM), the Break window
+    blank = iosboot.power_on(lab, _devices(lab))
     data = load(lab.name)
     if data is None:
-        data = {"devices": {d: {**snapshot(lab, d), "text": ""} for d in _devices(lab) if has_config(lab, d)}}
+        data = {"devices": {d: {**snapshot(*_as_seen(lab, d)), "text": ""} for d in _devices(lab)
+                            if has_config(*_as_seen(lab, d))}}
         for snap in data["devices"].values():
             snap.pop("text")
         _save_store(lab.name, data)
@@ -388,24 +410,17 @@ def power_on(lab) -> bool:
     changed = False
     for dev in _devices(lab):
         snap = (data.get("devices") or {}).get(dev)
+        if dev in blank:
+            changed = revert(*_as_seen(lab, dev), None) or changed
+            continue
         if snap is None and not lab.workbench:
             continue  # a lesson lab's device as its lab file sets it up
-        changed = revert(lab, dev, None if snap is None or snap.get("erased") else snap) or changed
+        changed = revert(*_as_seen(lab, dev), None if snap is None or snap.get("erased") else snap) or changed
     return changed
 
 
 def reload(con) -> str:
-    """reload: the device starts again with its startup configuration."""
-    lab = con.lab
-    data = load(lab.name) or {}
-    snap = (data.get("devices") or {}).get(con.device)
-    changed = False
-    if snap is not None or lab.workbench:
-        changed = revert(lab, con.device, None if snap is None or snap.get("erased") else snap)
-    note = con._save() if changed else ""
-    from .devcli import Session
-    con.s = Session(con.device, boot=con.s.boot)
-    con.s.mode = "idle"
-    return ("\n%SYS-5-RELOAD: Reload requested by console. Reload Reason: Reload Command."
-            + (f"\n{note.strip()}" if note.strip() else "")
-            + f"\n\n{con.banner_text()}Press RETURN to get started.")
+    """reload: the device starts again with its startup configuration (its
+    image, the configuration register and the Break window: winlab/iosboot.py)."""
+    from . import iosboot
+    return iosboot.restart(con)

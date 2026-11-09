@@ -1,0 +1,52 @@
+[solution]
+exercise = "first-look-at-dc01"
+notes = "Typed on dc01's own keyboard (winlab keys), as the lesson does at its screen: sign in, open PowerShell, ask."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 <ctrl-alt-del>
+'''
+wait = 10
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 {{winlab:lab-secret}} <enter>
+'''
+wait = 120
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 <win-r>
+'''
+wait = 5
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 powershell <enter>
+'''
+wait = 20
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 "Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion" <enter>
+'''
+wait = 40
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+keys ad-ds-basics dc01 ipconfig <enter>
+keys ad-ds-basics dc01 "Test-NetConnection 10.10.10.1" <enter>
+'''
+wait = 30

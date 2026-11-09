@@ -1,0 +1,37 @@
+[solution]
+exercise = "joiners-from-hr-csv"
+notes = "The lesson's break (hr-joiners-drop) leaves the sheet in C:\\HR\\Joiners; the script is the lesson's, written with Set-Content."
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+New-Item -ItemType Directory C:\Scripts, C:\HR\Joiners\Processed, C:\HR\Joiners\Logs -Force | Out-Null
+if (-not (Get-ADOrganizationalUnit -Filter "Name -eq 'Staff'")) { New-ADOrganizationalUnit -Name Staff -Path 'DC=corp,DC=lab' }
+$script = @'
+$log = Join-Path C:\HR\Joiners\Logs ('run-' + (Get-Date -Format yyyyMMdd-HHmmss) + '.log')
+foreach ($file in Get-ChildItem C:\HR\Joiners -Filter *.csv -File) {
+  foreach ($r in Import-Csv $file.FullName) {
+    if (Get-ADUser -Filter "SamAccountName -eq '$($r.SamAccountName)'") { Add-Content $log "skip $($r.SamAccountName): exists"; continue }
+    $g = 'G-' + ($r.Department -replace ' ', '')
+    if (-not (Get-ADGroup -Filter "Name -eq '$g'")) { Add-Content $log "refuse $($r.SamAccountName): no group $g"; continue }
+    $first = ConvertTo-SecureString -AsPlainText -Force ([guid]::NewGuid().ToString('N').ToUpper() + '-' + [guid]::NewGuid().ToString('N'))
+    New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $first -ChangePasswordAtLogon $true -Enabled $true
+    Add-ADGroupMember -Identity $g -Members $r.SamAccountName
+    Add-Content $log "create $($r.SamAccountName) in $g"
+  }
+  Move-Item $file.FullName C:\HR\Joiners\Processed -Force
+}
+'@
+Set-Content -Path C:\Scripts\New-Starters.ps1 -Value $script -Encoding UTF8
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\Scripts\New-Starters.ps1
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Register-ScheduledTask -TaskName 'New starters' -Action (New-ScheduledTaskAction -Execute powershell.exe -Argument '-NoProfile -ExecutionPolicy Bypass -File C:\Scripts\New-Starters.ps1') -Trigger (New-ScheduledTaskTrigger -Daily -At 06:00) -User SYSTEM -RunLevel Highest -Force | Out-Null
+Start-ScheduledTask 'New starters'
+'''
+wait = 10

@@ -426,6 +426,30 @@ def prepare_fabric(fetch_packages: bool = True) -> Path:
         except openbmcui.OpenBmcUiError as exc:
             print(f"  warning: OpenBMC web UI fetch failed ({exc}); the servers' management "
                   f"ports serve winlab's own BMC pages until it is fetched")
+        # The capture probe's packet view: Termshark's release, onto the same volume.
+        from . import termshark
+        try:
+            termshark.fetch(progress=lambda m: print(f"  {m}"))
+        except termshark.TermsharkError as exc:
+            print(f"  warning: Termshark fetch failed ({exc}); the capture probe keeps tcpdump "
+                  f"and tshark until it is fetched")
+        # Real Wi-Fi for the Linux laptops: winlab's vwifi build, onto the same
+        # volume for the router (and onto the wifi pack's stick for the laptops).
+        from . import vwifi
+        try:
+            vwifi.fetch(progress=lambda m: print(f"  {m}"))
+        except vwifi.VwifiError as exc:
+            print(f"  warning: vwifi fetch failed ({exc}); Linux laptops have no real air until it is "
+                  f"fetched, Windows laptops keep the simulated one")
+        # Rapid spanning tree for the switches: winlab's release of mstpd built
+        # from its source, onto the same volume for the router; skipped (said
+        # so) until a build is published and pinned.
+        from . import mstpd
+        try:
+            mstpd.fetch(progress=lambda m: print(f"  {m}"))
+        except mstpd.MstpdError as exc:
+            print(f"  warning: mstpd fetch failed ({exc}); spanning-tree mode rapid-pvst stays the "
+                  f"kernel's 802.1D with short timers until it is fetched")
     else:
         cache = apkrepo.cached()
     if cache is not None:

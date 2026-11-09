@@ -1,0 +1,66 @@
+{
+ "title": "Bucles de conmutación, spanning tree y el puente raíz",
+ "summary": "Un cable de reserva entre switches es un bucle. Spanning tree lo bloquea; tú decides qué switch es la raíz.",
+ "why": "Las oficinas cablean los switches dos veces a propósito, para que un cable roto no deje aislada una planta. Dos caminos entre dos switches son un bucle, y Ethernet no tiene tiempo de vida: un broadcast que da la vuelta a un bucle sigue dándola para siempre, copiado en cada switch, hasta que los enlaces y los procesadores de los switches están llenos. Eso es una tormenta de broadcast, y tumba toda la red en segundos.\n\nSpanning tree (802.1D, y el PVST+ por VLAN de Cisco sobre él) es la forma en que los switches conviven con los cables de reserva. Eligen un puente raíz, el que tiene el ID de puente más bajo (primero la prioridad, luego su dirección MAC); cada uno de los demás switches conserva su camino más barato hacia la raíz (su puerto raíz), cada cable recibe un extremo designado, y todo puerto sobrante bloquea hasta que se necesita. Un switch nuevo viene con spanning tree activado con prioridad 32768, así que, si nadie lo toca, la raíz es el switch con la dirección más baja: a menudo el más viejo de un armario. Elegir la raíz (el switch core, donde está el router) es lo primero que hay que configurar.\n\nEn este laboratorio los cables de los switches son bridges reales del kernel en el router, y el kernel ejecuta para ellos el 802.1D clásico: un árbol para todas las VLAN, con la configuración de la VLAN 1. Un bucle con spanning tree desactivado inunda de verdad; winlab lo limita para que tu PC siga siendo utilizable.",
+ "concepts": [
+  "ID de puente: prioridad (32768 por defecto, en pasos de 4096) y luego dirección MAC; el más bajo es el puente raíz",
+  "Roles de puerto: puerto raíz (el mejor camino hacia la raíz), puerto designado (reenvía hacia un cable), alternativo o de respaldo (bloqueando)",
+  "Coste de ruta: 4 para un enlace gigabit, 19 para 100 Mbit; spanning-tree cost lo cambia en un puerto",
+  "Temporizadores: hello 2 s, max age 20 s, forward delay 15 s: un puerto escucha, luego aprende y luego reenvía, 30 s después de que su enlace se active",
+  "Un solo switch con spanning tree activado en un bucle basta para bloquearlo: un switch con él desactivado inunda los BPDU como cualquier trama, así que los demás siguen oyéndose",
+  "PortFast y BPDU guard van en los puertos hacia máquinas: reenvío inmediato, y apagado (err-disabled) en cuanto un switch habla allí"
+ ],
+ "steps": [
+  "Abre el Banco de red. El switch de corp es aquel al que está cableado el router. Añade dos switches desde la estantería y arrastra el enlace ascendente de cada uno (el puerto en el centro de su borde superior, Gi0/1) al switch de corp.",
+  "Crea el bucle: arrastra un puerto gigabit libre de un switch nuevo (arriba a la derecha, de Gi0/2 a Gi0/4) al otro. Aparecen pequeñas marcas en los extremos de los cables: R un puerto raíz, D un puerto designado, B un puerto que spanning tree bloquea.",
+  "Lee el árbol en la consola de cada switch (doble clic en él): enable, show spanning-tree. Anota el Root ID: qué switch es la raíz y por qué (compara las prioridades y las direcciones). show spanning-tree summary cuenta los puertos bloqueados; show cdp neighbors muestra qué cable va adónde.",
+  "Elige la raíz: en el switch de corp, configure terminal y luego spanning-tree vlan 1 priority 4096 (spanning-tree vlan 1 root primary hace la misma cuenta por ti). En uno de los otros: spanning-tree vlan 1 root secondary. Observa cómo se mueven las marcas, y show spanning-tree de nuevo en el switch que bloqueaba antes.",
+  "Dirige el cable bloqueado: en un switch de abajo, interface gi0/1, spanning-tree cost 100. Su enlace ascendente es ahora más caro que dar la vuelta por el cable de reserva, así que el puerto raíz se mueve. no spanning-tree cost lo devuelve. spanning-tree port-priority 64 decide entre dos caminos iguales.",
+  "Cronometra un cambio: desconecta el cable de reserva y vuelve a conectarlo, luego ejecuta show spanning-tree varias veces en el switch que bloquea: el puerto escucha y aprende durante 30 s antes de reenviar. spanning-tree mode rapid-pvst en todos los switches lo deja en alrededor de un segundo: spanning tree rápido real, ejecutado por mstpd en el router (la lección de spanning tree rápido lo cronometra); si este PC todavía no ha descargado mstpd, la consola lo dice y rapid-pvst solo acorta la espera a 8 s.",
+  "Ahora mira por qué está ahí. Enciende pc01, abre su pantalla y deja ping -t 10.10.10.1 en marcha. En los dos switches por debajo del de corp, configure terminal, no spanning-tree vlan 1. El switch de corp sigue ejecutándolo y bloquea: no pasa nada. Luego también en el switch de corp: no spanning-tree vlan 1. El anillo se vuelve rojo: una tormenta de broadcast. show processes cpu en cualquier switch, y mira los pings de pc01.",
+  "Termínala con un comando en un switch: spanning-tree vlan 1. Luego vuelve a activarlo en todos: un switch con spanning tree desactivado es un bucle esperando un cable.",
+  "Protege los puertos de acceso: en el switch donde está pc01, interface fa0/1, spanning-tree portfast, spanning-tree bpduguard enable (o para todos los puertos de acceso a la vez: spanning-tree portfast default y spanning-tree portfast bpduguard default). Nunca en un enlace ascendente: allí siempre habla un switch.",
+  "Practica: haz clic en un switch y en Practicar elige Esconder un bucle en mis switches o Esconder un fallo de BPDU guard. Encuéntralo con el lienzo y las consolas, arréglalo y pulsa Comprobar mi arreglo."
+ ],
+ "pitfalls": [
+  "Desactivar spanning tree para librarse de la espera de 30 s: usa en su lugar spanning-tree portfast en los puertos hacia máquinas, y deja el árbol activado.",
+  "Dejar la raíz al azar: un switch nuevo con una dirección más baja se convierte en raíz y el tráfico toma otro camino, a menudo peor.",
+  "BPDU guard en un enlace ascendente lo pone en err-disabled al instante; no spanning-tree bpduguard por sí solo no lo recupera: shutdown y luego no shutdown.",
+  "Este laboratorio ejecuta un único árbol 802.1D para todas las VLAN: spanning-tree vlan 10 priority se guarda y se muestra, pero decide la configuración de la VLAN 1."
+ ],
+ "verify": [
+  "los bridges de switch en el router: spanning tree activado, la raíz, el estado de cada puerto"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué switch se convierte en el puente raíz?",
+   "answer": "El que tiene el ID de puente más bajo: la prioridad más baja y luego la dirección MAC más baja",
+   "wrong": [
+    "El que está cableado al router",
+    "El que tiene más puertos",
+    "El primero que se enciende"
+   ],
+   "why": "Primero la prioridad (32768 por defecto), luego la dirección desempata; por eso la raíz debe configurarse a mano."
+  },
+  {
+   "q": "Tres switches en anillo; spanning tree está desactivado en dos de ellos. ¿Qué pasa?",
+   "answer": "Nada malo: el tercero sigue ejecutándolo y bloquea uno de sus puertos",
+   "wrong": [
+    "Una tormenta de broadcast",
+    "El anillo se divide en dos",
+    "El router bloquea el bucle"
+   ],
+   "why": "Un switch con spanning tree desactivado inunda los BPDU como cualquier trama, así que el que lo ejecuta oye volver sus propios BPDU y bloquea."
+  },
+  {
+   "q": "¿Dónde van PortFast y BPDU guard?",
+   "answer": "En los puertos de acceso, hacia máquinas",
+   "wrong": [
+    "En los enlaces ascendentes entre switches",
+    "En los puertos del puente raíz",
+    "Solo en los trunks"
+   ],
+   "why": "Dicen 'aquí no hay switch': un BPDU en un puerto así lo pone en err-disabled, lo cual es correcto para un puerto de escritorio y fatal para un enlace ascendente."
+  }
+ ]
+}

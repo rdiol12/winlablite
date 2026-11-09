@@ -1,0 +1,16 @@
+{
+ "Promote the first domain controller": "קדם את בקר התחום הראשון",
+ "dc01 is a fresh Windows Server with a static address but no roles. Turn it into\nthe forest root domain controller for corp.lab, running DNS. Everything else in\nthe lab depends on this, so it is exercise one.": "dc01 הוא Windows Server חדש עם כתובת סטטית אך ללא תפקידים. הפוך אותו לבקר התחום של שורש היער עבור corp.lab, עם DNS פועל. כל השאר במעבדה תלוי בזה, ולכן זה התרגיל הראשון.",
+ "On dc01, install the AD-Domain-Services role": "ב-dc01, התקן את התפקיד AD-Domain-Services",
+ "Promote dc01 to a new forest named corp.lab (NetBIOS CORP)": "קדם את dc01 ליער חדש בשם corp.lab (NetBIOS CORP)",
+ "Let it install DNS during promotion": "אפשר לו להתקין DNS במהלך הקידום",
+ "After the reboot, confirm the domain and the DNS service are up": "לאחר האתחול, ודא שהתחום ושירות ה-DNS פועלים",
+ "AD DS role installed": "תפקיד AD DS מותקן",
+ "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools": "Install-WindowsFeature AD-Domain-Services -IncludeManagementTools",
+ "forest corp.lab exists": "היער corp.lab קיים",
+ "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP": "Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP",
+ "this host is a domain controller": "מחשב זה הוא בקר תחום",
+ "DNS service running": "שירות DNS פועל",
+ "DNS is installed automatically if you pass -InstallDns to Install-ADDSForest": "DNS מותקן אוטומטית אם תעביר -InstallDns ל-Install-ADDSForest",
+ "forward lookup zone for corp.lab": "אזור בדיקת מידע קדימה עבור corp.lab"
+}

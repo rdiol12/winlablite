@@ -24,6 +24,23 @@ mkdir -p "$done_dir"
 
 # ---- 0. installed already: start it, as the appliance does at every boot ---
 if [ -f /etc/freepbx.conf ] && command -v fwconsole >/dev/null 2>&1; then
+    # A phone system installed before the lab's callers spoke (flite) takes
+    # it from a newer pack stick when one is plugged in; nothing else changes.
+    if ! command -v flite >/dev/null 2>&1; then
+        mp="${WINLAB_PACK_MOUNT:-/mnt/winlab-pack}"; mkdir -p "$mp"
+        if mountpoint -q "$mp" || mount -o ro "LABEL=${WINLAB_PACK_LABEL:-WLPACK}" "$mp" 2>/dev/null; then
+            if ls "$mp"/flite_*.deb >/dev/null 2>&1; then
+                l=/etc/apt/sources.list.d/winlab-pack.list
+                echo "deb [trusted=yes] file:$mp ./" > "$l"
+                apt-get -q -o Dir::Etc::sourcelist="$l" -o Dir::Etc::sourceparts=- update >/dev/null 2>&1 &&
+                    apt-get -q -y --no-install-recommends -o Dir::Etc::sourcelist="$l" -o Dir::Etc::sourceparts=- \
+                        install flite >/dev/null 2>&1 &&
+                    log 'flite installed from the pack: the helpdesk callers can speak'
+                rm -f "$l"
+            fi
+            umount "$mp" 2>/dev/null || true
+        fi
+    fi
     systemctl start mariadb apache2 >/dev/null 2>&1
     systemctl start freepbx >/dev/null 2>&1 || fwconsole start -q >/dev/null 2>&1
     date -Iseconds > "$done_dir/$role"
@@ -71,7 +88,7 @@ pkgs="apache2 libapache2-mod-php8.2 mariadb-server mariadb-client
 php8.2 php8.2-cli php8.2-common php8.2-curl php8.2-mysql php8.2-gd
 php8.2-mbstring php8.2-intl php8.2-xml php8.2-bz2 php8.2-zip
 php8.2-ldap php8.2-sqlite3 php8.2-bcmath php8.2-soap php-pear
-nodejs sox mpg123 lame sqlite3 uuid unixodbc odbc-mariadb
+nodejs sox mpg123 lame flite sqlite3 uuid unixodbc odbc-mariadb
 sudo cron incron at curl wget gnupg net-tools
 asterisk22 asterisk22-core asterisk22-addons asterisk22-addons-core
 asterisk22-addons-mysql asterisk22-curl asterisk22-odbc asterisk22-sqlite3

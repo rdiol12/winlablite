@@ -1,6 +1,7 @@
 """Licensing in the winlab trial: there is none.
 
-The trial needs no key and activates nothing. Everything the full winlab
+The trial needs no key and activates nothing. Its one pack (its own
+lessons, encrypted in the installed app) opens with a key built into the exe. Everything the full winlab
 gates behind a licence (the other labs, content packs, the update feed,
 school features) is simply not part of the trial, so every question here
 has the same answer: not licensed. The full winlab is at buy_url().
@@ -76,8 +77,18 @@ def has_feature(_name: str, _st: "LicenseStatus | None" = None) -> bool:
     return False
 
 
-def pack_key(_pack_id: str) -> bytes | None:
-    return None
+def pack_key(pack_id: str) -> bytes | None:
+    """The trial's own pack opens with the key its build compiled in
+    (winlab/licensing/trialkey.py, written by packaging/build-exe.ps1 and
+    never committed). A checkout has plain files and no key."""
+    from ..packs import TRIAL
+    if pack_id != TRIAL:
+        return None
+    try:
+        from . import trialkey  # type: ignore[attr-defined]
+    except ImportError:
+        return None
+    return trialkey.key()
 
 
 def activate(_key: str = "", _server: str = "", _timeout: int = 20) -> LicenseStatus:

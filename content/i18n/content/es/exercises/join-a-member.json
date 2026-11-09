@@ -1,0 +1,12 @@
+{
+ "Join a member server to the domain": "Unir un servidor miembro al dominio",
+ "fs01 is a standalone server. Point its DNS at the domain controller and join it\nto corp.lab. The DNS step is the one everyone forgets: a member that cannot\nresolve the domain's SRV records cannot find a DC to join.": "fs01 es un servidor independiente. Apunta su DNS al controlador de dominio y únelo\na corp.lab. El paso de DNS es el que todos olvidan: un miembro que no puede\nresolver los registros SRV del dominio no puede encontrar un DC al que unirse.",
+ "On fs01, set the preferred DNS server to dc01 (10.10.10.10)": "En fs01, configura el servidor DNS preferido como dc01 (10.10.10.10)",
+ "Join fs01 to the corp.lab domain": "Une fs01 al dominio corp.lab",
+ "Reboot and confirm membership": "Reinicia y confirma la pertenencia",
+ "DNS points at the DC": "El DNS apunta al DC",
+ "Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10": "Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10",
+ "joined to corp.lab": "unido a corp.lab",
+ "Add-Computer -DomainName corp.lab -Credential (Get-Credential) -Restart": "Add-Computer -DomainName corp.lab -Credential (Get-Credential) -Restart",
+ "secure channel to the domain is healthy": "el canal seguro con el dominio está en buen estado"
+}

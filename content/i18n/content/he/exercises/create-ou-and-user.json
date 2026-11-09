@@ -1,0 +1,18 @@
+{
+ "Create an OU, a user and a global group": "צור OU, משתמש וקבוצה גלובלית",
+ "Everything in the flat default containers is a policy and delegation dead end:\nGPOs cannot link to CN=Users. Give the Sales department a proper home. Create\nan OU, put a user in it, and give the department a global security group, the\n\"G\" in AGDLP that permissions are later granted through.": "כל מה שנמצא במכלי ברירת המחדל השטוחים הוא מבוי סתום מבחינת מדיניות והאצלה: אי אפשר לקשר GPO ל-CN=Users. תן למחלקת המכירות בית ראוי. צור OU, שים בה משתמש, ותן למחלקה קבוצת אבטחה גלובלית, ה-\"G\" ב-AGDLP שדרכה מוענקות מאוחר יותר ההרשאות.",
+ "On dc01, create an organizational unit named Sales at the root of corp.lab": "ב-dc01, צור יחידה ארגונית בשם Sales בשורש של corp.lab",
+ "Create an enabled user John Doe, logon name jdoe, inside OU=Sales": "צור משתמש מופעל John Doe, שם כניסה jdoe, בתוך OU=Sales",
+ "Create a global security group G-Sales inside OU=Sales": "צור קבוצת אבטחה גלובלית G-Sales בתוך OU=Sales",
+ "Make jdoe a member of G-Sales": "הפוך את jdoe לחבר ב-G-Sales",
+ "OU=Sales exists at the domain root": "OU=Sales קיימת בשורש התחום",
+ "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'": "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'",
+ "jdoe lives in OU=Sales": "jdoe נמצא ב-OU=Sales",
+ "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true": "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true",
+ "jdoe is enabled": "jdoe מופעל",
+ "An account created without a password is disabled: Enable-ADAccount jdoe": "חשבון שנוצר ללא סיסמה מושבת: Enable-ADAccount jdoe",
+ "G-Sales is a global security group": "G-Sales היא קבוצת אבטחה גלובלית",
+ "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'": "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'",
+ "jdoe is in G-Sales": "jdoe נמצא ב-G-Sales",
+ "Add-ADGroupMember G-Sales -Members jdoe": "Add-ADGroupMember G-Sales -Members jdoe"
+}

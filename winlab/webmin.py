@@ -27,8 +27,9 @@ lets any user who may sudo sign in with their own password, which on the lab's
 machines is the administrator account with the lab's password.
 
 This module also registers the AdminGui of each (winlab/adminui.py), and of
-the other real web GUIs already on the lab's servers: Roundcube webmail on
-the mail server, Grafana and Prometheus on the monitoring appliance.
+the other real web GUIs already on the lab's servers: Roundcube webmail and
+Rspamd's web interface on the mail server, the mail lab's DNS host (Webmin's
+BIND module, role inet-mail), Grafana and Prometheus on the monitoring appliance.
 """
 
 from __future__ import annotations
@@ -157,6 +158,14 @@ ROUNDCUBE = AdminGui(software="Roundcube Webmail", scheme="http", port=80, path=
                      license="GPL-3.0-or-later",
                      note="Webmail on the mail server, once you install the roundcube pack and enable its "
                           "Alias in /etc/roundcube/apache.conf.")
+RSPAMD = AdminGui(software="Rspamd", scheme="http", port=11334, path="/",
+                  sign_in="the controller password you set (rspamadm pw, in local.d/worker-controller.inc)",
+                  license="Apache-2.0",
+                  note="The mail filter's own web interface, once you install the mailfilter pack and bind its "
+                       "controller to the server's address: History shows each message's score and symbols.")
+# The mail lab's Internet (role inet-mail): the DNS host's control panel.
+DNS_HOST_NOTE = ("The DNS host's control panel: its BIND DNS Server module shows the one zone the company may "
+                 "edit, corp.lab; add records, then Apply Configuration.")
 GRAFANA_NOTE = "Dashboards over what Prometheus scrapes; viewing needs no sign-in."
 PROMETHEUS = AdminGui(software="Prometheus", scheme="http", port=9090, path="/targets",
                       sign_in="nobody: Prometheus has no sign-in", license="Apache-2.0",
@@ -172,6 +181,9 @@ def _node_gui(lab, node):
     if image == "alpine" and "ntp-server" in roles:
         return webmin_gui("System Time shows and sets its clock and Bootup and Shutdown restarts chronyd; "
                           "System Logs reads what chronyd says.")
+    if "inet-mail" in roles:
+        return webmin_gui(DNS_HOST_NOTE, "corp (the company's account at the DNS host), with the lab's "
+                                         "password (Start > Lab password)")
     if "grafana" in roles:
         from . import metrics
         return AdminGui(software="Grafana", scheme="http", port=metrics.GRAFANA_PORT, path="/",
@@ -209,6 +221,8 @@ def _targets(lab) -> list[Target]:
         packs = _hand_packs(node)
         if "webmin" in packs and "roundcube" in packs:
             out.append(Target(target_key(node.id, "webmail"), "Webmail", host, ROUNDCUBE))
+        if "mailfilter" in packs:
+            out.append(Target(target_key(node.id, "rspamd"), "Mail filter", host, RSPAMD))
     return out
 
 

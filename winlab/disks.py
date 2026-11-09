@@ -210,7 +210,7 @@ def drive_args(node_dir: Path, node, index: int, path: Path, ahci_slot: int) -> 
                   f"file.image.file.filename={path},file.image.file.node-name={hardware.file_node(index)}")
     else:
         drive = (f"id=data{index},file={path},if=none,format=qcow2,cache=writeback,"
-                 f"node-name={hardware.fmt_node(index)},file.node-name={hardware.file_node(index)}")
+                 f"discard=unmap,detect-zeroes=unmap,node-name={hardware.fmt_node(index)},file.node-name={hardware.file_node(index)}")
     out += ["-drive", drive]
     # A disk winlab always made keeps QEMU's own serial; a new one has its own.
     sn = f",serial={serial(node.id, index, gen)}" if gen or bus == "nvme" else ""

@@ -1,0 +1,61 @@
+{
+ "title": "Asigna una unidad de red con Group Policy",
+ "summary": "Entrega una letra de unidad en cada inicio de sesión de Sales desde un único lugar, con una preferencia de Group Policy.",
+ "why": "Group Policy es como un administrador configura mil máquinas: la configuración vive en el directorio y en SYSVOL, los clientes la recogen al arrancar y al iniciar sesión, y el vínculo, no la opción, decide quién recibe qué. Una asignación de unidad es la clásica primera directiva porque muestra todas las piezas móviles: una GPO, un vínculo a una OU, configuración de usuario frente a configuración de equipo, y el ciclo de actualización.\n\nLas preferencias son distintas de las directivas. Una directiva se impone y se revierte cuando desaparece la GPO; una preferencia se aplica una vez por actualización y el usuario puede cambiarla. Las asignaciones de unidad, las impresoras y los accesos directos son preferencias. Saber cuál estás usando explica por qué una opción \"no se quedó\" o \"no había forma de quitarla\".",
+ "concepts": [
+  "GPO: un contenedor de opciones guardado en AD (el GPC) y en SYSVOL (el GPT); el vínculo la pone en ámbito",
+  "Configuración de usuario frente a configuración de equipo: se procesa al iniciar sesión frente a al arrancar; una asignación de unidad es una opción de usuario",
+  "Acciones de preferencia: Create, Replace, Update, Delete; Update es idempotente y la elección habitual",
+  "Orden de procesamiento: local, sitio, dominio, OU, ganando la OU más cercana en caso de conflicto (LSDOU)",
+  "gpupdate y gpresult: fuerzan una actualización y muestran qué GPO se aplicaron y por qué"
+ ],
+ "steps": [
+  "En dc01, crea la GPO: New-GPO -Name 'Map S Drive'.",
+  "Abre gpmc.msc y edita la GPO: User Configuration > Preferences > Windows Settings > Drive Maps > New > Mapped Drive. Location \\\\fs01\\Company, letra S, acción Update, Reconnect activado.",
+  "Vincúlala: New-GPLink -Name 'Map S Drive' -Target 'OU=Sales,DC=corp,DC=lab'.",
+  "En pc01, inicia sesión como CORP\\jdoe. Ejecuta gpupdate /force, cierra sesión y vuelve a entrar, y abre This PC.",
+  "Todavía como jdoe, ejecuta gpresult /r /scope:user y encuentra 'Map S Drive' en Applied Group Policy Objects.",
+  "En dc01, lee lo que escribió GPMC: el Drives.xml bajo \\\\corp.lab\\SYSVOL\\corp.lab\\Policies\\{GUID}\\User\\Preferences\\Drives."
+ ],
+ "pitfalls": [
+  "Una GPO vinculada a la OU que contiene el equipo no hace nada con una opción de usuario salvo que esté activado el procesamiento en bucle invertido (loopback).",
+  "El recurso compartido debe dejar entrar al usuario, o la unidad se asigna y luego muestra un error al abrirla la primera vez; revisa los permisos del recurso compartido y NTFS en fs01.",
+  "La segmentación a nivel de elemento en una preferencia es potente e invisible: cuando una asignación se aplica a unos usuarios y a otros no, mira ahí."
+ ],
+ "verify": [
+  "la GPO está vinculada a Sales",
+  "lo que asigna la preferencia"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué tipo de opción de Group Policy es una asignación de unidad?",
+   "answer": "Una opción de usuario, aplicada al iniciar sesión",
+   "wrong": [
+    "Una opción de equipo, aplicada al arrancar",
+    "Una opción de sitio",
+    "Una opción de DNS"
+   ],
+   "why": "Las asignaciones de unidad viven en User Configuration > Preferences."
+  },
+  {
+   "q": "¿Qué acción de preferencia es idempotente y la elección habitual para una asignación de unidad?",
+   "answer": "Update",
+   "wrong": [
+    "Replace",
+    "Create",
+    "Delete"
+   ],
+   "why": "Update cambia solo lo que difiere; Replace borra y vuelve a crear en cada actualización."
+  },
+  {
+   "q": "¿En qué orden se procesa Group Policy?",
+   "answer": "Local, sitio, dominio, OU (LSDOU), ganando la OU más cercana",
+   "wrong": [
+    "OU, dominio, sitio, local",
+    "Solo dominio, luego local",
+    "Por orden alfabético del nombre de la GPO"
+   ],
+   "why": "En caso de conflicto gana lo que va más tarde en el orden, así que gana la OU más cercana."
+  }
+ ]
+}

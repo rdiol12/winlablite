@@ -1,0 +1,15 @@
+{
+ "Check my work says it cannot reach a machine": "Comprobar mi trabajo dice que no puede llegar a una máquina",
+ "Common problems": "Problemas comunes",
+ "agent": "agente",
+ "serial": "serie",
+ "check my work": "comprobar mi trabajo",
+ "cannot reach": "no puede llegar",
+ "not answering": "no responde",
+ "grade": "calificar",
+ "channel": "canal",
+ "timeout": "tiempo de espera",
+ "guest": "invitado",
+ "Grading talks to a small agent inside each machine. Here is why it may not answer.": "La calificación se comunica con un pequeño agente dentro de cada máquina. Aquí tienes por qué puede no responder.",
+ "Check my work, scenarios, sending files and the command prompt's `winlab exec` all talk to winlab's agent inside the machine, over a private serial cable that never touches a network.\n\n- **The machine is still starting.** The agent answers once Windows has started its services, a minute or two after the sign-in screen appears. Try again then.\n- **It is installing or restarting.** A machine that restarts in the middle of a check (after a domain join or a promotion, for example) answers again when it is back up.\n- **It was installed by hand.** A machine you installed yourself from an ISO has no agent. The Guide offers Insert the check disc for it: a small disc with winlab's agent. Run RUN-ME on that disc as administrator, once.\n- **It is suspended or off.** Start it in Machines.\n\nTo test the agent from a command prompt: `winlab exec <machine> --lab <lab> -- hostname`": "Comprobar mi trabajo, los escenarios, el envío de archivos y `winlab exec` del símbolo del sistema se comunican con el agente de winlab dentro de la máquina, mediante un cable serie privado que nunca toca una red.\n\n- **La máquina todavía está arrancando.** El agente responde cuando Windows ha iniciado sus servicios, uno o dos minutos después de que aparezca la pantalla de inicio de sesión. Vuelve a intentarlo entonces.\n- **Se está instalando o reiniciando.** Una máquina que se reinicia en mitad de una comprobación (después de unirse a un dominio o de una promoción, por ejemplo) vuelve a responder cuando está otra vez activa.\n- **Se instaló a mano.** Una máquina que instalaste tú mismo desde una ISO no tiene agente. La Guía ofrece Insertar el disco de comprobación para ella: un pequeño disco con el agente de winlab. Ejecuta RUN-ME de ese disco como administrador, una vez.\n- **Está suspendida o apagada.** Iníciala en Máquinas.\n\nPara probar el agente desde un símbolo del sistema: `winlab exec <machine> --lab <lab> -- hostname`"
+}

@@ -1,0 +1,16 @@
+{
+ "A machine will not boot": "جهاز لا يقلع",
+ "Common problems": "مشكلات شائعة",
+ "boot": "إقلاع",
+ "won't start": "لا يبدأ",
+ "black screen": "شاشة سوداء",
+ "no bootable device": "no bootable device",
+ "crash": "تعطّل",
+ "qemu": "qemu",
+ "log": "سجل",
+ "stuck": "عالق",
+ "firmware": "البرنامج الثابت",
+ "boot order": "ترتيب الإقلاع",
+ "Where to look when a machine stops at a black screen or does not start at all.": "أين تبحث عندما يتوقف جهاز عند شاشة سوداء أو لا يبدأ إطلاقًا.",
+ "**It does not start at all.** The message in the taskbar's job list or in Machines says why. Each machine writes a log at var\\labs\\<lab>\\<machine>\\qemu.log in the winlab folder; the last lines name the problem.\n\n**It stops at \"no bootable device\" or a firmware screen.** Look at **Boots from** in the machine's panel. A machine set to boot from its DVD drive with no disc in it, or one installed by hand that has not finished installing, has nothing to boot from.\n\n**Windows shows a recovery screen.** Treat it as a real PC: Startup Repair, or go back to a checkpoint from the Action menu.\n\n**It froze.** Use the power button in Machines to turn it off and on, as you would hold the power button on a real PC.\n\nIf none of this helps, make a support file (see Contact support) and send it to us. It holds the machine's logs.": "**لا يبدأ إطلاقًا.** تذكر الرسالة في قائمة المهام بشريط المهام أو في الأجهزة السبب. يكتب كل جهاز سجلًا في var\\labs\\<lab>\\<machine>\\qemu.log داخل مجلد winlab؛ وتذكر الأسطر الأخيرة المشكلة.\n\n**يتوقف عند \"no bootable device\" أو عند شاشة البرنامج الثابت.** انظر إلى **يقلع من** في لوحة الجهاز. الجهاز المضبوط على الإقلاع من محرك DVD دون قرص فيه، أو الجهاز المثبَّت يدويًا ولم يكتمل تثبيته، ليس لديه ما يقلع منه.\n\n**يعرض Windows شاشة استرداد.** تعامل معها كحاسوب حقيقي: Startup Repair، أو عُد إلى نقطة تحقق من القائمة إجراء.\n\n**تجمّد.** استخدم زر الطاقة في الأجهزة لإطفائه وتشغيله، كما تضغط مطولًا على زر الطاقة في حاسوب حقيقي.\n\nإن لم يساعد شيء من ذلك، فأنشئ ملف دعم (راجع الاتصال بالدعم) وأرسله إلينا. يحتوي على سجلات الجهاز."
+}

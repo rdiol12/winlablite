@@ -1,0 +1,71 @@
+{
+ "title": "QoS בנתב: סיווג, סימון, עיצוב וחלוקה של קו איטי",
+ "summary": "השתמש ב-Modular QoS CLI בנתב: class-maps שממיינים תעבורה, policy-map שנותן עדיפות לקול, מבטיח נתח להעתקות קבצים ומסמן אותן, מעצב שהופך את LAN המשתמשים לקו של 20 Mbit/s, והמונים שמוכיחים שכל מחלקה ראתה את התעבורה שלה.",
+ "why": "רשת עם קיבולת פנויה לא צריכה QoS. QoS חשוב במקום הצר: הקו לסניף, הקישור\nהעולה של משרד עמוס, הרגע שבו העתקת קובץ גדול ושיחת טלפון רוצות את אותם\n20 Mbit/s. אז הנתב חייב להחליט של מי החבילות מחכות ושל מי נזרקות, והוא\nיכול לעשות זאת רק לתעבורה שהוא יודע להבחין בה.\n\nIOS עושה זאת עם Modular QoS CLI (MQC), בשלושה שלבים שאתה פוגש גם בחומת\nהאש מבוססת האזורים: class-map (איזו תעבורה: ערך DSCP, רשימת גישה,\nפרוטוקול), policy-map (מה כל מחלקה מקבלת: עדיפות לקול, רוחב פס מובטח, קצב\npolicing, סימון DSCP חדש) ו-service-policy (על איזה ממשק, באיזה כיוון).\nתורים נוצרים רק במקום שבו נוצר תור, ביציאה מממשק עמוס יותר מהקו שלו; לכן\nמדיניות שמחלקת קו איטי מוצבת מתחת למעצב שהופך את הקו לאיטי, המדיניות\nההיררכית שכל נתב סניף מריץ.\n\nבנתב הזה המדיניות הופכת לבקרת תעבורה של Linux: עץ HTB של מחלקות על\nהממשק, fq_codel או FIFO בכל אחת, ו-nftables שמסמן כל חבילה עם המחלקה שלה\nוה-DSCP החדש שלה. שני הבדלים כנים מ-ISR: מחלקת העדיפות מוגבלת לקצב שלה\nתמיד (ISR מגביל אותה רק כשהקו עמוס), ו-match protocol הוא לפי פורט מוכר,\nלא NBAR. ה-LAN של המעבדה עצמה היא גיגביט, ולכן אתה מעצב אותה כדי ליצור את\nהעומס ש-QoS צריך.",
+ "concepts": [
+  "DSCP: שישה ביטים בכותרת ה-IP שאומרים איך חבילה רוצה שיטפלו בה; EF (46) לקול, AF41 לווידאו, AF11 עד AF13 לנתונים בכמות גדולה, CS0 (0) best effort; נתב סומך עליהם או כותב אותם מחדש",
+  "class-map match-any (שורת match אחת מספיקה) או match-all (כל השורות): match dscp ef, match access-group name SMB, match protocol http, match any; class-default תופס את השאר",
+  "priority <kbps>: תור עם השהיה נמוכה, מטופל ראשון ומוגבל לקצב שלו כדי שלא ירעיב את האחרים; bandwidth <kbps> או percent: נתח מובטח שיכול לשאול את מה שפנוי",
+  "police <bps>: גבול קשיח, מה שחורג נזרק (או מסומן מחדש עם set-dscp-transmit); shape average <bps>: גבול רך, מה שחורג מחכה בתור",
+  "QoS היררכי: מדיניות אב מעצבת את class-default למהירות האמיתית של הקו, ו-service-policy בת מתחתיה מחלקת את המהירות הזו בין המחלקות",
+  "כיוון: תורים (priority, bandwidth, shape) רק ביציאה; מדיניות כניסה יכולה רק לסווג, לסמן ולבצע policing",
+  "show policy-map interface: לכל מחלקה, החבילות שהתאימו, מה סומן, מה ה-policing והתור זרקו"
+ ],
+ "steps": [
+  "בנה את LAN המשתמשים אם השיעור router-zone-firewall לא בנה אותה: בשולחן רשת, מתג בפורט פנוי של הנתב עם הכבל של pc01 עליו, הפורט של הנתב 10.10.20.1/24 (no shutdown) ו-ip dhcp pool USERS עם default-router 10.10.20.1 ו-dns-server 10.10.10.10; ipconfig /renew ב-pc01. העתקות קבצים מ-fs01 ל-pc01 חוצות עכשיו את הנתב ויוצאות ממנו בפורט הזה (כאן GigabitEthernet0/0/1).",
+  "צור משהו להעתיק. ב-fs01: New-Item -ItemType Directory C:\\Big, fsutil file createnew C:\\Big\\test.bin 209715200 (200 MB), New-SmbShare -Name Big -Path C:\\Big -ReadAccess 'CORP\\Domain Users'.",
+  "מדוד את הקו הלא מעוצב: ב-pc01, Measure-Command { Copy-Item \\\\fs01\\Big\\test.bin $env:TEMP\\test.bin -Force } | Select-Object TotalSeconds. כמה שניות: המעבדה היא גיגביט.",
+  "המחלקות. בקונסולה של הנתב: configure terminal, ip access-list extended SMB, permit tcp any eq 445 any, exit. class-map match-any VOICE, match dscp ef, exit. class-map match-any FILES, match access-group name SMB, exit.",
+  "מדיניות הבת, שמחלקת את הקו: policy-map USERS-OUT, class VOICE, priority 1000, class FILES, bandwidth 5000, set dscp af11, class class-default, fair-queue, exit, exit.",
+  "מדיניות האב, שיוצרת את הקו: policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT, exit, exit. שים אותה ביציאה למשתמשים: interface g0/0/1, service-policy output SHAPE-20M, end.",
+  "העתק שוב מ-pc01 עם Measure-Command: עכשיו בערך 80 שניות, 200 MB דרך מעצב של 20 Mbit/s. בזמן שזה רץ, show policy-map interface g0/0/1 בנתב: המחלקה FILES סופרת חבילות ושורת ה-QoS Set שלה סופרת אותן מסומנות af11; class-default מתחת למעצב מציג את התור.",
+  "Policing במקום חלוקה, כדי להרגיש את ההבדל: policy-map USERS-OUT, class FILES, police 8000000 conform-action transmit exceed-action drop, end. העתק שוב: SMB מאט לבערך 8 Mbit/s, ו-show policy-map interface g0/0/1 סופר חבילות חורגות שנזרקו. TCP מאט בגלל הזריקות, כך שההעתקה עדיין מסתיימת. הוצא את זה שוב: policy-map USERS-OUT, class FILES, no police.",
+  "סמן גם את מה שנכנס: configure terminal, ip access-list extended SMB-IN, permit tcp any any eq 445, exit, class-map match-any SMB-FROM-USERS, match access-group name SMB-IN, exit, policy-map MARK-IN, class SMB-FROM-USERS, set dscp af21, ואז interface g0/0/1, service-policy input MARK-IN. נסה פעם אחת service-policy input SHAPE-20M: הנתב מסרב לתורים בכניסה, כמו IOS.",
+  "קרא הכול: show class-map, show policy-map, show policy-map interface. שמור עם write memory; show running-config מציג את ה-class-maps וה-policy-maps לפני הממשקים, ואת service-policy תחת interface GigabitEthernet0/0/1."
+ ],
+ "pitfalls": [
+  "מדיניות על ממשק מהיר שאף פעם לא מתמלא לא עושה שום דבר שאפשר לראות: תורים נוצרים רק בעומס, ולכן המעצב בא קודם.",
+  "ההבטחות לא יכולות להסתכם ביותר מהאב: priority 1000 ו-bandwidth 5000 מתחת למעצב של 20 Mbit/s נכנסים; bandwidth 30000 מתחתיו נדחה כשהמדיניות מוצמדת.",
+  "class-map שאף מדיניות לא מציינת, או policy-map שלא מוצמד לאף ממשק, לא מסווג כלום: בדוק את show policy-map interface, לא את show running-config.",
+  "class-map ו-policy-map כאן הם QoS; אלה של חומת האש הם class-map type inspect ו-policy-map type inspect. אותו שם בשניהם הוא שני דברים שונים.",
+  "סימון עוזר רק במקום שבו משהו סומך עליו אחר כך: set dscp ביציאה למשתמשים לא אומר כלום ל-Windows, אבל בדרך ל-WAN הוא אומר לנתבים של הספק מה החבילה.",
+  "בנתב הזה מחלקת העדיפות מוגבלת לקצב שלה גם כשהקו פנוי; ב-ISR היא יכולה להשתמש ברוחב פס פנוי ומוגבלת רק בעומס."
+ ],
+ "verify": [
+  "עץ התורים בממשקי הנתב (מחלקות HTB ומה הן שלחו)",
+  "איך הנתב מסווג ומסמן: nftables עם מונים לכל מחלקה",
+  "ההעתקה מ-fs01 על הקו המעוצב, עם מדידת זמן"
+ ],
+ "quiz": [
+  {
+   "q": "באילו פעולות service-policy של כניסה יכולה להשתמש?",
+   "answer": "סיווג, סימון (set dscp) ו-policing; בלי priority, bandwidth או עיצוב",
+   "wrong": [
+    "בכולן, כמו ביציאה",
+    "רק בעיצוב",
+    "רק ב-priority"
+   ],
+   "why": "תורים נוצרים ביציאה מממשק; בכניסה נתב יכול רק למיין, לסמן ולזרוק."
+  },
+  {
+   "q": "למה ה-class-default של SHAPE-20M מקבל service-policy בת?",
+   "answer": "המעצב יוצר את הקו של 20 Mbit/s; הבת מחלקת את הקו הזה בין קול, קבצים והשאר",
+   "wrong": [
+    "כדי לבצע policing ל-class-default",
+    "כי class-default לא יכול להכיל פעולות",
+    "כדי לסמן כל חבילה כ-EF"
+   ],
+   "why": "זה QoS היררכי: בלי המעצב ממשק הגיגביט אף פעם לא עמוס, וה-priority וה-bandwidth של הבת לעולם לא היו פועלים."
+  },
+  {
+   "q": "מה police עושה לתעבורה מעל הקצב שלו, ומה shape עושה?",
+   "answer": "police זורק אותה (או מסמן מחדש) מיד; shape מכניס אותה לתור ושולח אחר כך",
+   "wrong": [
+    "שניהם מכניסים לתור",
+    "שניהם זורקים",
+    "police מכניס לתור, shape זורק"
+   ],
+   "why": "policer הוא תקרה קשיחה בלי חוצץ; shaper מחליק פרצים לתוך תור, במחיר של השהיה."
+  }
+ ]
+}

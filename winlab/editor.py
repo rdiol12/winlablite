@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import naming, schema
 from .images import HAND_INSTALL, windows_images
+from .netos import VENDORS as ROUTER_OS
 from .model import DEVICE_KINDS, HARDWARE, HARDWARE_PC, KINDS, Device, Lab, Network, Nic, Node
 from .schema import LabError
 
@@ -98,6 +99,35 @@ def add_network(
     return net
 
 
+def overlapping(lab: Lab, cidr: str, but: str = "") -> str:
+    """The network whose subnet overlaps ``cidr`` (two switches on one
+    subnet: the router cannot route both), or ''."""
+    try:
+        want = ipaddress.ip_network(cidr, strict=False)
+    except ValueError:
+        return ""  # the lab's own check says what is wrong with it
+    for other in lab.networks.values():
+        if other.id == but or other.link:
+            continue
+        try:
+            have = ipaddress.ip_network(other.cidr, strict=False)
+        except ValueError:
+            continue
+        if have.version == want.version and have.overlaps(want):
+            return other.id
+    return ""
+
+
+def check_new_switch(lab: Lab, net_id: str, cidr: str) -> None:
+    """A switch the user adds: a name of its own, a subnet of its own."""
+    if net_id in lab.nodes:
+        raise EditError(f"{net_id} is already the name of a machine; give the switch another name")
+    clash = overlapping(lab, cidr)
+    if clash:
+        raise EditError(f"{cidr} overlaps {clash}'s subnet ({lab.networks[clash].cidr}); give the new "
+                        f"switch a subnet of its own, or leave it empty to take the next free one")
+
+
 def remove_network(lab: Lab, net_id: str) -> None:
     if net_id not in lab.networks:
         raise EditError(f"no such network '{net_id}'")
@@ -156,6 +186,9 @@ def add_node(
         data_disks = list(tpl.data_disks_gb)
     elif kind == "custom" and image in HAND_INSTALL:
         # Windows installed by hand from Microsoft's evaluation DVD.
+        data_disks = []
+    elif kind == "custom" and image in ROUTER_OS:
+        # A vendor's router OS (winlab/netos.py): the vendor's own disk or ISO.
         data_disks = []
     elif kind == "custom":
         # Any OS from the user's own ISO: name which one, and default to the
@@ -507,10 +540,10 @@ def set_routed(lab: Lab, net_id: str, routed: bool) -> Network:
 
 def set_layout(lab: Lab, positions: dict) -> None:
     """Where devices sit on the workbench canvas: {key: [x, y]} for machine
-    ids, "router" and "net:<id>"."""
+    ids, "router", "router:<id>" (winlab/routers.py) and "net:<id>"."""
     for key, pos in positions.items():
         key = str(key)
-        known = (key == "router" or key in lab.nodes or (key.startswith("ap:") and key in lab.devices)
+        known = (key == "router" or key in lab.nodes or (key.startswith(("ap:", "router:")) and key in lab.devices)
                  or (key.startswith("net:") and key[4:] in lab.networks))
         if not known:
             continue
@@ -523,8 +556,16 @@ def set_layout(lab: Lab, positions: dict) -> None:
     for key in list(lab.layout):
         if key != "router" and key not in lab.nodes and not (
                 key.startswith("net:") and key[4:] in lab.networks) and not (
-                key.startswith("ap:") and key in lab.devices):
+                key.startswith(("ap:", "router:")) and key in lab.devices):
             del lab.layout[key]
+
+
+def _tmp_for(dest: Path) -> Path:
+    """A temporary of its own for each writer (this process and thread), so
+    two saves at once never write into, or move away, each other's file."""
+    import os
+    import threading
+    return dest.with_name(f"{dest.stem}.{os.getpid()}-{threading.get_ident()}.toml.tmp")
 
 
 LAB_NAME = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
@@ -545,7 +586,7 @@ def new_workbench(name: str, description: str = "") -> Path:
               workbench=True, sandbox=True, layout={"router": [440, 60]})
     lab.netbios = "CORP"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dest.with_suffix(".toml.tmp")
+    tmp = _tmp_for(dest)
     tmp.write_text(emit(lab), encoding="utf-8")
     try:
         schema.load(tmp)
@@ -829,11 +870,17 @@ def emit(lab: Lab) -> str:
             out.append(f"gateway_node = {_q(net.gateway_node)}")
         if not net.routed:
             out.append("routed = false")
+        if net.vswitch and net.vswitch != "private":
+            out.append(f"vswitch = {_q(net.vswitch)}")
+        if net.host_ports:
+            out.append("host_ports = [" + ", ".join(_q(x) for x in net.host_ports) + "]")
         if net.switch:
             out.append(f"switch = {_q(net.switch)}")
             out.append(f"tag = {net.tag}")
         if net.upstream:
             out.append(f"upstream = {_q(net.upstream)}")
+        if net.link:
+            out.append("link = true")
         if net.site:
             out.append(f"site = {_q(net.site)}")
         if net.description:
@@ -978,7 +1025,7 @@ def save(lab: Lab, path: str | Path | None = None) -> Path:
 
     # Validate the serialised form by round-tripping it, so a bad edit is
     # rejected before it replaces a working file.
-    tmp = dest.with_suffix(".toml.tmp")
+    tmp = _tmp_for(dest)
     tmp.write_text(text, encoding="utf-8")
     try:
         reloaded = schema.load(tmp)

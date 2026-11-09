@@ -1,0 +1,80 @@
+{
+ "title": "IPsec de sitio a sitio en el router: IKEv2 y una interfaz de túnel hacia una sucursal",
+ "summary": "Une una sucursal a la oficina a través de una red no confiable con IKEv2 e IPsec: construye cada pieza de IKEv2 e IPsec en el router, una interfaz de túnel virtual estática, y el extremo propio de la sucursal con strongSwan en Linux.",
+ "why": "Dos oficinas que hablan por Internet necesitan dos cosas que Internet no les da: privacidad (nadie en el camino puede leer el tráfico) y prueba (el otro extremo es de verdad la sucursal). IPsec de sitio a sitio da ambas. IKEv2 es la conversación en la que los dos routers demuestran quiénes son (aquí con una clave precompartida) y acuerdan claves; luego ESP de IPsec cifra y firma cada paquete entre los dos sitios.\n\nIOS lo construye a partir de piezas pequeñas que se nombran entre sí, y los nombres son la forma de diagnosticarlo: una propuesta (qué cifrados puede usar IKE), una política que ofrece esas propuestas, un keyring (qué clave para qué par), un perfil IKEv2 (qué par, cómo se demuestra, qué keyring), un transform set (cómo cifra ESP) y un perfil IPsec que une los dos últimos. El perfil protege una interfaz de túnel: Tunnel0 con tunnel mode ipsec ipv4 es una interfaz de túnel virtual (VTI) estática, una interfaz como cualquier otra, de modo que lo que enrutas hacia ella se cifra, y un protocolo de enrutamiento podría funcionar sobre ella. Ese es el diseño moderno basado en rutas; el crypto map más antiguo, una lista de acceso en la interfaz exterior que elige qué cifrar, es lo que encontrarás en routers viejos.\n\nEn este laboratorio el router es un router Linux (una VM Alpine): Tunnel0 se convierte en una interfaz XFRM, y charon de strongSwan hace IKEv2 con lo que escribiste. La sucursal es un servidor Linux que añades, con strongSwan del archivo de Ubuntu en una memoria de paquetes, configurado a mano en la propia configuración de swanctl. La \"Internet\" entre ellos es una red del laboratorio: el laboratorio nunca llega a la real. Solo se construyen claves precompartidas; los certificados (rsa-sig) no.",
+ "concepts": [
+  "SA de IKEv2 (show crypto ikev2 sa): el canal seguro propio de los routers, READY cuando se pusieron de acuerdo; SA de IPsec (show crypto ipsec sa): una en cada sentido, con los paquetes que cifraron y descifraron",
+  "crypto ikev2 proposal: encryption aes-cbc-256, integrity sha256, group 14 (Diffie-Hellman MODP de 2048 bits; 19 y 20 son las curvas elípticas); una política ofrece propuestas, opcionalmente solo en una dirección local",
+  "crypto ikev2 keyring, peer, address, pre-shared-key: la clave es por par, y ambos extremos deben escribir exactamente la misma",
+  "crypto ikev2 profile: match identity remote address (para qué par es), authentication local y remote pre-share, keyring local; identity local address cuando este lado se conoce por otra dirección",
+  "crypto ipsec transform-set: esp-aes 256 esp-sha256-hmac, o esp-gcm 256 (cifrado e integridad en uno); mode tunnel; set pfs group14 en el perfil IPsec para claves nuevas en cada renovación",
+  "Los selectores de tráfico de una VTI son de cualquiera a cualquiera (0.0.0.0/0 en ambos lados): lo que se cifra lo decide el enrutamiento hacia el túnel, no una lista de acceso",
+  "UDP 500 (IKE), UDP 4500 (IKE y ESP detrás de NAT) y el protocolo IP 50 (ESP) deben pasar entre las dos direcciones exteriores"
+ ],
+ "steps": [
+  "Termina la primera lección del laboratorio (dc01 con DNS y DHCP, pc01 unido). En este PC, descarga primero el paquete de strongSwan: Instalación lo muestra, o winlab packs fetch strongswan.",
+  "Construye Internet y la sucursal. En el Banco de red añade un switch (la red del proveedor) y arrastra su enlace ascendente a un puerto libre del router; añade un servidor Linux (Ubuntu, ya preparado), llámalo br01 y cabléalo a ese switch. show ip interface brief en la consola del router dice en qué puerto está el switch (GigabitEthernet0/1/0 cuando es el tercero).",
+  "La dirección exterior del router: configure terminal, interface g0/1/0, description to the provider, ip address 203.0.113.1 255.255.255.0, no shutdown, end.",
+  "En br01, inicia sesión como ubuntu con la contraseña del laboratorio. ip -br link nombra su tarjeta de red; dale la dirección exterior: sudo ip addr add 203.0.113.2/24 dev <la tarjeta>, sudo ip link set <la tarjeta> up. ping -c 2 203.0.113.1 responde: las dos direcciones exteriores pueden hablar, en claro, como pueden hacerlo dos hosts cualesquiera en Internet.",
+  "Dale a la sucursal una LAN: sudo ip link add branch type dummy, sudo ip addr add 10.50.0.1/24 dev branch, sudo ip link set branch up. Una interfaz dummy representa la red de oficina de la sucursal; nada en la oficina puede llegar todavía a 10.50.0.0/24.",
+  "En el router, las piezas de IKEv2: configure terminal, crypto ikev2 proposal PROP-AES256, encryption aes-cbc-256, integrity sha256, group 14, exit. crypto ikev2 policy POL-HQ, proposal PROP-AES256, exit.",
+  "El keyring: crypto ikev2 keyring KR-BRANCH, peer BR01, address 203.0.113.2, luego pre-shared-key seguido de una clave que elijas (letras, dígitos y puntuación, sin espacios), exit, exit. Anota la clave: la sucursal necesita exactamente la misma.",
+  "El perfil IKEv2: crypto ikev2 profile PROF-BRANCH, match identity remote address 203.0.113.2 255.255.255.255, authentication remote pre-share, authentication local pre-share, keyring local KR-BRANCH, exit.",
+  "Las piezas de IPsec: crypto ipsec transform-set TS-AES256 esp-aes 256 esp-sha256-hmac, mode tunnel, exit. crypto ipsec profile IPSEC-BRANCH, set transform-set TS-AES256, set ikev2-profile PROF-BRANCH, exit.",
+  "El túnel: interface Tunnel0, ip address 10.255.0.1 255.255.255.252, tunnel source g0/1/0, tunnel mode ipsec ipv4, tunnel destination 203.0.113.2, tunnel protection ipsec profile IPSEC-BRANCH, exit. Y la ruta hacia él: ip route 10.50.0.0 255.255.255.0 Tunnel0, end. show crypto ikev2 sa está vacío: la sucursal aún no responde.",
+  "Instala strongSwan en br01: en Máquinas abre la Configuración de br01 y pulsa Conectar la memoria de paquetes strongswan, luego sudo mkdir -p /mnt/winlab-pack, sudo mount LABEL=WLPACK /mnt/winlab-pack, cat /mnt/winlab-pack/README.txt y síguelo para instalar charon-systemd, strongswan-swanctl y libstrongswan-standard-plugins sin conexión. systemctl status strongswan: charon está en marcha.",
+  "Dile a charon que no cree rutas propias (las llevará la interfaz de túnel): en /etc/strongswan.d/charon.conf pon install_routes = no dentro de la sección charon (sudo nano) y luego sudo systemctl restart strongswan.",
+  "Escribe el extremo de la sucursal en /etc/swanctl/conf.d/hq.conf: un bloque connections con una conexión hq (version = 2, local_addrs = 203.0.113.2, remote_addrs = 203.0.113.1, proposals = aes256-sha256-modp2048, secciones local y remote con auth = psk e id = su propia dirección exterior) y dentro un bloque children con hq (local_ts y remote_ts = 0.0.0.0/0, esp_proposals = aes256-sha256, if_id_in = 42, if_id_out = 42). Luego un bloque secrets con ike-hq: id = 203.0.113.1, y el ajuste secret con la clave que escribiste en el router, entre comillas dobles. sudo chmod 600 al archivo.",
+  "La interfaz de túnel y la ruta de la sucursal: sudo ip link add xfrm-hq type xfrm if_id 42, sudo ip addr add 10.255.0.2/30 dev xfrm-hq, sudo ip link set xfrm-hq up, sudo ip route add 10.10.10.0/24 dev xfrm-hq. Luego sudo swanctl --load-all: carga una conexión y un secreto.",
+  "Levántalo: en el router, clear crypto session (o espera unos segundos: el router sigue intentándolo). show crypto ikev2 sa muestra READY con AES-CBC 256, SHA256 y DH group 14, y Auth sign: PSK. En br01, sudo swanctl --list-sas muestra la misma SA desde el otro lado, ESTABLISHED, con un hijo INSTALLED, TUNNEL.",
+  "Envía tráfico: en pc01, ping 10.50.0.1 responde. En el router, show crypto ipsec sa: #pkts encaps y #pkts decaps suben con cada ping, y show ip route muestra 10.50.0.0/24 directamente conectada a Tunnel0.",
+  "Comprueba que está cifrado: en br01, sudo tcpdump -ni <la tarjeta> host 203.0.113.1 mientras pc01 hace ping: solo paquetes ESP (proto 50) cruzan la red del proveedor, nunca ICMP desde 10.10.10.x. sudo tcpdump -ni xfrm-hq muestra los mismos pings descifrados.",
+  "Rómpelo una vez a propósito: en el router, crypto ikev2 keyring KR-BRANCH, peer BR01, y escribe una pre-shared-key distinta, end, luego clear crypto session. show crypto ikev2 sa sigue vacío o en IN-NEG, y en br01 sudo journalctl -u strongswan muestra un fallo de autenticación (AUTHENTICATION_FAILED). Vuelve a poner la clave correcta.",
+  "Guárdalo: write memory. show running-config muestra cada pieza crypto y la interface Tunnel0; la clave se muestra en claro tal como la muestra IOS, y service password-encryption la ofusca."
+ ],
+ "pitfalls": [
+  "Ambos extremos deben coincidir en todo: una propuesta que un lado no ofrece da NO_PROPOSAL_CHOSEN, una clave distinta da AUTHENTICATION_FAILED. Lee el registro del otro lado antes de cambiar el tuyo.",
+  "Se comprueba la identidad del par: match identity remote address debe ser la dirección que la sucursal dice ser (su id), no solo de dónde vienen sus paquetes.",
+  "Con el firewall de zonas de la lección router-zone-firewall en marcha, Tunnel0 debe estar en una zona (BRANCH, por ejemplo) con zone-pairs hacia las zonas que lo usan; una interfaz sin zona no habla con ninguna interfaz con zona.",
+  "La sucursal necesita una ruta de vuelta por su interfaz de túnel. Sin ella la respuesta sale en claro por su ruta predeterminada y la oficina nunca la ve.",
+  "Una VTI cifra lo que se enruta hacia ella; una ruta estática a la sucursal a través de la dirección del proveedor en lugar de Tunnel0 envía el tráfico en claro.",
+  "Que charon cree sus propias rutas (install_routes) con selectores de cualquiera a cualquiera puede apoderarse de la tabla de enrutamiento de una máquina Linux; en una VPN basada en rutas, desactívalo."
+ ],
+ "verify": [
+  "las SA de IKEv2 e IPsec del router, tal como las tiene strongSwan",
+  "las interfaces de túnel del router y las rutas hacia ellas",
+  "pc01 llega a la LAN de la sucursal a través del túnel"
+ ],
+ "quiz": [
+  {
+   "q": "show crypto ikev2 sa dice READY pero pc01 no llega a la sucursal, y show crypto ipsec sa muestra encaps subiendo y decaps en 0. ¿Dónde está más probablemente el fallo?",
+   "answer": "En la sucursal: su tráfico de vuelta no se enruta hacia su interfaz de túnel",
+   "wrong": [
+    "Las claves precompartidas son distintas",
+    "Las propuestas IKEv2 no coinciden",
+    "UDP 500 está bloqueado"
+   ],
+   "why": "Las SA están activas, así que las claves y las propuestas coinciden; los paquetes salen cifrados y nada vuelve por el túnel, así que el camino de vuelta del otro extremo está mal."
+  },
+  {
+   "q": "¿Qué decide qué tráfico cifra una VTI estática (tunnel mode ipsec ipv4)?",
+   "answer": "El enrutamiento: todo lo que se enruta hacia la interfaz de túnel",
+   "wrong": [
+    "Una lista de acceso nombrada en un crypto map",
+    "El transform set",
+    "La propuesta IKEv2"
+   ],
+   "why": "Una VTI negocia selectores de cualquiera a cualquiera; la tabla de enrutamiento elige lo que entra."
+  },
+  {
+   "q": "¿Qué pieza contiene la clave precompartida de un par?",
+   "answer": "El keyring de IKEv2 (peer, address, pre-shared-key)",
+   "wrong": [
+    "La propuesta IKEv2",
+    "El transform set",
+    "El perfil IPsec"
+   ],
+   "why": "El perfil apunta al keyring con keyring local; el keyring tiene una clave por par."
+  }
+ ]
+}

@@ -97,8 +97,24 @@ def build_parser() -> argparse.ArgumentParser:
     lab = sub.add_parser("lab", help="work with lab definitions")
     labsub = lab.add_subparsers(dest="labcmd", metavar="<subcommand>")
     labsub.add_parser("list", help="list available lab definitions")
+    ln = labsub.add_parser("new", help="an empty network of your own to build from nothing (the Workbench's New)")
+    ln.add_argument("name", help="2-31 lower-case letters, digits and dashes, starting with a letter")
+    ln.add_argument("--description", default="")
+    lrm = labsub.add_parser("rm", help="delete a lab you made, with its machines' disks, save points and notes")
+    lrm.add_argument("lab")
+    lrm.add_argument("--yes", action="store_true", help="do not ask first")
+    lrn = labsub.add_parser("rename", help="give a lab you made a new name (its machines move with it)")
+    lrn.add_argument("lab")
+    lrn.add_argument("new_name")
     v = labsub.add_parser("validate", help="check a lab definition for errors")
     v.add_argument("lab", help="lab name or path to a .toml definition")
+    vsw = labsub.add_parser("vswitch", help="virtual switches (Hyper-V's Virtual Switch Manager): show them, "
+                            "or make a network's switch private, internal (reaches this PC) or external (reaches the internet)")
+    vsw.add_argument("lab", help="lab name")
+    vsw.add_argument("network", nargs="?", help="the network (switch) to change")
+    vsw.add_argument("kind", nargs="?", choices=["private", "internal", "external"])
+    vsw.add_argument("--port", action="append", default=None, metavar="NODE:PORT[@HOSTPORT]",
+                     help="a machine's port this PC may open on 127.0.0.1 (internal or external switch); repeat it")
     pl = labsub.add_parser("plan", help="compile a lab and show the resulting topology")
     pl.add_argument("lab", help="lab name or path to a .toml definition")
     pl.add_argument(
@@ -111,9 +127,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip binding loopback ports (useful when a lab is already running)",
     )
-    dg = labsub.add_parser("diagram", help="render the topology as an html/svg diagram")
+    dg = labsub.add_parser("diagram", help="write the topology as a diagrams.net (.drawio) diagram")
     dg.add_argument("lab", help="lab name or path to a .toml definition")
-    dg.add_argument("--out", default="", help="output .html path (default: var/<lab>.html)")
+    dg.add_argument("--out", default="", help="output .drawio path (default: var/<lab>.drawio)")
 
     pw = labsub.add_parser("password", help="show the lab's Administrator password")
     pw.add_argument("lab", help="lab name or path to a .toml definition")
@@ -183,6 +199,10 @@ def build_parser() -> argparse.ArgumentParser:
                         "`lab up` (or `lab resume`) brings them back where they were")
     sp.add_argument("lab", help="lab name or path to a .toml definition")
     sp.add_argument("--only", default="", help="comma-separated machines (default: the whole lab)")
+    rl = labsub.add_parser(
+        "reload", help="restart only the lab's router and switches; the machines keep running "
+                       "and their network cables come back by themselves")
+    rl.add_argument("lab", help="lab name or path to a .toml definition")
     rsm = labsub.add_parser("resume", help="start a suspended lab (the same as `lab up`)")
     rsm.add_argument("lab", help="lab name or path to a .toml definition")
     rsm.add_argument("--only", default="", help="comma-separated machines")
@@ -237,7 +257,8 @@ def build_parser() -> argparse.ArgumentParser:
     imgsub.add_parser("list", help="show catalog state and what each image needs")
     f = imgsub.add_parser("fetch", help="download a freely redistributable image")
     f.add_argument("image", help="alpine, an appliance, or a Linux installer DVD "
-                                 "(ubuntu24, rocky9, rhel9, rhel10, debian13, alpine-std) or opnsense-dvd")
+                                 "(ubuntu24, rocky9, rhel9, rhel10, debian13, alpine-std, proxmox-ve9, proxmox-bs4, "
+                                 "ubuntu24-desktop) or opnsense-dvd")
     im = imgsub.add_parser("import", help="import media you downloaded yourself")
     im.add_argument("image", help="a catalog id, or linux: a Linux installer DVD, "
                                   "recognised from the disc; firewall: OPNsense or pfSense CE")
@@ -488,6 +509,12 @@ def build_parser() -> argparse.ArgumentParser:
     ec.add_argument("command", nargs="*",
                     help="command to run (after --)")
 
+    ky = sub.add_parser("keys", help="type on a machine's own keyboard, as at its screen")
+    ky.add_argument("lab")
+    ky.add_argument("node")
+    ky.add_argument("typed", nargs="+", help="text to type; <ctrl-alt-del>, <enter>, <tab>, <esc>, <win-r> and "
+                                            "the other keys in angle brackets press that key")
+
     ca = sub.add_parser("console-agent", help="serve an appliance's serial console as a winlab agent (started by `lab up`)")
     from .consoleagent import add_arguments as _console_agent_arguments
     _console_agent_arguments(ca)
@@ -516,6 +543,12 @@ def build_parser() -> argparse.ArgumentParser:
     disks.add_cli(sub)  # winlab disk <lab> <node> ...: drive bays, buses, failing disks
     from . import sysdisk
     sysdisk.add_cli(sub)  # winlab sysdisk <lab> <node> die|mend|replace: the system disk dies
+    from . import pcbuild
+    pcbuild.add_cli(sub)  # the thermal trip's watcher, started at power-on (hidden)
+    from . import drsite
+    drsite.add_cli(sub)  # winlab dr <lab> lose|rebuild|status: the head office site is lost
+    from . import bareos
+    bareos.add_cli(sub)  # winlab bareos status|stick <lab>: the Bareos client for Windows on a stick
     from . import updates
     updates.add_cli(sub)  # winlab updates list|stick|disc|label|fetch: Microsoft's packages, carried in
     from . import edge
@@ -529,13 +562,23 @@ def build_parser() -> argparse.ArgumentParser:
     from . import alerts
     alerts.add_cli(sub)  # winlab alerts list|ack|note|tick|rota|source|test|drill: on-call alerting
     from . import rack, toolkit
+    from . import building as _building
+    _building.add_cli(sub)  # winlab building <lab> show|place|remove: where each machine stands
     rack.add_cli(sub)  # winlab rack <lab> show|move|label|tag|labels|export|audit: the rack and its documentation
+    from . import campus
+    campus.add_cli(sub)  # winlab job list|spec <job>|handover <lab>: client jobs and their specifications
     from . import inherited, serverroom
     inherited.add_cli(sub)   # winlab inherited <lab> status|handover|notes: the inherited company scenario
+    from . import aidc
+    aidc.add_cli(sub)        # winlab aidc <lab> status|handover|notes: the AI data center scenario
     serverroom.add_cli(sub)  # winlab room <lab> status|walk|back|on|off: the locked server room
     toolkit.add_cli(sub)  # winlab toolkit fetch|status|stick: PuTTY, WinSCP, Notepad++, Sysinternals on a stick
     from . import classes
     classes.add_cli(sub)  # winlab class new|add-student|assign|export|open|handin|import|grades|csv
+    from . import itops
+    itops.add_cli(sub)  # winlab itops add|show: the IT ops server (osTicket, Prometheus, Alertmanager)
+    from . import lifecycle
+    lifecycle.add_cli(sub)  # winlab lifecycle send|show: HR's joiner and leaver requests into osTicket
     from . import helpdesk
     helpdesk.add_cli(sub)  # winlab helpdesk list|show|take|note|wait|resolve|start|stop|tick|report|settings
     from . import workday
@@ -548,6 +591,8 @@ def build_parser() -> argparse.ArgumentParser:
     traffic.add_cli(sub)  # winlab load status|profile|period|busy|background|links: the load engine
     from . import secops
     secops.add_cli(sub)  # winlab secops status|fetch|stick|sct-fetch: Greenbone, software, Wazuh agent, the SCT
+    from . import selftest
+    selftest.add_cli(sub)  # winlab selftest <lab>|--lesson|--exercise|--all: prove the lessons on this PC
 
     ln = sub.add_parser("learn", help="the lessons: the study path over the labs")
     lnsub = ln.add_subparsers(dest="learncmd", metavar="<op>")
@@ -560,6 +605,10 @@ def build_parser() -> argparse.ArgumentParser:
     lqz.add_argument("id")
     lqz.add_argument("--answers", default="",
                      help="letters in order, e.g. b,a,c (otherwise asked one by one)")
+    lrv = lnsub.add_parser("review", help="today's spaced review: recall questions from finished lessons come back")
+    lrv.add_argument("--answers", default="",
+                     help="letters in order, e.g. b,a,c (otherwise asked one by one)")
+    lrv.add_argument("--status", action="store_true", help="only say how many are due and how they stand")
     lnsub.add_parser("check", help="validate every lesson's references (content authors)")
     lsc = lnsub.add_parser("scripts", help="write every check, verify and problem script as .ps1 (CI parses them)")
     lsc.add_argument("out")
@@ -644,6 +693,15 @@ def build_parser() -> argparse.ArgumentParser:
     ocsub.add_parser("escalate", help="hand the open ticket on: no points, winlab undoes it")
     ocsub.add_parser("end", help="end the shift now")
 
+    from . import breakfix
+    breakfix.add_cli(sub)  # winlab breakfix start|status|note|hint|check|answer|giveup|close|history
+    from . import interview
+    interview.add_cli(sub)  # winlab interview start|status|begin|answer|submit|practical|skip|quit|close|history
+    from . import incidents
+    incidents.add_cli(sub)  # winlab incident start|status|check|hint|answer|giveup|close|history
+    from . import subnetdrill
+    subnetdrill.add_cli(sub)  # winlab drill subnet [--count N --kind K]|history
+
     sc = sub.add_parser("scenario", help="scenario days: a story on a lab you built, mail on a clock, "
                                          "problems injected, your work graded, a debrief")
     sc.add_argument("--lab", default="")
@@ -679,6 +737,25 @@ def build_parser() -> argparse.ArgumentParser:
     pgsub.add_parser("show", help="lessons done, started and next")
     pgr = pgsub.add_parser("reset", help="forget progress (one lesson, or everything)")
     pgr.add_argument("id", nargs="?", default="", help="lesson id; omit for everything")
+    pge = pgsub.add_parser("export", help="write your progress, results, certificates and notes to one file "
+                                         "(.wlprogress) to take to another PC")
+    pge.add_argument("file", nargs="?", default="", help="where to write it (default: winlab-progress-<name>-<date>.wlprogress here)")
+    pgi = pgsub.add_parser("import", help="merge a progress file from another PC into this one's (nothing here is lost)")
+    pgi.add_argument("file")
+
+    tk = sub.add_parser("tracks", help="tracks of lessons, each with its own certificate (and a link to share it)")
+    tksub = tk.add_subparsers(dest="trackcmd", metavar="<op>")
+    tksub.add_parser("list", help="every track: checked lessons done, next lesson, certificate")
+    tkc = tksub.add_parser("certificate", help="write a finished track's certificate as a page to print or save as PDF")
+    tkc.add_argument("track")
+    tkc.add_argument("--name", default="", help="the name on it (default: the one last used)")
+    tkc.add_argument("--html", default="", help="file to write (default: certificate-<track>.html)")
+    tks = tksub.add_parser("share", help="publish a verification link for a finished track's certificate "
+                                         "(sends its facts and this PC's licence key to winlab's website)")
+    tks.add_argument("track")
+    tks.add_argument("--name", default="")
+    tkw = tksub.add_parser("withdraw", help="take a certificate's verification link down")
+    tkw.add_argument("track")
 
     md = sub.add_parser("media", help="plug a USB stick into a machine or put a disc in its drive")
     md.add_argument("lab")
@@ -690,6 +767,9 @@ def build_parser() -> argparse.ArgumentParser:
                                        "or a new one holding a folder's files")
     mp.add_argument("folder", help="a stick on the shelf (see list), or a folder")
     mp.add_argument("--port", type=int, default=0, help="the USB port, 1 to 4 (default: the first free one)")
+    mpk = mdsub.add_parser("pack", help="plug in a package stick (a pack from 'packs list' for this machine's "
+                                        "image): what the machine's Settings > Plug the package stick does")
+    mpk.add_argument("pack")
     mu = mdsub.add_parser("unplug", help="pull the stick out: it goes back on the shelf with its files")
     mu.add_argument("--port", type=int, default=1, help="the USB port (default 1)")
     mi = mdsub.add_parser("insert", help="put a disc in the DVD drive (an image id from 'images list', "
@@ -713,6 +793,21 @@ def build_parser() -> argparse.ArgumentParser:
         bp = mdsub.add_parser(op, help=what)
         bp.add_argument("bay", type=int, help="the bay: 1 is the first data disk")
 
+    wbp = sub.add_parser("workbench", help="do what a drag or a click on the Workbench does (wb-cable, wb-add, "
+                                           "wb-stp-cable, con-plug ...): the hands' part of a lab, for "
+                                           "scripts and the self-test")
+    wbp.add_argument("lab")
+    wbp.add_argument("action", help="the Workbench's action, such as wb-cable or con-plug")
+    wbp.add_argument("params", nargs="*", default=[], help="key=value pairs (node=pc01 network=lan nic=0)")
+    tmp = sub.add_parser("terminal", help="type one line into a machine's Terminal window (its serial console), "
+                                          "as a person at that window does, and print what comes back: for "
+                                          "the vendor routers and firewalls, which have no winlab agent")
+    tmp.add_argument("lab")
+    tmp.add_argument("node")
+    tmp.add_argument("line", help="the line; Enter is pressed after it (an empty string is Enter alone)")
+    tmp.add_argument("--wait", type=float, default=2.0, help="seconds to read the answer (default 2)")
+    tmp.add_argument("--expect", default="", help="read until this regular expression shows (up to --timeout)")
+    tmp.add_argument("--timeout", type=float, default=600.0)
     pk = sub.add_parser("packs", help="packages for Linux appliances, fetched from the distribution's "
                                       "archive onto this PC and plugged in as a stick")
     pksub = pk.add_subparsers(dest="packcmd", metavar="<op>")
@@ -740,21 +835,32 @@ def build_parser() -> argparse.ArgumentParser:
     wmsub.add_parser("status", help="whether the pinned release is fetched")
     wmsub.add_parser("fetch", help="fetch it (SHA-256 checked) and rebuild the Alpine repository volume with it")
     dt = sub.add_parser("docs", help="the admin's documentation tools: GLPI, DokuWiki and Vaultwarden packs for "
-                                     "the Admin tools server, the GLPI Agent and the staff directory sticks")
+                                     "the Admin tools server, phpIPAM and NetBox for the network, the GLPI Agent "
+                                     "and the staff directory sticks")
     dtsub = dt.add_subparsers(dest="docscmd", metavar="<op>")
-    dtsub.add_parser("status", help="which of the three packs and the GLPI Agent are fetched")
-    dtf = dtsub.add_parser("fetch", help="fetch the GLPI Agent and the glpi, dokuwiki and vaultwarden packs")
-    dtf.add_argument("what", nargs="?", default="all", choices=("agent", "packs", "all"),
-                     help="agent (the MSI), packs (they need the debian12 image) or all (the default)")
+    dtsub.add_parser("status", help="which of the packs and the GLPI Agent are fetched")
+    dtf = dtsub.add_parser("fetch", help="fetch the GLPI Agent and the glpi, dokuwiki and vaultwarden packs, "
+                                         "or the phpipam and netbox packs (net)")
+    dtf.add_argument("what", nargs="?", default="all", choices=("agent", "packs", "net", "all"),
+                     help="agent (the MSI), packs (glpi, dokuwiki, vaultwarden; they need the debian12 image), "
+                          "net (phpipam, netbox) or all (the default)")
     dts = dtsub.add_parser("stick", help="write the GLPI Agent or the staff directory stick onto a lab's media shelf")
     dts.add_argument("lab", help="the lab whose shelf gets the stick")
     dts.add_argument("kind", choices=("agent", "staff"), help="agent (the GLPI Agent MSI) or staff (HR's directory)")
+    no = sub.add_parser("netops", help="the network team's tools: LibreNMS, Oxidized and Uptime Kuma packs for "
+                                       "the Network operations server")
+    nosub = no.add_subparsers(dest="netopscmd", metavar="<op>")
+    nosub.add_parser("status", help="which of the three packs are fetched")
+    nof = nosub.add_parser("fetch", help="fetch the librenms, oxidized and uptime-kuma packs (each image by digest)")
+    nof.add_argument("what", nargs="?", default="all", choices=("librenms", "oxidized", "uptime-kuma", "all"),
+                     help="one pack or all (the default); they need the debian12 image")
     ct = sub.add_parser("containers", help="container images, k3s and Docker for Windows, fetched onto this PC "
                                            "(the media shelf writes them onto sticks for the containers lab)")
     ctsub = ct.add_subparsers(dest="ctrcmd", metavar="<op>")
     ctsub.add_parser("status", help="what is fetched: each image, k3s, Docker for Windows")
-    ctf = ctsub.add_parser("fetch", help="pull the images from their registries, fetch k3s and Docker for Windows")
-    ctf.add_argument("what", nargs="?", default="all", choices=["all", "images", "k3s", "docker-win"])
+    ctf = ctsub.add_parser("fetch", help="pull the images from their registries, fetch k3s, Docker for Windows, "
+                                         "Kubernetes for kubeadm and Helm")
+    ctf.add_argument("what", nargs="?", default="all", choices=["all", "images", "k3s", "docker-win", "kubeadm", "helm"])
     cta = ctsub.add_parser("add", help="put another image on the fetch list (pulled on this PC, never in the lab)")
     cta.add_argument("image", help="an image name as docker pull takes it (postgres:16-alpine)")
     cta.add_argument("--windows", action="store_true", help="a Windows image (ltsc2025 for Windows Server 2025)")
@@ -762,7 +868,7 @@ def build_parser() -> argparse.ArgumentParser:
     ctr.add_argument("image")
     cts = ctsub.add_parser("stick", help="write a stick onto a lab's media shelf")
     cts.add_argument("lab", help="the lab whose shelf gets the stick")
-    cts.add_argument("kind", choices=["images", "k3s", "docker-win"])
+    cts.add_argument("kind", choices=["images", "k3s", "docker-win", "kubeadm", "kubeadm-upgrade", "helm"])
     cts.add_argument("--image", action="append", default=[], help="only this image (repeatable)")
     dbp = sub.add_parser("databases", help="pgAdmin 4, HeidiSQL and the PostgreSQL ODBC driver for the lab's "
                                            "Windows machines, fetched onto this PC (the media shelf writes "
@@ -793,6 +899,20 @@ def build_parser() -> argparse.ArgumentParser:
     wpxsub.add_parser("status", help="whether both packs are fetched, and the lab Internet's sites")
     wpxf = wpxsub.add_parser("fetch", help="fetch the squid and nftables packs from the Ubuntu archive")
     wpxf.add_argument("--refresh", action="store_true", help="re-read the archive's package index")
+    azp = sub.add_parser("azure", help="the lab's Azure (azure-hybrid, azure-admin): floci-az, restic, rest-server and the "
+                                       "administrator's tools (Azure CLI, AzCopy, Bicep) fetched onto "
+                                       "this PC, and what the lab made of the subscription")
+    azsub = azp.add_subparsers(dest="azcmd", metavar="<op>")
+    azsub.add_parser("status", help="whether the lab's Azure is fetched")
+    azsub.add_parser("fetch", help="fetch floci-az from Docker Hub; restic, rest-server, the Azure CLI, AzCopy "
+                                            "and Bicep from GitHub")
+    azl = azsub.add_parser("log", help="what the lab built from the subscription, newest last")
+    azl.add_argument("lab", help="the lab (azure-hybrid)")
+    azl.add_argument("-n", type=int, default=40, help="lines to show (40)")
+    awsp = sub.add_parser("aws", help="the aws-cloud lab's AWS: moto and the AWS CLI fetched onto this PC")
+    awssub = awsp.add_subparsers(dest="awscmd", metavar="<op>")
+    awssub.add_parser("status", help="whether the lab's AWS is fetched")
+    awssub.add_parser("fetch", help="fetch moto's image from Docker Hub and the AWS CLI v2 from Amazon")
     idsp = sub.add_parser("ids", help="the intrusion-detection lab: the suricata, nftables and nginx packs and "
                                       "the ET Open rules fetched onto this PC")
     idssub = idsp.add_subparsers(dest="idscmd", metavar="<op>")
@@ -803,6 +923,13 @@ def build_parser() -> argparse.ArgumentParser:
     idsf.add_argument("--rules-only", action="store_true", help="fetch only the ET Open rules")
     idss = idssub.add_parser("stick", help="write the Suricata rules stick onto a lab's media shelf")
     idss.add_argument("lab", help="the lab whose shelf gets the stick")
+    sph = sub.add_parser("softphone", help="MicroSIP, the softphone for the lab's Windows PCs, fetched from "
+                                           "microsip.org onto this PC")
+    sphsub = sph.add_subparsers(dest="spcmd", metavar="<op>")
+    sphsub.add_parser("status", help="whether MicroSIP is fetched, which release")
+    sphsub.add_parser("fetch", help="fetch MicroSIP's installer (its SHA-256 recorded here)")
+    sphs = sphsub.add_parser("stick", help="write the softphone stick onto a lab's media shelf")
+    sphs.add_argument("lab", help="the lab whose shelf gets the stick")
     rax = sub.add_parser("remoteaccess", help="the remote-access lab: WireGuard for Windows and the wireguard "
                                               "and nftables packs, fetched onto this PC")
     raxsub = rax.add_subparsers(dest="racmd", metavar="<op>")
@@ -1093,6 +1220,25 @@ def cmd_media(args) -> int:
                       "under images/drivers)", file=sys.stderr)
                 return 1
             r = media.plug(lab.name, node.id, files, media.STICK_LABEL_DRIVERS)
+        elif args.mediacmd == "pack":
+            from . import debpacks, roles
+            pack = debpacks.PACKS.get(args.pack)
+            if pack is None or pack.image != node.image:
+                print(f"no package stick '{args.pack}' for {node.id} ({node.image}): see winlab packs list",
+                      file=sys.stderr)
+                return 2
+            try:
+                files = debpacks.pack_files(pack.id)
+            except debpacks.PackError as exc:
+                print(f"error: {exc}", file=sys.stderr)
+                return 1
+            for role_name in pack.roles:
+                files.update(roles.role_stick_files(lab, node, role_name))
+            r = media.plug(lab.name, node.id, files, debpacks.STICK_LABEL)
+            from . import openwisp, unifi
+            ctl = {unifi.PACK: unifi, openwisp.PACK: openwisp}.get(pack.id)
+            if ctl is not None and ctl.mark(node):   # the controller's page beside the machine
+                editor.save(lab)
         elif args.mediacmd in ("plug", "unplug", "insert", "eject", "list", "boot", "burn"):
             return _media_shelf(args, lab, node)
         elif args.mediacmd == "blank":
@@ -1131,6 +1277,90 @@ def cmd_media(args) -> int:
     except (editor.EditError, media.MediaError, editor.LabError, HardwareError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+
+
+def cmd_terminal(args) -> int:
+    """winlab terminal <lab> <node> <line>: one line typed into the machine's
+    serial console (the loopback socket behind its Terminal window), then
+    what it answers. The Terminal window itself must be closed: the console
+    takes one connection at a time."""
+    import re as _re
+    import socket
+    import time as _time
+
+    from . import state as _state
+    st = _state.load(args.lab)
+    ns = st.nodes.get(args.node) if st else None
+    port = getattr(ns, "term_port", 0) if ns else 0
+    if not ns or not port or not _state.pid_alive(ns.pid):
+        print(f"error: {args.node} is not running or has no Terminal window", file=sys.stderr)
+        return 1
+    try:
+        sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    except OSError as exc:
+        print(f"error: {args.node}'s console does not answer ({exc}): close its Terminal window", file=sys.stderr)
+        return 1
+    out = b""
+    with sock:
+        sock.sendall(args.line.encode("utf-8") + b"\r")
+        want = _re.compile(args.expect) if args.expect else None
+        end = _time.monotonic() + (args.timeout if want else max(args.wait, 0.1))
+        sock.settimeout(0.5)
+        while _time.monotonic() < end:
+            try:
+                chunk = sock.recv(65536)
+            except socket.timeout:
+                chunk = b""
+            except OSError:
+                break
+            if chunk:
+                out += chunk
+                if want and want.search(out.decode("utf-8", "replace")):
+                    break
+    text = out.decode("utf-8", "replace")
+    print(text)
+    if want and not want.search(text):
+        print(f"error: {args.expect!r} did not show within {args.timeout:g} s", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_workbench(args) -> int:
+    """winlab workbench <lab> <action> key=value...: one Workbench action, as
+    the desktop runs it (workbench.act, consolecable.act)."""
+    from . import consolecable, netplan, schema, workbench
+
+    params: dict = {}
+    for kv in args.params:
+        if "=" not in kv:
+            print(f"error: {kv!r} is not key=value", file=sys.stderr)
+            return 2
+        k, v = kv.split("=", 1)
+        params[k] = v
+
+    class _Bench:
+        def __init__(self):
+            self.wb_live = workbench.Live()
+            self.reload()
+
+        def reload(self):
+            self.lab = schema.load(args.lab)
+            self.plan = netplan.compile_topology(self.lab, check_ports=False)
+
+    try:
+        bench = _Bench()
+    except schema.LabError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.action.startswith("con-"):
+        r = consolecable.act(bench, args.action, params)
+    elif args.action.startswith("wb-"):
+        r = workbench.act(bench, args.action, params)
+    else:
+        print("error: a Workbench action starts with wb- or con-", file=sys.stderr)
+        return 2
+    print(r.get("message", ""))
+    return 0 if r.get("ok", True) else 1
 
 
 def _media_shelf(args, lab, node) -> int:
@@ -1221,6 +1451,19 @@ def cmd_mail(args) -> int:
     except mail.MailError as exc:
         print(f"{exc}", file=sys.stderr)
         return 3
+
+
+def cmd_netops(args) -> int:
+    from . import netops
+    if getattr(args, "netopscmd", None) == "fetch":
+        errors = netops.fetch(args.what, progress=lambda m: print(f"  {m}"))
+        for e in errors:
+            print(f"  failed: {e}", file=sys.stderr)
+        print()
+        print(netops.render_status())
+        return 3 if errors else 0
+    print(netops.render_status())
+    return 0
 
 
 def cmd_docs(args) -> int:
@@ -1317,6 +1560,40 @@ def cmd_routing(args) -> int:
         return 2
 
 
+def cmd_aws(args) -> int:
+    from . import aws
+
+    try:
+        if args.awscmd == "fetch":
+            aws.fetch(progress=lambda m: print(f"  {m}"))
+            print()
+        print(aws.render_status())
+        return 0
+    except aws.AwsError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 3
+
+
+def cmd_azure(args) -> int:
+    from . import azure
+
+    try:
+        if args.azcmd == "fetch":
+            azure.fetch(progress=lambda m: print(f"  {m}"))
+            print()
+        elif args.azcmd == "log":
+            p = azure.log_path(args.lab)
+            lines = p.read_text(encoding="utf-8").splitlines() if p.is_file() else []
+            print("\n".join(lines[-args.n:]) if lines else
+                  f"nothing built in {args.lab} yet: what you create in the portal shows here once the lab runs")
+            return 0
+        print(azure.render_status())
+        return 0
+    except azure.AzureError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 3
+
+
 def cmd_ids(args) -> int:
     from . import ids
 
@@ -1372,6 +1649,24 @@ def cmd_ipv6(args) -> int:
     except schema.LabError as exc:
         print(f"{exc}", file=sys.stderr)
         return 2
+
+
+def cmd_softphone(args) -> int:
+    from . import softphone
+
+    try:
+        if args.spcmd == "fetch":
+            softphone.fetch(progress=lambda m: print(f"  {m}"))
+            print()
+        elif args.spcmd == "stick":
+            r = softphone.to_stick(args.lab)
+            print(f"{r['title']} is on {args.lab}'s media shelf as {r['id']} ({r['files']} files, {r['mb']} MB)")
+            return 0
+        print(softphone.render_status())
+        return 0
+    except softphone.SoftphoneError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 3
 
 
 def cmd_remoteaccess(args) -> int:
@@ -1588,7 +1883,7 @@ def cmd_template(args) -> int:
 
 
 def cmd_lab_diagram(target: str, out: str) -> int:
-    from . import diagram
+    from . import drawio
 
     try:
         lab = schema.load(target)
@@ -1596,9 +1891,11 @@ def cmd_lab_diagram(target: str, out: str) -> int:
         print(f"{exc}", file=sys.stderr)
         return 2
     plan = netplan.compile_topology(lab, check_ports=False)
-    dest = Path(out) if out else paths.VAR / f"{lab.name}.html"
+    dest = Path(out) if out else paths.VAR / f"{lab.name}{drawio.EXT}"
+    if dest.suffix.lower() != drawio.EXT:
+        dest = dest.with_suffix(drawio.EXT)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(diagram.render_page(plan), encoding="utf-8")
+    dest.write_text(drawio.dumps(plan), encoding="utf-8")
     print(f"{dest}")
     return 0
 
@@ -1643,13 +1940,14 @@ def cmd_lab_up(target: str, dry_run: bool, accel: str, display: str,
         )
         return 0
 
+    from . import images
     from .orchestrator import Orchestrator, OrchestratorError
 
     try:
         orch = Orchestrator(lab, accel=accel, display=display)
         report, budget = orch.budgeted_up(only=only, force=force,
                                           emit=lambda line: print(f"  {line}"))
-    except (OrchestratorError, membudget.BudgetError) as exc:
+    except (OrchestratorError, membudget.BudgetError, images.ImageError) as exc:
         print(f"{exc}", file=sys.stderr)
         return 5
 
@@ -1663,7 +1961,9 @@ def cmd_lab_up(target: str, dry_run: bool, accel: str, display: str,
           f"`winlab console <node>` to open a screen.")
     print(f"log on as Administrator with: {lab.admin_password}"
           f"  (`winlab lab password {lab.name}` shows it again)")
-    return 0
+    for nid, why in report.failed.items():
+        print(f"  {nid} did not start: {why}", file=sys.stderr)
+    return 6 if report.failed else 0
 
 
 def cmd_lab_suspend(target: str, only: list[str] | None) -> int:
@@ -1691,6 +1991,23 @@ def cmd_lab_suspend(target: str, only: list[str] | None) -> int:
         print(f"not running: {', '.join(rep.skipped)}")
     print(f"`winlab lab resume {orch.lab.name}` brings the lab back.")
     return 1 if rep.failed else 0
+
+
+def cmd_lab_reload(target: str) -> int:
+    """Power-cycles the lab's router and switches under running machines."""
+    from .orchestrator import OrchestratorError, open_lab
+
+    st = state.load(target)
+    try:
+        orch = open_lab((st.source_path if st else "") or target, accel=(st.accel if st else "tcg"),
+                        display=(st.display if st else "window"))
+        rep = orch.restart_fabric(emit=lambda line: print(f"  {line}"))
+    except (LabError, OrchestratorError) as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 5
+    print(f"{orch.lab.name}: router and switches restarted"
+          + (f"; {len(rep['machines'])} machine(s) kept running" if rep["machines"] else ""))
+    return 0 if rep["redial"] or not rep["machines"] else 1
 
 
 def cmd_lab_password(target: str) -> int:
@@ -1791,25 +2108,17 @@ def cmd_break(args) -> int:
             print(f"hints go from 1 to {len(guestfaults.SCENARIOS[args.scenario].hints)}", file=sys.stderr)
             return 2
         return 0
-    try:
-        if args.verify:
-            cmd, shell, expect = guestfaults.verify_command(args.scenario, params)
-        else:
-            cmd, shell = guestfaults.build_command(args.scenario, params, args.clear)
-    except KeyError as exc:
-        print(f"{exc}", file=sys.stderr)
-        return 2
-
     f = guestfaults.SCENARIOS[args.scenario]
+    w = guestfaults.words(args.scenario, params)
     node_def = lab_def.nodes.get(args.node) if lab_def is not None else None
     if node_def is not None and not guestfaults.applies_to(f, node_def.kind, node_def.image):
         where = ", ".join(f.images) if f.images else f.os
-        print(f"'{f.title}' is a problem for {where} machines; {args.node} is "
+        print(f"'{w['title']}' is a problem for {where} machines; {args.node} is "
               f"{node_def.kind} ({node_def.image or 'no image'})", file=sys.stderr)
         return 2
     if node_def is not None and not guestfaults.applies_to(f, node_def.kind, node_def.image,
                                                            roles_mod.effective_roles(node_def)):
-        print(f"'{f.title}' needs a machine with the {' or '.join(f.roles)} role; "
+        print(f"'{w['title']}' needs a machine with the {' or '.join(f.roles)} role; "
               f"{args.node} has none of them", file=sys.stderr)
         return 2
 
@@ -1819,38 +2128,48 @@ def cmd_break(args) -> int:
         print(f"{args.node} is not running", file=sys.stderr)
         return 5
 
-    from .guestctl import GuestChannel, GuestError
+    from . import problemengine
+    from . import progress
     verb = "verifying" if args.verify else "fixing" if args.clear else "breaking"
-    print(f"{verb}: {f.title} on {args.node}")
+    print(f"{verb}: {w['title']} on {args.node}")
     if f.host and not args.verify:
         # Broken from outside the machine (a checkpoint reverted); the verify runs inside.
         ok, msg = guestfaults.host_break(args.scenario, lab, args.node, args.clear, say=lambda s: print(f"  {s}"))
         print(msg, file=sys.stdout if ok else sys.stderr)
         if ok and not args.clear:
-            print(f"symptom: {f.symptom}")
+            print(f"symptom: {w['symptom']}")
             print(f"stuck? winlab break {args.node} {args.scenario} --hint 1")
         return 0 if ok else 1
-    try:
-        ch = GuestChannel(node_state.serial_port).connect(retries=10, delay=2)
-    except GuestError as exc:
-        print(f"{exc}", file=sys.stderr)
-        return 5
-    try:
-        res = ch.run(cmd, shell=shell, timeout=120)
-    finally:
-        ch.close()
+    run = problemengine.guest_runner(lab)
     if args.verify:
-        from . import progress
-        fixed = res.ok and guestfaults.is_fixed(res.out, expect)
+        res = problemengine.verify_fix(run, lab, args.scenario, args.node, params)
+        if res.status not in (problemengine.FIXED, problemengine.NOT_FIXED):
+            print(res.message, file=sys.stderr)   # the check never ran: nothing counted
+            return 5
+        fixed = res.status == problemengine.FIXED
         progress.record_problem(args.scenario, args.node, fixed)
         print("fixed: the problem no longer reproduces" if fixed
-              else f"not fixed yet: {(res.out or res.err).strip().splitlines()[-1:] or ['no output']}")
+              else f"not fixed yet: {args.node} still shows the problem")
         return 0 if fixed else 1
-    if not args.clear:
-        print(f"symptom: {f.symptom}")
-        print(f"teaches: {f.teaches}")
+    pe = progress.load()["problems"].get(args.scenario) or {}
+    if args.clear:
+        res = problemengine.restore(run, lab, args.scenario, args.node, params)
+        if res.ok:
+            progress.problem_broken(args.scenario, args.node, False)
+    else:
+        res = problemengine.apply_break(run, lab, args.scenario, args.node, params,
+                                        known_broken=pe.get("broken_on") == args.node)
+        if res.broken and res.status != problemengine.ALREADY_BROKEN:
+            progress.problem_broken(args.scenario, args.node, True)
+        elif not res.broken and pe.get("broken_on") == args.node:
+            progress.problem_broken(args.scenario, args.node, False)
+    print(res.message, file=sys.stdout if res.ok else sys.stderr)
+    if res.ok and not args.clear:
+        print(f"teaches: {w['teaches']}")
         print(f"stuck? winlab break {args.node} {args.scenario} --hint 1")
-    print("done" if res.ok else f"rc={res.rc}: {res.err.strip()[:200]}")
+    if not res.ok:
+        print(f"details: {paths.lab_dir(lab) / 'problems.log'}", file=sys.stderr)
+        return 5 if res.status in (problemengine.UNREACHABLE, problemengine.BUSY) else 1
     return 0
 
 
@@ -1902,6 +2221,9 @@ def cmd_oncall(args) -> int:
             r = oncall.end(shift, run)
             print(f"shift over: {r['fixed']} of {r['tickets']} fixed, {r['score']} of {r['max']} points")
     elif shift and not shift.get("done"):
+        from . import helpdesk
+        helpdesk.tick(lab, run)            # the call mailed into the lab's osTicket, what was done there read back
+        oncall.check_desk(shift, run)
         oncall.expire(shift, run, oncall._now())
     print(_render_shift(oncall.view(oncall.load())))
     return 0
@@ -2032,6 +2354,53 @@ def _learn_quiz(lesson, answers: str = "", ask=input) -> int:
     return 0
 
 
+def _learn_review(answers: str = "", only_status: bool = False, ask=input) -> int:
+    from . import review
+
+    st = review.status()
+    if only_status or not st["today"]:
+        print(f"review: {st['questions']} questions from finished lessons, {st['due']} due, "
+              f"{st['answered_today']} answered today ({st['right_today']} right)")
+        print("boxes (0 = learning, then " + ", ".join(f"{d}d" for d in st["intervals"]) + "): "
+              + " ".join(str(n) for n in st["boxes"]))
+        if not st["questions"]:
+            print("finish a lesson and its recall questions come back here the next day")
+        elif not st["today"]:
+            print("nothing more to review today" + (f"; next on {st['next']}" if st["next"] else ""))
+        return 0
+    s = review.todays_set()
+    given = [a.strip().lower() for a in answers.split(",")] if answers else []
+    picked = {}
+    print(f"review: {len(s['items'])} questions today, from memory\n")
+    for i, q in enumerate(s["items"]):
+        print(f"{i + 1}. [{q['lesson_title']}]\n   {q['q']}")
+        for j, c in enumerate(q["choices"]):
+            print(f"   {chr(97 + j)}) {c}")
+        if given:
+            a = given[i] if i < len(given) else ""
+        else:
+            try:
+                a = ask("   your answer (letter, Enter skips): ").strip().lower()
+            except EOFError:
+                a = ""
+        k = ord(a[0]) - 97 if a else -1
+        picked[q["key"]] = q["choices"][k] if 0 <= k < len(q["choices"]) else ""
+        print()
+    r = review.answer(picked)
+    for i, x in enumerate(r["results"]):
+        if x.get("error"):
+            continue
+        if x.get("skipped"):
+            print(f"{i + 1}. skipped: still due")
+            continue
+        print(f"{i + 1}. " + (f"right: back on {x['due']}" if x["ok"] else f"wrong, back tomorrow. The answer: {x['answer']}"))
+        if x["why"]:
+            print(f"   {x['why']}")
+    st = r["status"]
+    print(f"\n{r['right']} of {r['total']} right; {st['due']} still due, {st['answered_today']} answered today")
+    return 0
+
+
 def cmd_mecm(args) -> int:
     from . import mecm, readiness
 
@@ -2146,6 +2515,8 @@ def cmd_learn(args) -> int:
             return rc
         if args.learncmd == "quiz":
             return _learn_quiz(lessons.load(args.id), args.answers)
+        if args.learncmd == "review":
+            return _learn_review(args.answers, args.status)
         if args.learncmd == "check":
             from . import helptopics, practice_exam, scenarios
             problems = lessons.validate_all()
@@ -2171,7 +2542,7 @@ def cmd_learn(args) -> int:
     except lessons.LessonError as exc:
         print(f"{exc}", file=sys.stderr)
         return 4
-    print("usage: winlab learn {list,show,answer,start,quiz,check,scripts}", file=sys.stderr)
+    print("usage: winlab learn {list,show,answer,start,quiz,review,check,scripts}", file=sys.stderr)
     return 2
 
 
@@ -2234,23 +2605,85 @@ def cmd_progress(args) -> int:
         progress.reset(args.id)
         print(f"reset {args.id or 'all progress'}")
         return 0
+    if args.progcmd in ("export", "import"):
+        from . import progressfile
+        try:
+            if args.progcmd == "export":
+                f = progressfile.export(args.file)
+                c = progressfile.counts(progressfile.read(f.read_bytes()))
+                print(f"wrote {f}: {c['lessons_done']} lessons done, {c['lessons_started']} started, "
+                      f"{c['exams']} exam results, {c['certificates']} certificates, notes of {c['notes']} labs")
+                print("open it on the other PC: winlab progress import <file>, or Progress > Import in the desktop")
+            else:
+                print(progressfile.import_file(args.file)["message"])
+        except progressfile.ProgressFileError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+    return 2
+
+
+def cmd_tracks(args) -> int:
+    from . import certificate, certshare, progress, tracks
+
+    if args.trackcmd in (None, "list"):
+        print(tracks.render())
+        return 0
+    name = getattr(args, "name", "") or progress.student()
+    try:
+        if args.trackcmd == "certificate":
+            page, f = certificate.issue(name, args.track)
+            out = Path(args.html or f"certificate-{args.track}.html")
+            out.write_text(page, encoding="utf-8")
+            print(f"wrote {out}: {f['title']}, credential ID {f['code']}")
+            return 0
+        if args.trackcmd == "share":
+            c = certshare.share(args.track, name)
+            print(f"shared: {c['url']}")
+            return 0
+        if args.trackcmd == "withdraw":
+            certshare.withdraw(args.track)
+            print("the verification link is withdrawn")
+            return 0
+    except certificate.NotYet as exc:
+        print(f"not yet: {exc}", file=sys.stderr)
+        return 1
+    except (certshare.ShareError, tracks.TrackError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     return 2
 
 
 def cmd_viewer(args) -> int:
-    from . import termview, viewer
+    from . import castplayer, chartview, drawio, elkview, mapview, pixiview, termview, viewer
 
     if args.viewcmd in (None, "status"):
         from . import nativewin
 
         print(viewer.render_status())
         print(termview.render_status())
+        print(mapview.render_status())
+        print(chartview.render_status())
+        print(castplayer.render_status())
+        print(elkview.render_status())
+        print(drawio.render_status())
+        print(pixiview.render_status())
         print(nativewin.render_status())
         return 0 if viewer.ready() and termview.ready() else 1
     if args.viewcmd == "fetch":
         try:
             viewer.fetch(refresh=args.refresh)
             termview.fetch(refresh=args.refresh)
+            try:
+                mapview.fetch(refresh=args.refresh)
+            except mapview.MapViewError as exc:
+                print(f"Cytoscape.js not fetched ({exc}); the Network map keeps its VLAN view", file=sys.stderr)
+            for part, what in ((chartview, "uPlot"), (castplayer, "asciinema-player"), (elkview, "ELK"),
+                               (drawio, "the diagrams.net viewer"), (pixiview, "PixiJS")):
+                try:
+                    part.fetch(refresh=args.refresh)
+                except part.TermError as exc:
+                    print(f"{what} not fetched ({exc}); that window keeps its own drawing", file=sys.stderr)
             if sys.platform == "win32":
                 from . import nativewin
 
@@ -2454,6 +2887,33 @@ def _reset_for_exercise(ex) -> int:
     except (LabError, OrchestratorError) as exc:
         print(f"{exc}", file=sys.stderr)
         return 5
+    return 0
+
+
+def cmd_keys(args) -> int:
+    """winlab keys <lab> <node> text <enter> ...: the machine's keyboard (QMP send-key)."""
+    from . import naming, power
+    extra = {"win-r": ["meta_l", "r"], "win": ["meta_l"], "win-x": ["meta_l", "x"], "alt-f4": ["alt", "f4"],
+             "end": ["end"], "home": ["home"], "f10": ["f10"], "ctrl-x": ["ctrl", "x"]}
+    presses: list[list[str]] = []
+    for item in args.typed:
+        if item.startswith("<") and item.endswith(">") and len(item) > 2:
+            k = item[1:-1].lower()
+            keys = power.SPECIAL_KEYS.get(k) or extra.get(k)
+            if not keys:
+                print(f"no key {item}: use {', '.join('<' + x + '>' for x in [*power.SPECIAL_KEYS, *extra])}",
+                      file=sys.stderr)
+                return 2
+            presses.append(keys)
+        else:
+            presses += power.qcodes(item)
+    try:
+        lab = schema.load(args.lab)
+        n = power.send_keys(lab.name, naming.resolve(lab, args.node), presses)
+    except (LabError, power.PowerError) as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 5
+    print(f"{n} key press(es) on {args.node}")
     return 0
 
 
@@ -2821,9 +3281,15 @@ def cmd_node(args) -> int:
             print("\nrun 'winlab lab up' to boot the new machines.")
             return 0
         if args.nodecmd == "rm":
+            if state.is_running(lab.name, args.id):
+                print(f"{args.id} is running; shut it down first", file=sys.stderr)
+                return 2
             editor.remove_node(lab, args.id)
             editor.save(lab)
-            print(f"removed {args.id}")
+            from . import mylabs
+            parked = mylabs.park_machine(lab.name, args.id)
+            print(f"removed {args.id}" + (" (its disks are put aside; a new machine with the same name "
+                                          "starts afresh)" if parked else ""))
             return 0
         if args.nodecmd == "clone":
             from . import templates
@@ -2910,6 +3376,8 @@ def cmd_net(args) -> int:
 
     try:
         if args.netcmd == "add":
+            if args.cidr:
+                editor.check_new_switch(lab, args.id, args.cidr)
             net = editor.add_network(
                 lab, args.id, cidr=args.cidr, vlan=args.vlan, dhcp=args.dhcp,
                 wan=args.wan, description=args.desc,
@@ -2957,8 +3425,10 @@ def _fabric_runner(lab_name: str):
     except GuestError as exc:
         return None, str(exc)
 
+    from .routers import SHELL_GUARD  # the lab router's own processes only, never another router's
+
     def run(cmd: str, timeout: float = 60) -> str:
-        res = ch.run(cmd, shell="sh", timeout=timeout)
+        res = ch.run(SHELL_GUARD + "\n" + cmd, shell="sh", timeout=timeout)
         return res.out if res.ok else (res.out or res.err)
     run.close = ch.close  # type: ignore[attr-defined]
     return run, ""
@@ -3182,6 +3652,35 @@ def cmd_net_fault(args, lab) -> int:
     return 0
 
 
+def cmd_my_lab(args) -> int:
+    """lab new / rm / rename: the user's own labs (winlab/mylabs.py)."""
+    from . import editor, mylabs
+    paths.ensure_dirs()
+    try:
+        if args.labcmd == "new":
+            dest = editor.new_workbench(args.name, args.description)
+            print(f"new network {dest.stem}: add machines with `winlab node {dest.stem} add ...`, "
+                  f"or open it on the Workbench (winlab gui {dest.stem})")
+            return 0
+        if args.labcmd == "rm":
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    print(f"add --yes to delete {args.lab} and its machines' disks", file=sys.stderr)
+                    return 2
+                if input(f"delete {args.lab} and its machines' disks? [y/N] ").strip().lower() not in ("y", "yes"):
+                    print("nothing deleted")
+                    return 1
+            gone = mylabs.delete(args.lab)
+            print(f"deleted {args.lab}: {', '.join(gone) or 'nothing else was kept for it'}")
+            return 0
+        dest = mylabs.rename(args.lab, args.new_name)
+        print(f"{args.lab} is now called {dest.stem}")
+        return 0
+    except (editor.EditError, mylabs.MyLabError, LabError, OSError) as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_lab_list() -> int:
     from . import content
     paths.ensure_dirs()
@@ -3219,6 +3718,29 @@ def cmd_lab_validate(target: str) -> int:
     return 0
 
 
+def cmd_lab_vswitch(target: str, network: str | None, kind: str | None, ports: list[str] | None) -> int:
+    from . import vswitch
+    try:
+        lab = schema.load(target)
+    except LabError as exc:
+        print(f"{exc}", file=sys.stderr)
+        return 2
+    if network and kind:
+        try:
+            vswitch.set_kind(lab, network, kind, ports)
+        except vswitch.VSwitchError as exc:
+            print(f"{exc}", file=sys.stderr)
+            return 1
+        print(f"{network}: {vswitch.TITLES[kind]}. {vswitch.TEXT[kind]} Takes effect at the lab router's next start.")
+    elif network or kind:
+        print("give both the network and private, internal or external", file=sys.stderr)
+        return 2
+    for v in vswitch.view(lab):
+        print(f"{v['id']:<14} {v['cidr']:<18} {vswitch.TITLES[v['kind']]:<17} {', '.join(v['machines'])}"
+              + (f"   ports: {', '.join(v['host_ports'])}" if v["host_ports"] else ""))
+    return 0
+
+
 def cmd_lab_plan(target: str, show_fabric: bool, no_port_check: bool) -> int:
     try:
         lab = schema.load(target)
@@ -3231,14 +3753,18 @@ def cmd_lab_plan(target: str, show_fabric: bool, no_port_check: bool) -> int:
     # bridged NIC, no shared folder, every host-side socket on 127.0.0.1.
     from .providers.qemu import QemuProvider, check_isolation
     runtimes = QemuProvider(plan, accel="tcg", display="none").build_all()
-    bad = {k: check_isolation(rt.argv) for k, rt in runtimes.items()}
+    from . import vswitch
+    up = vswitch.active(lab)
+    bad = {k: check_isolation(rt.argv, uplink=up and k == "fabric") for k, rt in runtimes.items()}
     bad = {k: v for k, v in bad.items() if v}
     if bad:
         for k, v in bad.items():
             print(f"isolation  {k}: " + "; ".join(v))
         return 1
     print(f"isolation  checked {len(runtimes)} QEMU command lines: no user-mode or bridged nic, "
-          f"no shared folder, every control socket on 127.0.0.1")
+          f"no shared folder, every control socket on 127.0.0.1"
+          + (" (the router's card for the internal and external switches aside)" if up else ""))
+    print("vswitch    " + vswitch.describe(lab))
     from .providers.qemu import hardware_of
     win = [n for n in lab.node_list() if n.kind != "linux"]
     if win:
@@ -3303,6 +3829,10 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_images(args)
     if args.cmd == "media":
         return cmd_media(args)
+    if args.cmd == "workbench":
+        return cmd_workbench(args)
+    if args.cmd == "terminal":
+        return cmd_terminal(args)
     if args.cmd == "virtio":
         return cmd_virtio(args)
     if args.cmd == "exporter":
@@ -3325,6 +3855,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_wireshark(args)
     if args.cmd == "docs":
         return cmd_docs(args)
+    if args.cmd == "netops":
+        return cmd_netops(args)
     if args.cmd == "webmin":
         return cmd_webmin(args)
     if args.cmd == "containers":
@@ -3339,6 +3871,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_ipv6(args)
     if args.cmd == "ids":
         return cmd_ids(args)
+    if args.cmd == "azure":
+        return cmd_azure(args)
+    if args.cmd == "aws":
+        return cmd_aws(args)
+    if args.cmd == "softphone":
+        return cmd_softphone(args)
     if args.cmd == "remoteaccess":
         return cmd_remoteaccess(args)
     if args.cmd == "automation":
@@ -3363,6 +3901,11 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "exercise":
         return cmd_exercise(args)
+    if args.cmd == "keys":
+        return cmd_keys(args)
+    if args.cmd == "selftest":
+        from . import selftest
+        return selftest.run_cli(args)
 
     if args.cmd == "activity":
         return cmd_activity(args)
@@ -3393,6 +3936,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "sysdisk":
         from . import sysdisk
         return sysdisk.run_cli(args)
+    if args.cmd == "hw-thermal":
+        from . import pcbuild
+        return pcbuild.run_thermal_cli(args)
+    if args.cmd == "dr":
+        from . import drsite
+        return drsite.run_cli(args)
+    if args.cmd == "bareos":
+        from . import bareos
+        return bareos.run_cli(args)
     if args.cmd == "updates":
         from . import updates
         return updates.run_cli(args)
@@ -3414,9 +3966,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "alerts":
         from . import alerts
         return alerts.run_cli(args)
+    if args.cmd == "building":
+        from . import building
+        return building.run_cli(args)
     if args.cmd == "rack":
         from . import rack
         return rack.run_cli(args)
+    if args.cmd == "job":
+        from . import campus
+        return campus.run_cli(args)
+    if args.cmd == "aidc":
+        from . import aidc
+        return aidc.run_cli(args)
     if args.cmd in ("inherited", "room"):
         from . import inherited, serverroom
         return (inherited if args.cmd == "inherited" else serverroom).run_cli(args)
@@ -3448,9 +4009,27 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "oncall":
         return cmd_oncall(args)
+    if args.cmd == "breakfix":
+        from . import breakfix
+        return breakfix.run_cli(args)
+    if args.cmd == "drill":
+        from . import subnetdrill
+        return subnetdrill.run_cli(args)
+    if args.cmd == "interview":
+        from . import interview
+        return interview.run_cli(args)
+    if args.cmd == "incident":
+        from . import incidents
+        return incidents.run_cli(args)
     if args.cmd == "helpdesk":
         from . import helpdesk
         return helpdesk.run_cli(args)
+    if args.cmd == "itops":
+        from . import itops
+        return itops.run_cli(args)
+    if args.cmd == "lifecycle":
+        from . import lifecycle
+        return lifecycle.run_cli(args)
     if args.cmd in ("wear", "shift", "company"):
         import importlib
         return importlib.import_module(f"winlab.{args.cmd}").run_cli(args)
@@ -3465,6 +4044,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "progress":
         return cmd_progress(args)
+    if args.cmd == "tracks":
+        return cmd_tracks(args)
 
     if args.cmd == "viewer":
         return cmd_viewer(args)
@@ -3503,6 +4084,8 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         if args.labcmd == "list":
             return cmd_lab_list()
+        if args.labcmd in ("new", "rm", "rename"):
+            return cmd_my_lab(args)
         if args.labcmd in ("save", "open", "versions", "restore"):
             return cmd_netfile(args)
         if args.labcmd in ("history", "undo", "redo"):
@@ -3511,6 +4094,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_lab_password(args.lab)
         if args.labcmd == "validate":
             return cmd_lab_validate(args.lab)
+        if args.labcmd == "vswitch":
+            return cmd_lab_vswitch(args.lab, args.network, args.kind, args.port)
         if args.labcmd == "plan":
             return cmd_lab_plan(args.lab, args.fabric_script, args.no_port_check)
         if args.labcmd == "diagram":
@@ -3524,6 +4109,8 @@ def main(argv: list[str] | None = None) -> int:
             return cmd_lab_down(args.lab)
         if args.labcmd == "suspend":
             return cmd_lab_suspend(args.lab, _csv(args.only))
+        if args.labcmd == "reload":
+            return cmd_lab_reload(args.lab)
         if args.labcmd == "resume":
             return cmd_lab_up(args.lab, False, args.accel, args.display,
                               only=_csv(args.only), force=args.force)

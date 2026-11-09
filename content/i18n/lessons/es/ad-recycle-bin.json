@@ -1,0 +1,64 @@
+{
+ "title": "La Papelera de reciclaje de AD: recupera una OU eliminada con sus personas y grupos",
+ "summary": "Activa la Papelera de reciclaje antes de necesitarla y luego restaura una OU eliminada completa, primero el padre, con todos sus atributos y pertenencias a grupos.",
+ "why": "Alguien elimina una OU. Con ella se van las cuentas de usuario que contiene, un grupo que\nvivía allí y todas las pertenencias que esos usuarios tenían en grupos de otros sitios. Antes\nde Windows Server 2008 R2, el camino de vuelta era una restauración del estado del sistema en\nel Modo de restauración de servicios de directorio y una restauración autoritativa con ntdsutil\n(la lección ad-authoritative-restore), con el DC fuera de línea y los vínculos inversos\nrestaurados a mano.\n\nLa Papelera de reciclaje conserva un objeto eliminado completo durante su vida útil (180 días\npor defecto): todos los atributos, su SID, su contraseña y sus vínculos, de modo que un usuario\nrestaurado vuelve a estar en los grupos en que estaba y puede iniciar sesión de nuevo con la\ncontraseña que tenía. Hay que activarla primero, no se puede desactivar y solo guarda lo que se\nelimine después.\n\nActívala, pulsa Romper, y OU=Contractors desaparece de dc01 con los dos contratistas que\ncontiene y el grupo de VPN que vivía allí.",
+ "concepts": [
+  "Objetos eliminados: con la Papelera de reciclaje, isDeleted y un traslado a CN=Deleted Objects, conservando atributos y vínculos; sin ella, una lápida (tombstone) que no conserva casi nada",
+  "msDS-deletedObjectLifetime y tombstoneLifetime: cuánto tiempo puede volver un objeto eliminado (180 días cada uno, por defecto)",
+  "lastKnownParent: dónde vivía un objeto; un hijo solo se puede restaurar en un padre que exista, así que restaura de arriba abajo",
+  "Los atributos vinculados (member y memberOf) vuelven con el objeto, algo que una restauración autoritativa tiene que arreglar a mano",
+  "ProtectedFromAccidentalDeletion: una entrada de denegación de eliminación en la OU que la consola y PowerShell respetan"
+ ],
+ "steps": [
+  "Activa la Papelera de reciclaje (para todo el bosque, sin vuelta atrás): Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target corp.lab. Comprueba: (Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes.",
+  "Pulsa Romper (o winlab break dc01 ou-deleted). En Active Directory Users and Computers (actualiza), Corp ya no tiene la OU Contractors.",
+  "Mira en la papelera: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent, whenChanged | Format-Table Name, ObjectClass, lastKnownParent, whenChanged -AutoSize.",
+  "Restaura primero la OU: Get-ADObject -Filter \"isDeleted -eq `$true -and Name -like 'Contractors*'\" -IncludeDeletedObjects | Restore-ADObject.",
+  "Luego todo lo que vivía en ella: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent | Where-Object { $_.lastKnownParent -like 'OU=Contractors,*' } | Restore-ADObject.",
+  "Comprueba que los vínculos volvieron: Get-ADUser mnovak -Properties MemberOf | Select-Object -ExpandProperty MemberOf, y Get-ADGroupMember G-Contractors-VPN.",
+  "Ponlo más difícil la próxima vez: Set-ADOrganizationalUnit 'OU=Contractors,OU=Corp,DC=corp,DC=lab' -ProtectedFromAccidentalDeletion $true.",
+  "Averigua quién lo hizo: en dc01, Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5141} (con la auditoría de Directory Service Changes activada) da el nombre de la cuenta. Después pulsa Verificar mi arreglo."
+ ],
+ "pitfalls": [
+  "Restaurar los usuarios antes que la OU falla: su lastKnownParent sigue eliminado. Siempre de arriba abajo.",
+  "Volver a crear los usuarios a mano genera objetos nuevos con SID nuevos: los archivos, los permisos de buzón y las pertenencias a grupos no los conocen.",
+  "La Papelera de reciclaje no es una copia de seguridad: un cambio de atributo erróneo, una base de datos dañada o una eliminación más antigua que su vida útil siguen necesitando la copia de seguridad del estado del sistema.",
+  "Activar la Papelera de reciclaje no se puede deshacer, y el nivel funcional del bosque debe ser 2008 R2 o posterior (todos los bosques nuevos lo son)."
+ ],
+ "verify": [
+  "la Papelera de reciclaje y lo que contiene",
+  "la OU Contractors, sus personas y sus grupos"
+ ],
+ "quiz": [
+  {
+   "q": "Una OU eliminada contenía usuarios. ¿En qué orden restauras?",
+   "answer": "Primero la OU, luego los objetos cuyo lastKnownParent es esa OU",
+   "wrong": [
+    "Primero los usuarios, luego la OU",
+    "Todo a la vez en cualquier orden",
+    "Primero los grupos, luego la OU"
+   ],
+   "why": "Un objeto solo puede volver a un padre que exista."
+  },
+  {
+   "q": "Con la Papelera de reciclaje activada, ¿qué vuelve con un usuario restaurado?",
+   "answer": "Sus atributos, SID, contraseña y pertenencias a grupos",
+   "wrong": [
+    "Solo su nombre y su SID",
+    "Todo excepto sus pertenencias a grupos",
+    "Solo lo que había en la última copia de seguridad"
+   ],
+   "why": "La Papelera de reciclaje conserva el objeto completo y sus vínculos; una lápida sin ella no conserva casi nada."
+  },
+  {
+   "q": "¿Se puede desactivar la Papelera de reciclaje de AD una vez activada?",
+   "answer": "No, activarla es permanente para el bosque",
+   "wrong": [
+    "Sí, con Disable-ADOptionalFeature",
+    "Sí, bajando el nivel funcional del bosque",
+    "Solo en el emulador de PDC"
+   ],
+   "why": "Actívala pronto; solo ayuda con las eliminaciones hechas después de activarla."
+  }
+ ]
+}

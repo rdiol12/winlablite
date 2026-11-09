@@ -1,0 +1,69 @@
+{
+ "title": "eBGP del router del laboratorio a un ISP, y la salida para toda la oficina",
+ "summary": "Establece un emparejamiento eBGP entre el router del laboratorio (AS 65000) y el router del ISP (AS 65100), anuncia las redes de la empresa con sentencias network, aprende las de Internet y pasa la salida al router del taller con una ruta predeterminada de OSPF.",
+ "why": "Entre las empresas y sus proveedores está BGP. No descubre vecinos: cada lado indica la dirección\ny el número de AS del otro, abren una sesión TCP en el puerto 179, y cada uno le dice al otro qué\nredes puede alcanzar. Una empresa anuncia sus propios prefijos y aprende los del proveedor (o una\nruta predeterminada), y el proveedor lleva los prefijos de la empresa al resto de Internet.\n\nEl router del laboratorio es aquí el borde de la empresa: router bgp 65000 en su consola, como en\ncualquier router de borde Cisco. rtr-isp es el proveedor, Ubuntu con FRRouting, AS 65100. Dentro de la\nempresa ya funciona OSPF (la lección anterior); el router de borde es donde se encuentran los dos, y\ndefault-information originate es como los routers internos aprenden que todo lo desconocido va al\nborde.\n\nUna diferencia honesta que verás: FRRouting sigue la RFC 8212 y, de forma predeterminada, no acepta\nni envía rutas eBGP hasta que una directiva (un route-map) lo permite. IOS no. La consola del router\ndel laboratorio se comporta como IOS, así que winlab desactiva ese comportamiento predeterminado en él\n(no bgp ebgp-requires-policy, escrito por ti en la configuración de FRRouting del router); en rtr-isp\nlo escribes tú, y ves por qué existe.",
+ "concepts": [
+  "router bgp <AS>: un proceso BGP por router, identificado por su número de sistema autónomo; de 64512 a 65534 son números de AS privados, como las direcciones privadas",
+  "neighbor <address> remote-as <AS>: un AS distinto del tuyo lo convierte en eBGP; la sesión es TCP 179 y no pasa nada hasta que ambos lados se nombran mutuamente",
+  "network <prefix> mask <mask> anuncia un prefijo solo si exactamente ese prefijo está en la tabla de enrutamiento (conectado, estático o aprendido de OSPF)",
+  "Estados de BGP: Idle, Connect, Active, OpenSent, OpenConfirm, Established; show ip bgp summary muestra un recuento de prefijos en lugar de un estado una vez Established",
+  "Distancia administrativa: las rutas eBGP son 20, OSPF 110, estáticas 1; B en show ip route",
+  "default-information originate always (OSPF): anuncia una ruta predeterminada a los routers OSPF aunque no haya una en la tabla; sin always sigue a una ruta predeterminada que tenga el router"
+ ],
+ "steps": [
+  "Inicia rtr-isp, rtr-edge, pc-office, pc-edge e inet01 (el servidor web en Internet, 203.0.113.80). El OSPF de la lección anterior se mantiene: el router del laboratorio y rtr-edge son vecinos.",
+  "Instala FRRouting en rtr-isp: en Máquinas, saca la memoria de paquetes frr de rtr-edge y conéctala a rtr-isp (su Configuración), luego monta LABEL=WLPACK e instala frr como dice el README de la memoria. Reenvío activado: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf, sudo sysctl --system. Demonio BGP activado: sudo sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons, sudo systemctl restart frr.",
+  "Primero el lado del ISP. En rtr-isp: sudo vtysh, configure terminal, router bgp 65100, bgp router-id 9.9.9.9, no bgp ebgp-requires-policy, neighbor 198.51.100.1 remote-as 65000, address-family ipv4 unicast, network 203.0.113.0/24, exit-address-family, end, write memory. show bgp summary: el vecino se queda en Active, porque todavía nadie responde en 198.51.100.1.",
+  "El lado de la empresa, en la consola del router del laboratorio: enable, configure terminal, router bgp 65000. El prompt es Router(config-router)#. Escribe bgp router-id 2.2.2.2 y neighbor 198.51.100.2 remote-as 65100, luego neighbor 198.51.100.2 description ISP. Después las redes que anunciar, como las escribe IOS-XE: address-family ipv4, network 10.80.0.0 mask 255.255.255.0, network 10.81.0.0 mask 255.255.255.0, exit-address-family, end.",
+  "Observa cómo se establece la sesión: show ip bgp summary en la consola. La línea de 198.51.100.2 pasa de Active o Connect a un número (prefijos recibidos) en pocos segundos. show ip bgp lista 203.0.113.0/24 con siguiente salto 198.51.100.2 y ruta AS 65100, y las dos redes 10.x que anuncias con siguiente salto 0.0.0.0.",
+  "Fíjate en que 10.81.0.0/24 se anuncia aunque ninguna interfaz del router del laboratorio esté en ella: network toma cualquier coincidencia exacta en la tabla de enrutamiento, y el router del laboratorio la aprendió de OSPF. Prueba network 10.0.0.0 mask 255.0.0.0: show ip bgp nunca la lista, porque no existe ninguna ruta 10.0.0.0/8. Quítala otra vez con no network 10.0.0.0 mask 255.0.0.0 (en router bgp 65000, address-family ipv4).",
+  "La tabla de enrutamiento ahora: show ip route en la consola tiene B 203.0.113.0/24 [20/0] via 198.51.100.2. En rtr-isp, show ip route bgp tiene las dos redes de la empresa. Desde pc-office, curl -s http://203.0.113.80/ responde con 'from 10.80.0.10': el servidor web ve la propia dirección del PC, porque aquí no hay NAT, solo rutas.",
+  "El taller todavía no puede salir: desde pc-edge, curl -s -m 5 http://203.0.113.80/ agota el tiempo. rtr-edge solo conoce lo que le dijo OSPF, y OSPF no dice nada de Internet. Dale una salida: en la consola, configure terminal, router ospf 1, default-information originate always, end. En rtr-edge, show ip route en vtysh tiene O>* 0.0.0.0/0 via 10.80.0.2. Ahora el curl de pc-edge responde 'from 10.81.0.10'.",
+  "Rómpelo y léelo: en la consola, router bgp 65000, neighbor 198.51.100.2 remote-as 65101. show ip bgp summary: la sesión cae y sigue caída; en rtr-isp, show bgp neighbors 198.51.100.1 nombra la NOTIFICATION (bad peer AS). Vuelve a poner 65100. clear ip bgp * reinicia todas las sesiones a mano, algo que un cambio real de directiva necesita a menudo.",
+  "show ip protocols en la consola lista ambos protocolos, para qué enruta cada uno y el vecino BGP. write memory lo guarda. Pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "Active no significa activo: significa que el router intenta abrir la sesión TCP y nadie responde. Comprueba la dirección, que el otro lado te nombre y que bgpd se ejecute allí.",
+  "Una sentencia network con la máscara equivocada no anuncia nada y no da ningún error; show ip bgp muestra lo que realmente se anuncia.",
+  "En FRRouting, eBGP sin route-map ni no bgp ebgp-requires-policy queda Established con (Policy) en show bgp summary y sin prefijos: eso es la RFC 8212, no un fallo de la sesión.",
+  "default-information originate sin always solo funciona cuando el propio router tiene una ruta predeterminada; aquí el ISP no envía ninguna, así que es always lo que hace que ocurra.",
+  "El camino de vuelta importa tanto como el de salida: pc-edge llega a inet01 solo porque rtr-isp aprendió 10.81.0.0/24 del router del laboratorio."
+ ],
+ "verify": [
+  "la sesión BGP y los prefijos del router del laboratorio",
+  "lo que el ISP aprendió de la empresa",
+  "el taller llega a Internet con su propia dirección"
+ ],
+ "quiz": [
+  {
+   "q": "¿Cuándo anuncia algo 'network 10.81.0.0 mask 255.255.255.0' bajo router bgp?",
+   "answer": "Cuando exactamente 10.81.0.0/24 está en la tabla de enrutamiento, de cualquier origen",
+   "wrong": [
+    "Siempre, en cuanto se escribe",
+    "Solo cuando una interfaz tiene una dirección en ella",
+    "Solo después de redistribute connected"
+   ],
+   "why": "El comando network de BGP origina una ruta existente; no crea una."
+  },
+  {
+   "q": "show ip bgp summary muestra Active para un vecino. ¿Qué significa?",
+   "answer": "La sesión TCP con el vecino no está establecida: el router sigue intentándolo",
+   "wrong": [
+    "La sesión está establecida y las rutas fluyen",
+    "El vecino está desactivado administrativamente",
+    "El vecino envió demasiados prefijos"
+   ],
+   "why": "Active y Connect son ambos intentos de abrir TCP 179; Established es el estado de funcionamiento."
+  },
+  {
+   "q": "¿Qué distancia administrativa tiene una ruta eBGP en un router Cisco?",
+   "answer": "20",
+   "wrong": [
+    "110",
+    "200",
+    "1"
+   ],
+   "why": "eBGP es 20, así que gana a OSPF (110); iBGP es 200."
+  }
+ ]
+}

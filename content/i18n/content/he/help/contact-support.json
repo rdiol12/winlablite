@@ -1,0 +1,17 @@
+{
+ "Contact support": "יצירת קשר עם התמיכה",
+ "Support": "תמיכה",
+ "support": "תמיכה",
+ "contact": "יצירת קשר",
+ "email": "דוא\"ל",
+ "help": "עזרה",
+ "bug": "באג",
+ "problem": "בעיה",
+ "logs": "יומנים",
+ "support file": "קובץ תמיכה",
+ "bundle": "חבילה",
+ "zip": "zip",
+ "report": "דוח",
+ "Make a support file and send it to us with a few words on what happened.": "צור קובץ תמיכה ושלח אותו אלינו עם כמה מילים על מה שקרה.",
+ "If something does not work and the other topics did not help, write to us. A support file lets us see what happened on this PC.\n\n**Make a support file** below collects, in one zip:\n\n- the checks winlab doctor runs, winlab's version, Windows, Python and QEMU versions\n- the labs and the state of their machines\n- the last part of each machine's log and of the base preparation logs\n- winlab's own settings, with secrets taken out\n\nIt never contains disk images, ISOs, USB sticks, lab passwords, your product key or license, or your own files. The zip stays on this PC until you attach it to an email yourself.\n\nFrom a command prompt: `winlab doctor --bundle`": "אם משהו לא עובד והנושאים האחרים לא עזרו, כתוב לנו. קובץ תמיכה מאפשר לנו לראות מה קרה במחשב הזה.\n\n**צור קובץ תמיכה** למטה אוסף, ב-zip אחד:\n\n- הבדיקות ש-winlab doctor מריץ, הגרסה של winlab, הגרסאות של Windows, Python ו-QEMU\n- המעבדות ומצב המכונות שלהן\n- החלק האחרון של היומן של כל מכונה ושל יומני הכנת הבסיס\n- ההגדרות של winlab עצמו, כשהסודות הוצאו\n\nהוא לעולם לא מכיל תמונות דיסק, קובצי ISO, דיסקים ניידים, סיסמאות מעבדה, את מפתח המוצר או הרישיון שלך, או את הקבצים שלך. קובץ ה-zip נשאר במחשב הזה עד שתצרף אותו בעצמך להודעת דוא\"ל.\n\nמשורת פקודה: `winlab doctor --bundle`"
+}

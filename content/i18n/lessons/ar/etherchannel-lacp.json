@@ -1,0 +1,68 @@
+{
+ "title": "EtherChannel: كبلان بين المبدّلات كرابط واحد، مع LACP",
+ "summary": "اجمع كبلين بين مبدّلين في port-channel باستخدام LACP، واقرأ show etherchannel summary، واكسره بالطريقة الكلاسيكية: on مقابل active.",
+ "why": "كبل جيجابت واحد بين مبدّل النواة ومبدّل طابق هو جيجابت واحد للطابق كله، وكبل واحد قد\nتخسره. يبدو كبل ثانٍ هو الحل، لكن كبلين بين مبدّلين يشكّلان حلقة، فيحظر spanning tree\nأحدهما: دفعت ثمن اثنين وتستخدم واحداً.\n\nيجمع EtherChannel (اسم Cisco؛ والمعيار هو IEEE 802.3ad، والآن 802.1AX، تجميع الروابط)\nالكبلات في رابط منطقي واحد هو port-channel. يرى spanning tree منفذاً واحداً، فلا يُحظر شيء؛\nوتمر كل محادثة عبر عضو واحد يُختار بتجزئة (hash) لعناوينها، فيتجمع عرض النطاق عبر محادثات\nكثيرة؛ والكبل المنزوع لا يأخذ معه إلا حصته.\n\nيجب أن يتفق الطرفان على التجميع. يتفاوض LACP (المعيار) على ذلك: المنفذ active يسأل،\nوالمنفذ passive يجيب فقط. أما mode on فيجمّع دون أن يسأل شيئاً، وهذا بالضبط ما يجعله\nخطيراً: on في طرف وLACP (أو لا شيء) في الطرف الآخر خطأ في الإعداد يلتقطه Catalyst ويضعه في\nحالة err-disable. أما PAgP (desirable وauto) فهو بروتوكول Cisco الأقدم، الخاص بـ Cisco\nوحدها.\n\nفي هذا المختبر، كبلات المبدّلات أزواج veth بين جسور النواة على الموجّه. القناة التي تتشكل\nهي bond حقيقي في Linux على كل جانب (802.3ad لـ LACP، وbalance-xor لـ on)، فيعمل LACP\nالخاص بالنواة بينهما فعلاً ويرى spanning tree منفذاً واحداً. لا يملك Linux بروتوكول PAgP:\nيطبّق winlab قواعد PAgP ليقرر ما إذا كانت القناة ستتشكل، ثم يشغّل التجميع LACP على السلك؛\nوتقول وحدة التحكم ذلك.",
+ "concepts": [
+  "الـ port-channel رابط منطقي واحد مكوّن من حتى ثمانية منافذ أعضاء؛ ويرى spanning tree وجدول MAC وإعدادات الـ trunk الـ port-channel لا الأعضاء",
+  "الأوضاع: active (LACP، يسأل)، وpassive (LACP، يجيب فقط)، وon (بلا أي بروتوكول)، وdesirable وauto (PAgP، الخاص بـ Cisco)",
+  "ما الذي يتجمّع: active مع active أو passive؛ وon مع on؛ وdesirable مع desirable أو auto. أما passive مع passive، وauto مع auto، فلا يتجمعان أبداً: لا أحد يسأل",
+  "موازنة الحمل لكل محادثة لا لكل إطار: تجزئة لعناوين MAC أو IP (port-channel load-balance) تختار العضو، فلا يكون نسخ ملف واحد أسرع أبداً من كبل واحد",
+  "يجب أن يتطابق الأعضاء: السرعة، والازدواج، وtrunk أو access، والشبكات VLAN المسموح بها والأصلية. اضبطها تحت interface port-channel فيرثها الأعضاء",
+  "حماية EtherChannel من خطأ الإعداد: المبدّل الذي في وضع on ويسمع spanning tree من عدة منافذ في الطرف الآخر يضع الـ port-channel الخاص به في err-disable (channel-misconfig)",
+  "الرموز في show etherchannel summary: SU قيد الاستخدام، وSD متوقف؛ وللأعضاء P مجمَّع، وI مستقل، وs معلَّق، وD متوقف"
+ ],
+ "steps": [
+  "افتح طاولة الشبكة. مبدّل corp هو المتصل بالموجّه بالكبل. أضف مبدّلاً من الرف واسحب منفذه الصاعد (Gi0/1) إلى مبدّل corp: هذا كبل واحد. ثم اسحب منفذ جيجابت حراً من المبدّل الجديد إلى مبدّل corp مرة أخرى: كبل ثانٍ بين المبدّلين نفسيهما (Gi0/2 على المبدّل الجديد، وGi0/3 على مبدّل corp).",
+  "انظر إلى الحلقة أولاً. انقر نقراً مزدوجاً على المبدّل الجديد، ثم enable، ثم show spanning-tree: أحد الكبلين محظور (Altn BLK). كبلان، وواحد قيد الاستخدام. يُظهر show cdp neighbors أي منفذ محلي يذهب إلى أي منفذ في الطرف الآخر.",
+  "جمّع طرف corp. على مبدّل corp: enable، وconfigure terminal، وinterface range gi0/2 - 3، وchannel-group 1 mode active. يقول المبدّل Creating a port-channel interface Port-channel 1. ثم نفّذ show etherchannel summary: Po1(SD) مع أعضائه (I)، مستقلين، لأن الطرف الآخر لا يتحدث LACP بعد.",
+  "جمّع الطرف الآخر: على المبدّل الجديد، interface range gi0/1 - 2، وchannel-group 1 mode passive. المنفذ passive يجيب فقط، ومنافذ corp الـ active تسأل، فتتشكل القناة: %LINK-3-UPDOWN: Interface Port-channel1, changed state to up. show etherchannel summary على الاثنين: Po1(SU)، والأعضاء (P).",
+  "اقرأه من كل جانب: show interfaces port-channel 1 (BW 2000000 Kbit/sec، وMembers in this channel)، وshow lacp neighbor (معرّف نظام الشريك هو عنوان المبدّل الآخر؛ ويقول A أو P ما إذا كان يسأل)، وshow etherchannel detail، وshow spanning-tree: صف واحد، Po1، في حالة forwarding، بكلفة 3 بدلاً من 4. لم يعد شيء محظوراً.",
+  "اضبط التجميع لا الأعضاء: interface port-channel 1، وdescription to the floor switch، وswitchport trunk allowed vlan 1,10. show running-config: الوصف على Port-channel1، وإعداد الـ trunk وصل إلى العضوين، لأن IOS ينقله إليهما.",
+  "اختر التجزئة: port-channel load-balance src-dst-ip على المبدّلين (show etherchannel load-balance). القيمة الافتراضية في 2960، أي src-mac، تضع كل ما يأتي من جهاز واحد (الموجّه مثلاً) على عضو واحد؛ أما عنوانا IP المصدر والوجهة فيوزعان المحادثات بشكل أفضل.",
+  "اكسره بالطريقة الكلاسيكية. على المبدّل الجديد: interface range gi0/1 - 2، وno channel-group، وchannel-group 1 mode on. يجمّع on دون أن يسأل، لكن طرف corp يستخدم LACP: يسجّل المبدّل الجديد %PM-4-ERR_DISABLE: channel-misconfig (STP) error detected on Po1 ويصبح الـ port-channel الخاص به err-disabled. يُظهر show etherchannel summary Po1(SD) مع أعضاء (D)، ويُظهرهم show spanning-tree بحالة BKN*. انقطع مبدّل الطابق.",
+  "أصلحه كما يحتاج مبدّل حقيقي: اجعل الأوضاع متفقة (no channel-group، ثم channel-group 1 mode active على المنفذين)، ثم أوقف التجميع وشغّله لإزالة err-disable: interface port-channel 1، ثم shutdown، ثم no shutdown. Po1(SU) مجدداً.",
+  "جرّب الأزواج التي لا تتجمع أبداً: passive على الطرفين (لا أحد يسأل: الأعضاء (I)، ويحظر spanning tree أحد الكبلين مجدداً)، وdesirable في طرف مقابل active في الآخر (PAgP مقابل LACP: (I)). أعد الطرفين إلى active، ونفّذ copy running-config startup-config على المبدّلين."
+ ],
+ "pitfalls": [
+  "mode on في طرف وactive أو passive أو لا شيء في الآخر: يدخل جانب on في err-disable (channel-misconfig). أصلح الأوضاع، ثم shutdown / no shutdown على الـ port-channel.",
+  "passive مع passive (أو auto مع auto) لا يتشكل أبداً: يجب أن يسأل أحد الطرفين.",
+  "تغيير إعدادات الـ trunk لعضو يدوياً بحيث تختلف عن الآخرين يعلّقه (s): اضبط interface port-channel بدلاً من ذلك.",
+  "توقّع أن يصبح نسخ كبير واحد أسرع بمرتين: المحادثة تستخدم دائماً عضواً واحداً؛ والتجميع يساعد محادثات كثيرة لا محادثة واحدة.",
+  "في هذا المختبر يتبع desirable وauto في PAgP قواعد PAgP، لكن الـ bond على الموجّه يشغّل LACP على السلك، إذ لا يملك Linux بروتوكول PAgP. أما مبدّل 2960 حقيقي فيتحدث PAgP بنفسه."
+ ],
+ "verify": [
+  "الـ bonds على الموجّه: الوضع، والتجزئة، والمجمِّع والشريك لكل عضو"
+ ],
+ "quiz": [
+  {
+   "q": "مبدّل فيه channel-group 1 mode passive على منفذين، والآخر في mode passive أيضاً. ماذا يحدث؟",
+   "answer": "لا تتشكل قناة: كلاهما يجيب فقط، فلا أحد يبدأ LACP وتبقى المنافذ مستقلة (I)",
+   "wrong": [
+    "تتشكل القناة باستخدام LACP",
+    "يدخل المنفذان في err-disable",
+    "تتشكل القناة دون بروتوكول"
+   ],
+   "why": "يجب أن يكون طرف واحد على الأقل active (LACP) أو desirable (PAgP) كي يسأل."
+  },
+  {
+   "q": "mode on في طرف، وmode active في الآخر. ماذا يفعل Catalyst؟",
+   "answer": "يضع جانب on الـ port-channel الخاص به في err-disable: channel-misconfig، اكتشفه spanning tree",
+   "wrong": [
+    "يتفاوضان نزولاً إلى on",
+    "يتحول جانب active إلى on",
+    "لا شيء: on يعمل دائماً"
+   ],
+   "why": "لا يرسل on أي LACP؛ فلا يجمّع طرف active أبداً ويشغّل كل كبل وحده، ويسمع طرف on بروتوكول spanning tree من منفذين، وهو ما تلتقطه حماية خطأ الإعداد."
+  },
+  {
+   "q": "port-channel من كبلَي جيجابت ينقل نسخة ملف كبيرة واحدة بين خادمين. ما أقصى سرعة لها؟",
+   "answer": "جيجابت واحد: تُسند المحادثة بالتجزئة إلى عضو واحد",
+   "wrong": [
+    "جيجابتان",
+    "نصف جيجابت على كل كبل",
+    "يعتمد ذلك على spanning tree"
+   ],
+   "why": "موازنة الحمل لكل تدفق، بتجزئة العناوين؛ والتدفقات الكثيرة تتوزع، أما التدفق الواحد فلا."
+  }
+ ]
+}

@@ -57,7 +57,7 @@ if grep -q ' login sw:' /var/log/winlab-vty.log 2>/dev/null; then echo True; els
 '''
 expect = "True"
 weight = 3
-hint = "From pc01: ssh admin@10.10.10.2, then the password you gave username admin. % Login invalid means the secret did not match; a connection that closes at once means the vty lines do not take SSH."
+hint = "From pc01: ssh admin@10.10.10.2, then the password you gave username admin. Permission denied, please try again means the secret did not match (or the user is missing); a connection that closes at once means the vty lines do not take SSH."
 
 [[check]]
 name = "pc01 knows the switch's host key"

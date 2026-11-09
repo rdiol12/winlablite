@@ -1,0 +1,80 @@
+{
+ "title": "¿Quién está machacando el servidor de archivos?",
+ "summary": "El servidor de archivos va lento y la oficina está muy activa: lee la carga con Resource Monitor, Get-SmbSession, Get-SmbOpenFile y los contadores de rendimiento, y luego encuentra a la persona y el trabajo que hay detrás.",
+ "why": "\"La unidad K: va lenta hoy\" es una de las llamadas que recibe todo administrador, y la respuesta casi\nnunca es \"compra un servidor más grande\". Algo o alguien lo está usando más de lo normal: un escáner\nque guarda cada página como un archivo nuevo, una reunión grabada copiada a la carpeta del departamento\ny luego a una carpeta personal, una herramienta de sincronización atascada en un bucle. El trabajo es\npasar de \"lento\" a un nombre y un motivo, con pruebas, antes de que nadie toque un ajuste.\n\nWindows tiene todo lo necesario para ello en el propio servidor. Resource Monitor muestra qué archivos\nse están leyendo y escribiendo ahora mismo y quién está conectado al puerto 445. Get-SmbSession lista\ncada sesión de cliente con su cuenta y su equipo, Get-SmbOpenFile cada archivo abierto y por quién. Los\ncontadores de rendimiento de SMB Server miden los bytes por recurso compartido y por sesión, y un\nregistro de contadores los guarda para que puedas mostrar cómo fue la tarde. Los propios archivos dicen\nel resto: su tamaño, cuándo se escribieron y su propietario, la cuenta que los creó.\n\nEn este laboratorio la carga es real: el personal que incorporaste trabaja en el servidor de archivos\ntodo el día (la ventana Oficina), y en una tarde ajetreada algunos copian escaneos y grabaciones grandes\na la carpeta de su departamento y de ahí a su carpeta personal. Averiguas quién, desde el servidor,\ncomo lo harías en el trabajo.",
+ "concepts": [
+  "Resource Monitor (resmon): la pestaña Disk nombra los archivos que se leen y escriben (las escrituras SMB aparecen bajo System), la lista TCP Connections de la pestaña Network muestra quién está conectado al puerto 445",
+  "Get-SmbSession: una fila por sesión de cliente con ClientUserName, ClientComputerName, NumOpens y cuánto tiempo lleva ahí",
+  "Get-SmbOpenFile: cada archivo que un cliente tiene abierto en el servidor, con su Path y ClientUserName; Close-SmbOpenFile cierra uno, lo que rara vez es el primer paso correcto",
+  "Los conjuntos de contadores SMB Server Shares y SMB Server Sessions: Data Bytes/sec, Read Bytes/sec y Write Bytes/sec por recurso compartido y por sesión",
+  "Un registro de contadores (Data Collector Set) creado con logman guarda las muestras en un archivo .blg: la prueba de cómo fue la carga, que se vuelve a leer con Import-Counter o Performance Monitor",
+  "El propietario de un archivo (Get-Acl ... .Owner) es la cuenta que lo creó: los archivos grandes y recientes y sus propietarios señalan a la persona; el nombre y la carpeta del archivo señalan el trabajo"
+ ],
+ "steps": [
+  "Antes de empezar: el personal debe estar trabajando en fs01 (la lección onboard-new-starters: cuentas, carpetas de departamento en el recurso compartido Company, carpetas personales, primeras contraseñas escritas en Oficina > Lista de personal). En la ventana Oficina activa la jornada laboral y conviértela en una tarde ajetreada: Día ajetreado activado, y el reloj del laboratorio en los guardados de fin de jornada (winlab clock jump 16:30 en un día laborable). Las copias grandes llegan entonces.",
+  "En fs01, empieza primero por la prueba, un registro de contadores de la carga del servidor de archivos cada 15 segundos: logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" \"\\PhysicalDisk(*)\\Disk Bytes/sec\" \"\\Processor(_Total)\\% Processor Time\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, luego logman start FileServerLoad. logman query FileServerLoad lo muestra como Running.",
+  "Míralo en directo: Get-Counter -Counter '\\SMB Server Shares(*)\\Data Bytes/sec' -SampleInterval 5 -MaxSamples 6. La instancia más activa es el recurso compartido que se está machacando (Company, o Home$ cuando las copias siguen hacia las carpetas personales).",
+  "Quién está conectado: Get-SmbSession | Sort-Object NumOpens -Descending | Format-Table ClientUserName, ClientComputerName, NumOpens, SecondsExists. Ejecútalo varias veces durante los minutos de actividad: las sesiones aparecen y desaparecen mientras la gente trabaja.",
+  "Qué tienen abierto: Get-SmbOpenFile | Format-Table ClientUserName, Path -AutoSize. Una copia grande en curso aparece como una persona que tiene abierto un archivo grande en la carpeta de su departamento.",
+  "Resource Monitor: ejecuta resmon en fs01. En la pestaña Disk, Disk Activity ordenada por Write (B/sec) nombra los archivos que se están escribiendo ahora mismo; en la pestaña Network, TCP Connections en el puerto local 445 lista los clientes y cuánto envía cada uno.",
+  "Deja hablar a los archivos: Get-ChildItem -Path D:\\Shares -Recurse -File | Sort-Object Length -Descending | Select-Object -First 10 FullName, @{n='MB';e={[math]::Round($_.Length / 1MB, 1)}}, LastWriteTime, @{n='Owner';e={(Get-Acl -LiteralPath $_.FullName).Owner}}. Los grandes y recientes y su propietario son tu persona; el nombre del archivo dice cuál es el trabajo.",
+  "Hazlos coincidir: la cuenta del propietario está en el ClientUserName de Get-SmbSession, el equipo cliente es el PC en el que se sienta (Resolve-DnsName sobre su dirección si la sesión muestra una), y el registro de la ventana Oficina dice qué estaba haciendo en ese minuto.",
+  "Anótalo en fs01 en C:\\winlab\\hammering.txt, un dato por línea: account <their sAMAccountName>, pc <the computer they work from>, file <the full path of the big file on fs01>, job <what they were doing, in a few words>.",
+  "Detén el registro y vuelve a leerlo: logman stop FileServerLoad; Import-Counter -Path (Get-ChildItem C:\\PerfLogs -Recurse -Filter 'FileServerLoad*.blg' | Select-Object -First 1).FullName | ForEach-Object CounterSamples | Where-Object Path -like '*smb server shares*' | Sort-Object CookedValue -Descending | Select-Object -First 5 Timestamp, InstanceName, CookedValue. O abre el .blg en Performance Monitor. Luego pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "Cerrar sesiones o archivos abiertos para que el servidor vuelva a ir rápido: la persona pierde su trabajo y lo vuelve a hacer cinco minutos después. Averigua primero; la solución es hablar con ella, una cuota o mover el trabajo, no Close-SmbSession.",
+  "Un vistazo no es una prueba. Las sesiones y los archivos abiertos cambian cada pocos segundos; un registro de contadores durante el periodo de actividad es lo que le enseñas al responsable.",
+  "Get-SmbSession ejecutado una vez, en el momento equivocado, no muestra nada: una copia de unos pocos megabytes termina en segundos. Observa durante los minutos de actividad, y usa los propietarios y las horas de los archivos para lo que ya pasó.",
+  "El propietario de un archivo escrito por un administrador es Administrators, no la persona: solo los archivos que escribió el propio personal lo nombran.",
+  "Las instancias de contadores solo existen mientras algo las usa: una instancia de SMB Server Sessions aparece con la sesión y se va con ella."
+ ],
+ "verify": [
+  "quién está conectado ahora al servidor de archivos",
+  "los archivos abiertos",
+  "los archivos más grandes de los recursos compartidos y sus propietarios",
+  "el registro de contadores"
+ ],
+ "quiz": [
+  {
+   "q": "En el servidor de archivos, ¿qué cmdlet lista cada sesión de cliente con su cuenta y su equipo?",
+   "answer": "Get-SmbSession",
+   "wrong": [
+    "Get-SmbShare",
+    "Get-NetTCPConnection -LocalPort 3389",
+    "Get-SmbMapping"
+   ],
+   "why": "Get-SmbSession muestra ClientUserName y ClientComputerName por sesión; Get-SmbMapping es la vista del cliente de sus propias unidades."
+  },
+  {
+   "q": "¿Qué conjunto de contadores mide los bytes por recurso compartido en un servidor de archivos SMB?",
+   "answer": "SMB Server Shares (Data Bytes/sec por recurso compartido)",
+   "wrong": [
+    "SMB Client Shares",
+    "Network Adapter(*)\\Bytes Total/sec",
+    "LogicalDisk(*)\\% Free Space"
+   ],
+   "why": "SMB Server Shares tiene una instancia por recurso compartido; SMB Client Shares es el lado del cliente, y los contadores del adaptador no se dividen por recurso compartido."
+  },
+  {
+   "q": "Un archivo de 12 MB apareció en la carpeta Finance hace diez minutos. ¿Qué nombra la cuenta que lo escribió?",
+   "answer": "Su propietario: (Get-Acl -LiteralPath <file>).Owner",
+   "wrong": [
+    "Su LastAccessTime",
+    "Los permisos del recurso compartido",
+    "Get-SmbShare -Name Finance"
+   ],
+   "why": "La cuenta que crea un archivo pasa a ser su propietaria, salvo que sea un administrador, cuyos archivos pertenecen a Administrators."
+  },
+  {
+   "q": "¿Por qué iniciar un registro de contadores antes de ponerte a buscar?",
+   "answer": "Las sesiones y los archivos abiertos cambian a cada segundo; el registro es la prueba de todo el periodo de actividad",
+   "wrong": [
+    "Get-SmbSession solo funciona mientras se ejecuta un registro",
+    "Sin él los contadores se reinician",
+    "Resource Monitor lo necesita"
+   ],
+   "why": "Un registro creado con logman guarda las muestras en un archivo .blg que puedes volver a leer con Import-Counter o mostrar en Performance Monitor."
+  }
+ ]
+}

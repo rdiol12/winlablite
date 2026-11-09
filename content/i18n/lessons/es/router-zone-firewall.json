@@ -1,0 +1,76 @@
+{
+ "title": "Un firewall basado en zonas en el router: servidores y usuarios en sus propias zonas",
+ "summary": "Divide la oficina en una LAN de servidores y una LAN de usuarios en el router, pon cada una en una zona de seguridad y deja que los usuarios lleguen solo a los servicios que necesita un miembro del dominio, con el tráfico de retorno controlado con estado.",
+ "why": "Una lista de acceso en una interfaz del router es una lista de paquetes que deja pasar.\nNo sabe nada de conversaciones: para dejar entrar las respuestas escribes una\nsegunda lista para el otro sentido, y mantienes las dos sincronizadas a mano. En\nun router con más de dos redes eso se convierte en un laberinto que nadie se atreve a\ntocar.\n\nEl zone-based policy firewall (ZBF) de Cisco piensa en zonas. Cada\ninterfaz se pone en una zona (SERVERS, USERS, la DMZ), y el tráfico entre\ndos zonas se descarta salvo que un zone-pair, en un sentido, lleve una directiva\nque lo permita. El tráfico dentro de una zona pasa; una interfaz en una zona nunca\nhabla con una que no está en ninguna zona. La directiva se construye con las mismas tres partes que\nla QoS: un class-map dice qué tráfico, un policy-map dice qué hacer con cada\nclase (inspect, pass o drop), y el zone-pair la aplica. Inspect es lo\nimportante: recuerda la conversación, así que la respuesta del servidor vuelve\nsin regla propia, y nada de lo que el servidor inicie por su cuenta pasa.\n\nEn este laboratorio el router es un router Linux real (una VM Alpine) y la\nconsola convierte lo que escribes en sus reglas nftables: las zonas se convierten en\nconjuntos de interfaces, inspect marca la conexión en el seguimiento de conexiones del kernel\n(conntrack), y el tráfico de retorno de las conexiones marcadas es lo que\nvuelve. show policy-map type inspect zone-pair sessions lee esas\nconexiones del router. No hay nada preparado para ti: construyes tú la segunda\nLAN, las zonas y la directiva.",
+ "concepts": [
+  "Zonas: las interfaces de la misma zona hablan libremente; entre dos zonas todo se descarta hasta que un zone-pair lo permite; una interfaz con zona nunca habla con una sin zona",
+  "La zona self es el propio router (sus propias direcciones): el tráfico hacia él y desde él es libre hasta que un zone-pair nombra self, y entonces solo lo que permita esa directiva",
+  "Un zone-pair tiene sentido: source USERS destination SERVERS juzga solo lo que inician los usuarios; las respuestas al tráfico inspeccionado vuelven por sí solas",
+  "class-map type inspect match-any (cualquier línea match) o match-all (todas las líneas match): match protocol <name> o match access-group <list>",
+  "policy-map type inspect: inspect (con estado, se permite el tráfico de retorno), pass (en un sentido, sin estado: la respuesta necesita su propio pass), drop (lo predeterminado para class-default), drop log",
+  "En IOS los nombres de protocolo vienen del motor de inspección; aquí match protocol funciona por puerto conocido (http 80, dns 53, microsoft-ds 445): para todo lo demás usa una lista de acceso",
+  "Un miembro de dominio Windows necesita de su controlador de dominio DNS (53), Kerberos (88), LDAP (389), SMB (445), el asignador de extremos RPC (135) y los puertos RPC dinámicos (de 49152 a 65535), el cambio de contraseña de Kerberos (464), el catálogo global (3268) y la hora (123)"
+ ],
+ "steps": [
+  "Termina primero las primeras lecciones del laboratorio: dc01 es el controlador de dominio con DNS y DHCP, fs01 y pc01 son miembros del dominio. Abre el Banco de red y enciende el router, dc01, fs01 y pc01.",
+  "Construye la LAN de usuarios. En el Banco de red añade un switch y arrastra su enlace ascendente (Gi0/1) a un puerto libre del router, después arrastra el cable de pc01 del switch de corp al nuevo switch. En la consola del router: enable; show ip interface brief te dice en qué puerto está el nuevo switch (GigabitEthernet0/0/1 si es el segundo).",
+  "Dale dirección y reparte concesiones desde el router: configure terminal, interface g0/0/1, ip address 10.10.20.1 255.255.255.0, no shutdown, exit, ip dhcp excluded-address 10.10.20.1 10.10.20.49, ip dhcp pool USERS, network 10.10.20.0 255.255.255.0, default-router 10.10.20.1, dns-server 10.10.10.10, domain-name corp.lab, end.",
+  "En pc01: ipconfig /release, ipconfig /renew, después ipconfig /all: una dirección en 10.10.20.0/24, puerta de enlace 10.10.20.1, DNS 10.10.10.10. Inicia sesión con una cuenta del dominio y abre \\\\fs01\\c$ como administrador: todo funciona porque todavía no filtra nada.",
+  "Las zonas: configure terminal, zone security SERVERS, description dc01 and fs01, exit, zone security USERS, exit. No pongas todavía interfaces en ellas: en el momento en que una interfaz esté en una zona y la otra no, dejan de hablar.",
+  "La lista de lo que necesita un miembro del dominio, como lista de acceso extendida: ip access-list extended DOMAIN-SVCS, después permit udp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq domain, permit tcp any host 10.10.10.10 eq 88, permit udp any host 10.10.10.10 eq 88, permit tcp any host 10.10.10.10 eq 389, permit udp any host 10.10.10.10 eq 389, permit tcp any host 10.10.10.10 eq 135, permit tcp any host 10.10.10.10 range 49152 65535, permit tcp any host 10.10.10.10 eq 3268, permit tcp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq 464, permit udp any host 10.10.10.10 eq ntp, permit tcp any 10.10.10.0 0.0.0.255 eq 445, exit.",
+  "Las clases: class-map type inspect match-any DOMAIN, match access-group name DOMAIN-SVCS, exit. class-map type inspect match-any PING, match protocol icmp, exit.",
+  "La directiva: policy-map type inspect USERS-TO-SERVERS, class type inspect DOMAIN, inspect, class type inspect PING, inspect, class class-default, drop log, exit, exit.",
+  "El zone-pair, en un solo sentido: zone-pair security U2S source USERS destination SERVERS, service-policy type inspect USERS-TO-SERVERS, exit. No hay par en el otro sentido: los servidores pueden responder, nunca iniciar.",
+  "Ahora las interfaces: interface g0/0/0, zone-member security SERVERS, interface g0/0/1, zone-member security USERS, end. show zone security muestra ambas zonas con sus miembros; show zone-pair security muestra U2S y su directiva.",
+  "Prueba desde pc01: Test-NetConnection fs01 -Port 445 (True), gpupdate /force (ambas directivas se actualizan), ping dc01 (responde). Cierra sesión y vuelve a iniciarla: el inicio de sesión en el dominio funciona a través del firewall.",
+  "Lee el estado en el router: show policy-map type inspect zone-pair sessions. Cada conexión inspeccionada es una línea: la dirección y el puerto de pc01 hacia los de dc01 en 88, 389, 445. Vuelve a ejecutarlo al cabo de un minuto: las terminadas han desaparecido, las abiertas siguen.",
+  "Prueba el otro sentido: en dc01, Test-Connection pc01 -Count 2 falla, y Test-NetConnection pc01 -Port 445 falla. show policy-map type inspect zone-pair sigue mostrando solo U2S: nada permite SERVERS hacia USERS, así que el router lo descarta, y el contador de descartes de la verificación de winlab de abajo (no-zone-pair SERVERS USERS) sube.",
+  "Prueba algo que la directiva no nombra: en pc01, Test-NetConnection 10.10.10.10 -Port 80 falla; class-default drop log lo descartó. Cambia drop log por pass log una vez (policy-map type inspect USERS-TO-SERVERS, class class-default, pass log): el SYN ahora sale, pero no vuelve ninguna respuesta, porque pass no guarda estado y no hay par para la respuesta. Vuelve a poner drop log.",
+  "Guárdalo: write memory. show running-config muestra los class-maps, el policy-map, las zonas, el zone-pair y zone-member security en cada interfaz."
+ ],
+ "pitfalls": [
+  "Poner una interfaz en una zona antes que la otra separa las dos redes al instante: crea primero las zonas y la directiva, y añade los miembros al final.",
+  "pass no es inspect: permite un sentido y no guarda estado, así que las respuestas necesitan su propio pass en un zone-pair en el otro sentido. Usa inspect para todo lo que tenga respuesta.",
+  "Un zone-pair sin service-policy descarta todo en su sentido; la directiva debe existir antes de que service-policy type inspect la nombre.",
+  "Un miembro de dominio Windows usa puertos RPC dinámicos (de 49152 a 65535) hacia su DC; si los dejas fuera, la directiva de grupo y el inicio de sesión fallan de maneras que parecen problemas de DNS.",
+  "El pool DHCP del router es la zona self: sigue funcionando con las zonas configuradas porque ningún zone-pair nombra self. Añade un par de USERS a self y DHCP necesitará una clase para él (udp 67).",
+  "match protocol aquí funciona por puerto conocido, no por inspección profunda: un servidor web en el puerto 8080 no es http para este router. Nombra el puerto con una lista de acceso."
+ ],
+ "verify": [
+  "las reglas del firewall en el router: conjuntos de zonas, cadenas de zone-pair y sus contadores",
+  "conexiones inspeccionadas en el seguimiento de conexiones del router (marcadas por inspect)",
+  "pc01 llega a fs01 por SMB a través del firewall"
+ ],
+ "quiz": [
+  {
+   "q": "GigabitEthernet0/0/0 está en la zona SERVERS y GigabitEthernet0/1/0 no está en ninguna zona. ¿Qué pasa entre ellas?",
+   "answer": "Nada: una interfaz con zona y una sin zona nunca hablan",
+   "wrong": [
+    "Todo, hasta que un zone-pair las nombre",
+    "Solo lo que permita una lista de acceso en la interfaz sin zona",
+    "Solo el tráfico de retorno"
+   ],
+   "why": "El comportamiento predeterminado de ZBF: dentro de una zona todo pasa, entre zonas solo lo que permite un zone-pair, y un miembro nunca habla con un no miembro."
+  },
+  {
+   "q": "El zone-pair de USERS a SERVERS inspecciona SMB. ¿Qué permite que la respuesta de fs01 vuelva a pc01?",
+   "answer": "La inspección: sigue la conexión y deja pasar su tráfico de retorno",
+   "wrong": [
+    "Un segundo zone-pair de SERVERS a USERS que inspeccione SMB",
+    "class-default pass",
+    "Nada, la respuesta se descarta"
+   ],
+   "why": "inspect tiene estado. Solo lo que fs01 inicie por su cuenta necesita un par en el otro sentido."
+  },
+  {
+   "q": "Una clase de un policy-map de ZBF usa pass en lugar de inspect. ¿Qué se rompe?",
+   "answer": "Las respuestas: pass no guarda estado, así que se descartan salvo que un par en el otro sentido también las deje pasar",
+   "wrong": [
+    "Nada, pass e inspect son lo mismo",
+    "Se descarta el primer paquete",
+    "Deja de registrarse"
+   ],
+   "why": "pass es un permiso en un solo sentido y sin estado, como una entrada de una lista de acceso."
+  }
+ ]
+}

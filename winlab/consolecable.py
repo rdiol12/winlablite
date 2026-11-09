@@ -206,6 +206,15 @@ class Terminal:
                 self._cr = False
                 continue
             self._cr = ch == "\r"
+            if ch == "\x03":
+                # Ctrl+C is the Break here: in the boot window it stops the
+                # device in its boot monitor (winlab/iosboot.py).
+                from . import iosboot
+                said = iosboot.brk(self.con) if self.con.powered() else None
+                if said is not None:
+                    self.buf, self.started = "", True
+                    out.append("^C\r\n" + (said.replace("\n", "\r\n") + "\r\n" if said else "") + self._prompt())
+                    continue
             if not self.started:
                 if ch in "\r\n":
                     self.started = True

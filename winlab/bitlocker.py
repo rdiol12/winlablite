@@ -370,6 +370,12 @@ def move_disk(lab, src, index: int, dst) -> int:
 
 
 # ----------------------------------------------------------------- drills
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 @dataclass(frozen=True)
 class Drill:
     id: str
@@ -500,7 +506,7 @@ def start_drill(lab, node, kind: str, target=None, disk: int | None = None) -> d
         j = move_disk(lab, node, i, target)
         rec.update(target=target.id, bay=j, from_bay=i)
     _set_drill(lab.name, node.id, rec)
-    return {**rec, "title": d.title, "symptom": _fill(d.symptom, lab, node.id, rec)}
+    return {**rec, "title": _pt(d.title), "symptom": _fill(_pt(d.symptom), lab, node.id, rec)}
 
 
 def _fill(text: str, lab, node_id: str, rec: dict) -> str:
@@ -520,7 +526,7 @@ def drill_hint(lab, node_id: str) -> dict:
     n = min(len(d.hints), int(rec.get("hints") or 0) + 1)
     rec["hints"] = n
     _set_drill(lab.name, node_id, rec)
-    return {"hint": n, "of": len(d.hints), "text": _fill(d.hints[n - 1], lab, node_id, rec)}
+    return {"hint": n, "of": len(d.hints), "text": _fill(_pt(d.hints[n - 1]), lab, node_id, rec)}
 
 
 def check_script(lab, node_id: str) -> tuple[str, str]:
@@ -557,7 +563,7 @@ def drill_check(lab, node_id: str, runner=None) -> dict:
     if fixed:
         rec["fixed"] = True
         _set_drill(lab.name, node_id, rec)
-    return {"ok": True, "fixed": fixed, "message": f"fixed: {d.title.lower()}, and {on} is protected again" if fixed
+    return {"ok": True, "fixed": fixed, "message": f"fixed: {_pt(d.title).lower()}, and {on} is protected again" if fixed
             else f"not yet: {on} answers, but the check is not met ({_last(out)})"}
 
 
@@ -593,7 +599,7 @@ def end_drill(lab, node_id: str) -> dict:
                 if (ld / f"{sid}{ext}").exists():
                     (ld / f"{sid}{ext}").replace(sd / f"{sid}{ext}")
     _set_drill(lab.name, node_id, None)
-    return {"ended": True, "kind": rec["kind"], "title": DRILLS[rec["kind"]].title, "fixed": bool(rec.get("fixed"))}
+    return {"ended": True, "kind": rec["kind"], "title": _pt(DRILLS[rec["kind"]].title), "fixed": bool(rec.get("fixed"))}
 
 
 # ----------------------------------------------------------------- the view
@@ -614,10 +620,10 @@ def summary(lab, node) -> dict:
         "disks": [{"index": r["index"], "bay": r["bay"], "gb": r["gb"], "health": r["health"]}
                   for r in disks.status(lab.name, node)],
         "others": others,
-        "drills": [{"id": x.id, "title": x.title, "menu": x.menu, "needs": x.needs} for x in DRILLS.values()],
-        "drill": ({"kind": rec["kind"], "title": d.title, "symptom": _fill(d.symptom, lab, node.id, rec),
+        "drills": [{"id": x.id, "title": _pt(x.title), "menu": x.menu, "needs": x.needs} for x in DRILLS.values()],
+        "drill": ({"kind": rec["kind"], "title": _pt(d.title), "symptom": _fill(_pt(d.symptom), lab, node.id, rec),
                    "hints": int(rec.get("hints") or 0), "of": len(d.hints), "fixed": bool(rec.get("fixed")),
-                   "shown": [_fill(h, lab, node.id, rec) for h in d.hints[:int(rec.get("hints") or 0)]]}
+                   "shown": [_fill(_pt(h), lab, node.id, rec) for h in d.hints[:int(rec.get("hints") or 0)]]}
                   if d else None),
     }
 

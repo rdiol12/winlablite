@@ -1,0 +1,15 @@
+{
+ "Updates: winlab, and Windows inside the lab": "التحديثات: winlab، وWindows داخل المختبر",
+ "Common problems": "مشكلات شائعة",
+ "update": "تحديث",
+ "updates": "تحديثات",
+ "new version": "إصدار جديد",
+ "upgrade": "ترقية",
+ "windows update": "windows update",
+ "patch": "تصحيح",
+ "wsus": "wsus",
+ "msu": "msu",
+ "check for updates": "التحقق من وجود تحديثات",
+ "How to get a newer winlab, and why Windows Update does not work inside a lab.": "كيف تحصل على إصدار أحدث من winlab، ولماذا لا يعمل Windows Update داخل المختبر.",
+ "**A newer winlab.** winlab never checks on its own. Press Check for updates in the About section of this window, or run `winlab update`. Only winlab's version number is sent. Your labs, machines and progress stay where they are when you install a newer version.\n\n**Windows Update inside a machine fails.** That is expected: the lab has no internet. A lab is patched the way a disconnected network is:\n\n1. On this PC, download the update packages (.msu) from the Microsoft Update Catalog.\n2. Save them in the images\\updates folder, or leave them in Downloads.\n3. On the media shelf, Updates lists them; write them to a patch stick or burn them to a disc and give it to the machine.\n4. Inside the machine, install them yourself with wusa, or run WSUS on a lab server. The patching lab teaches both.": "**إصدار أحدث من winlab.** لا يتحقق winlab من تلقاء نفسه أبدًا. اضغط التحقق من وجود تحديثات في قسم حول في هذه النافذة، أو شغّل `winlab update`. لا يُرسل إلا رقم إصدار winlab. تبقى مختبراتك وأجهزتك وتقدّمك في مكانها عند تثبيت إصدار أحدث.\n\n**يفشل Windows Update داخل الجهاز.** هذا متوقع: لا يوجد إنترنت في المختبر. يُحدَّث المختبر بالطريقة التي تُحدَّث بها شبكة غير متصلة:\n\n1. على هذا الكمبيوتر، نزّل حزم التحديث (.msu) من Microsoft Update Catalog.\n2. احفظها في المجلد images\\updates، أو اتركها في التنزيلات.\n3. على رف الوسائط، تعرضها التحديثات؛ اكتبها على وحدة تصحيحات أو انسخها على قرص وقدّمه للجهاز.\n4. داخل الجهاز، ثبّتها بنفسك باستخدام wusa، أو شغّل WSUS على خادم في المختبر. يعلّم مختبر patching الطريقتين كلتيهما."
+}

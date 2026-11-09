@@ -1,0 +1,16 @@
+{
+ "Labs and lessons": "المختبرات والدروس",
+ "Using winlab": "استخدام winlab",
+ "lab": "مختبر",
+ "lesson": "درس",
+ "exercise": "تمرين",
+ "check my work": "تحقق من عملي",
+ "grade": "تقييم",
+ "guide": "دليل",
+ "module": "وحدة",
+ "progress": "تقدّم",
+ "foundation": "أساس",
+ "quiz": "اختبار قصير",
+ "How labs, lessons and Check my work fit together.": "كيف تتكامل المختبرات والدروس وزر تحقق من عملي.",
+ "A **lab** is a whole network: its machines, its switches and the lab router. The Start menu lists the labs. Switching the desktop to another lab leaves running machines running.\n\nA **lesson** is one job inside a lab. Open the Lab guide to see the lessons in order. Each one says why it matters, what to do, which machines it needs and how much memory they take.\n\n- **Start these machines** boots only the machines the lesson uses, plus the domain controller they depend on.\n- Every lab has a **foundation** lesson first: its machines are fresh installs, and you give them addresses, build the domain and join the members yourself.\n- **Check my work** runs small checks inside the machines and says which parts pass. It never changes anything.\n- Lessons end with a few recall questions, and your progress is kept on this PC.\n\nFrom a command prompt: `winlab learn list`, `winlab learn show <lesson>`, `winlab learn start <lesson>` and `winlab exercise grade <exercise>`.": "**المختبر** شبكة كاملة: أجهزتها ومحولاتها وموجّه المختبر. تسرد قائمة ابدأ المختبرات. تبديل سطح المكتب إلى مختبر آخر يترك الأجهزة العاملة قيد التشغيل.\n\n**الدرس** مهمة واحدة داخل مختبر. افتح دليل المختبر لترى الدروس بالترتيب. يوضح كل درس سبب أهميته، وما يجب فعله، والأجهزة التي يحتاجها ومقدار الذاكرة التي تستهلكها.\n\n- **تشغيل هذه الأجهزة** يُقلع الأجهزة التي يستخدمها الدرس فقط، إضافة إلى وحدة التحكم بالمجال التي تعتمد عليها.\n- لكل مختبر درس **foundation** (أساس) أولاً: أجهزته تثبيتات جديدة، وتمنحها أنت العناوين وتبني المجال وتضم الأعضاء بنفسك.\n- **تحقق من عملي** يشغّل فحوصات صغيرة داخل الأجهزة ويبيّن الأجزاء التي نجحت. ولا يغيّر أي شيء أبداً.\n- تنتهي الدروس ببضعة أسئلة استرجاع، ويُحفظ تقدمك على هذا الكمبيوتر.\n\nمن موجه الأوامر: `winlab learn list` و`winlab learn show <lesson>` و`winlab learn start <lesson>` و`winlab exercise grade <exercise>`."
+}

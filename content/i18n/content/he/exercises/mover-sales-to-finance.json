@@ -1,0 +1,16 @@
+{
+ "Move Dan Price from Sales to Finance without leaving Sales access behind": "העבר את Dan Price מ-Sales ל-Finance בלי להשאיר מאחור גישה של Sales",
+ "Dan Price (dprice) becomes a Finance analyst on Monday. Press Break in the\nlesson first: it sets him up in Sales on dc01. Keep his account; change what\nhangs on it. He must reach what Finance reaches and nothing Sales has, and his\nhome folder moves to Finance's share, HomeFinance$, with its files and his\npermission on it.": "Dan Price (dprice) הופך לאנליסט ב-Finance ביום שני. לחץ קודם על שבור בשיעור: הוא מגדיר אותו ב-Sales ב-dc01. שמור את החשבון שלו; שנה את מה שתלוי בו. הוא חייב להגיע למה ש-Finance מגיעה אליו ולשום דבר של Sales, ותיקיית הבית שלו עוברת לשיתוף של Finance, HomeFinance$, עם הקבצים שלה וההרשאה שלו עליה.",
+ "Department Finance, Title 'Finance analyst', on the same account": "Department Finance, Title 'Finance analyst', באותו חשבון",
+ "Out of G-Sales and Sales Team, into G-Finance and Finance Team": "יוצא מ-G-Sales ומ-Sales Team, נכנס ל-G-Finance ול-Finance Team",
+ "No permission for dprice left on any Sales folder": "לא נשארה הרשאה ל-dprice באף תיקייה של Sales",
+ "Home folder moved to C:\\Shares\\HomeFinance\\dprice with its permissions, the old one gone, HomeDirectory pointing at \\\\dc01\\HomeFinance$\\dprice": "תיקיית הבית הועברה אל C:\\Shares\\HomeFinance\\dprice עם ההרשאות שלה, הישנה נמחקה, HomeDirectory מצביע על \\\\dc01\\HomeFinance$\\dprice",
+ "the same account, now in Finance": "אותו חשבון, כעת ב-Finance",
+ "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; never delete and recreate a mover": "Set-ADUser dprice -Department Finance -Title 'Finance analyst'; לעולם אל תמחק ותיצור מחדש עובד שעובר תפקיד",
+ "groups swapped, not added": "הקבוצות הוחלפו, לא נוספו",
+ "Remove-ADGroupMember G-Sales and 'Sales Team', Add-ADGroupMember G-Finance and 'Finance Team'": "Remove-ADGroupMember G-Sales ו-'Sales Team', Add-ADGroupMember G-Finance ו-'Finance Team'",
+ "no direct permission left on Sales folders": "לא נשארה הרשאה ישירה בתיקיות של Sales",
+ "(Get-Acl <folder>).Access | Where-Object { -not $_.IsInherited } shows grants to people; icacls '<folder>' /remove CORP\\dprice": "(Get-Acl <תיקייה>).Access | Where-Object { -not $_.IsInherited } מציג הרשאות שניתנו לאנשים; icacls '<תיקייה>' /remove CORP\\dprice",
+ "home folder moved with its files and permission": "תיקיית הבית הועברה עם הקבצים וההרשאה שלה",
+ "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL, then Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:": "robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL, ואז Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:"
+}

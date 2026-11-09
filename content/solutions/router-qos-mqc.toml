@@ -1,0 +1,88 @@
+[solution]
+exercise = "router-qos-mqc"
+notes = "Self-contained: a users switch (users) on the router's free port GigabitEthernet0/0/1 with pc01's cable moved onto it (winlab workbench), the router's address and DHCP pool there, as in router-zone-firewall. fs01 shares a 200 MB file and pc01 copies it through the shaped port. The pc01 copy step runs while the router is configured, so it is given after it."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-add shelf=switch id=users x=650 y=520
+workbench ad-ds-basics wb-cable node=router network=users port=g0/0/1
+workbench ad-ds-basics wb-cable node=pc01 nic=0 network=users
+'''
+wait = 5
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface g0/0/1
+ip address 10.10.20.1 255.255.255.0
+no shutdown
+exit
+ip dhcp pool USERS
+network 10.10.20.0 255.255.255.0
+default-router 10.10.20.1
+dns-server 10.10.10.10
+exit
+ip access-list extended SMB
+permit tcp any eq 445 any
+exit
+class-map match-any VOICE
+match dscp ef
+exit
+class-map match-any FILES
+match access-group name SMB
+exit
+policy-map USERS-OUT
+class VOICE
+priority 1000
+class FILES
+bandwidth 5000
+set dscp af11
+class class-default
+fair-queue
+exit
+exit
+policy-map SHAPE-20M
+class class-default
+shape average 20000000
+service-policy USERS-OUT
+exit
+exit
+interface g0/0/1
+service-policy output SHAPE-20M
+end
+write memory
+'''
+wait = 5
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+ipconfig /renew
+Start-Sleep -Seconds 10
+ipconfig
+'''
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+New-Item -ItemType Directory -Force C:\Big | Out-Null
+if (-not (Test-Path C:\Big\test.bin)) { fsutil file createnew C:\Big\test.bin 209715200 }
+if (-not (Get-SmbShare -Name Big -ErrorAction SilentlyContinue)) {
+    New-SmbShare -Name Big -Path C:\Big -ReadAccess 'CORP\Domain Users' | Out-Null
+}
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Measure-Command { Copy-Item \\fs01\Big\test.bin $env:TEMP\test.bin -Force } | Select-Object TotalSeconds
+'''
+timeout = 600

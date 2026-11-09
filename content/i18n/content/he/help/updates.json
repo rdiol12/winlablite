@@ -1,0 +1,15 @@
+{
+ "Updates: winlab, and Windows inside the lab": "עדכונים: winlab, ו-Windows בתוך המעבדה",
+ "Common problems": "בעיות נפוצות",
+ "update": "עדכון",
+ "updates": "עדכונים",
+ "new version": "גרסה חדשה",
+ "upgrade": "שדרוג",
+ "windows update": "windows update",
+ "patch": "תיקון",
+ "wsus": "wsus",
+ "msu": "msu",
+ "check for updates": "בדוק אם יש עדכונים",
+ "How to get a newer winlab, and why Windows Update does not work inside a lab.": "איך משיגים winlab חדש יותר, ולמה Windows Update לא עובד בתוך מעבדה.",
+ "**A newer winlab.** winlab never checks on its own. Press Check for updates in the About section of this window, or run `winlab update`. Only winlab's version number is sent. Your labs, machines and progress stay where they are when you install a newer version.\n\n**Windows Update inside a machine fails.** That is expected: the lab has no internet. A lab is patched the way a disconnected network is:\n\n1. On this PC, download the update packages (.msu) from the Microsoft Update Catalog.\n2. Save them in the images\\updates folder, or leave them in Downloads.\n3. On the media shelf, Updates lists them; write them to a patch stick or burn them to a disc and give it to the machine.\n4. Inside the machine, install them yourself with wusa, or run WSUS on a lab server. The patching lab teaches both.": "**winlab חדש יותר.** winlab אף פעם לא בודק מעצמו. לחץ על בדוק אם יש עדכונים בחלק אודות בחלון הזה, או הרץ `winlab update`. רק מספר הגרסה של winlab נשלח. המעבדות, המכונות וההתקדמות שלך נשארים במקומם כשאתה מתקין גרסה חדשה יותר.\n\n**Windows Update נכשל בתוך מכונה.** זה צפוי: למעבדה אין אינטרנט. מעבדה מעודכנת כמו רשת מנותקת:\n\n1. במחשב הזה, הורד את חבילות העדכון (.msu) מ-Microsoft Update Catalog.\n2. שמור אותן בתיקייה images\\updates, או השאר אותן בהורדות.\n3. במדף המדיה, עדכונים מציג אותן; כתוב אותן על דיסק עדכונים או צרוב אותן לתקליטור ותן אותו למכונה.\n4. בתוך המכונה, התקן אותן בעצמך עם wusa, או הרץ WSUS על שרת במעבדה. מעבדת patching מלמדת את שתי הדרכים."
+}

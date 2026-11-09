@@ -1,0 +1,69 @@
+{
+ "title": "eBGP מנתב המעבדה לספק אינטרנט, והדרך החוצה לכל המשרד",
+ "summary": "צור שכנות eBGP בין נתב המעבדה (AS 65000) לנתב של ספק האינטרנט (AS 65100), הכרז על רשתות החברה עם הצהרות network, למד את אלה של האינטרנט, והעבר את הדרך החוצה לנתב של הסדנה עם נתיב ברירת מחדל של OSPF.",
+ "why": "בין חברות לספקים שלהן יש BGP. הוא לא מגלה שכנים: כל צד מציין את הכתובת ואת מספר ה-AS של\nהאחר, הם פותחים הפעלת TCP ביציאה 179, וכל אחד אומר לשני לאילו רשתות הוא יכול להגיע. חברה\nמכריזה על הקידומות שלה ולומדת את אלה של הספק (או נתיב ברירת מחדל), והספק נושא את הקידומות של\nהחברה לשאר האינטרנט.\n\nנתב המעבדה הוא כאן הקצה של החברה: router bgp 65000 במסוף שלו, כמו בכל נתב קצה של Cisco. rtr-isp\nהוא הספק, Ubuntu עם FRRouting, AS 65100. בתוך החברה OSPF כבר רץ (השיעור הקודם); נתב הקצה הוא\nהמקום שבו השניים נפגשים, ו-default-information originate הוא האופן שבו הנתבים בפנים לומדים שכל\nמה שלא ידוע הולך לקצה.\n\nהבדל כן אחד שתראה: FRRouting פועל לפי RFC 8212 וכברירת מחדל לא מקבל ולא שולח נתיבי eBGP עד\nשמדיניות (route-map) מאפשרת אותם. IOS לא. המסוף של נתב המעבדה מתנהג כמו IOS, ולכן winlab מכבה בו\nאת ברירת המחדל הזו (no bgp ebgp-requires-policy, שנכתב בשבילך לתצורת ה-FRRouting של הנתב);\nב-rtr-isp אתה מקליד אותה בעצמך, ורואה למה היא קיימת.",
+ "concepts": [
+  "router bgp <AS>: תהליך BGP אחד לכל נתב, שנקרא לפי מספר המערכת האוטונומית שלו; 64512 עד 65534 הם מספרי AS פרטיים, כמו כתובות פרטיות",
+  "neighbor <address> remote-as <AS>: AS שונה משלך הופך אותו ל-eBGP; ההפעלה היא TCP 179 ושום דבר לא קורה עד ששני הצדדים מציינים זה את זה",
+  "network <prefix> mask <mask> מכריז על קידומת רק אם בדיוק הקידומת הזו נמצאת בטבלת הניתוב (מחוברת, סטטית או נלמדה מ-OSPF)",
+  "מצבי BGP: Idle, Connect, Active, OpenSent, OpenConfirm, Established; show ip bgp summary מדפיס מספר קידומות במקום מצב ברגע שהוא Established",
+  "מרחק ניהולי: נתיבי eBGP הם 20, OSPF 110, סטטי 1; B ב-show ip route",
+  "default-information originate always (OSPF): מכריז על נתיב ברירת מחדל לנתבי ה-OSPF גם בלי שיש כזה בטבלה; בלי always הוא עוקב אחרי נתיב ברירת מחדל שיש לנתב"
+ ],
+ "steps": [
+  "הפעל את rtr-isp, rtr-edge, pc-office, pc-edge ו-inet01 (שרת הרשת באינטרנט, 203.0.113.80). ה-OSPF מהשיעור הקודם נשאר: נתב המעבדה ו-rtr-edge הם שכנים.",
+  "התקן FRRouting ב-rtr-isp: במכונות, שלוף את זיכרון החבילות frr מ-rtr-edge וחבר אותו ל-rtr-isp (בהגדרות שלו), ואז עגן את LABEL=WLPACK והתקן את frr כפי שה-README שעל הזיכרון אומר. העברה מופעלת: echo net.ipv4.ip_forward=1 | sudo tee /etc/sysctl.d/90-router.conf, sudo sysctl --system. דמון BGP מופעל: sudo sed -i 's/^bgpd=no/bgpd=yes/' /etc/frr/daemons, sudo systemctl restart frr.",
+  "קודם הצד של הספק. ב-rtr-isp: sudo vtysh, configure terminal, router bgp 65100, bgp router-id 9.9.9.9, no bgp ebgp-requires-policy, neighbor 198.51.100.1 remote-as 65000, address-family ipv4 unicast, network 203.0.113.0/24, exit-address-family, end, write memory. show bgp summary: השכן נשאר ב-Active, כי אף אחד עדיין לא עונה ב-198.51.100.1.",
+  "הצד של החברה, במסוף של נתב המעבדה: enable, configure terminal, router bgp 65000. ההנחיה היא Router(config-router)#. הקלד bgp router-id 2.2.2.2 ו-neighbor 198.51.100.2 remote-as 65100, ואז neighbor 198.51.100.2 description ISP. אחר כך הרשתות להכריז עליהן, כפי ש-IOS-XE כותב אותן: address-family ipv4, network 10.80.0.0 mask 255.255.255.0, network 10.81.0.0 mask 255.255.255.0, exit-address-family, end.",
+  "צפה בהפעלה עולה: show ip bgp summary במסוף. השורה של 198.51.100.2 עוברת מ-Active או Connect למספר (קידומות שהתקבלו) בתוך כמה שניות. show ip bgp מציג את 203.0.113.0/24 עם next hop 198.51.100.2 ונתיב AS 65100, ואת שתי רשתות ה-10.x שאתה מכריז עליהן עם next hop 0.0.0.0.",
+  "שים לב ש-10.81.0.0/24 מוכרזת אף שאף ממשק של נתב המעבדה לא נמצא בה: network לוקח כל התאמה מדויקת בטבלת הניתוב, ונתב המעבדה למד אותה מ-OSPF. נסה network 10.0.0.0 mask 255.0.0.0: show ip bgp לעולם לא מציג אותה, כי לא קיים נתיב 10.0.0.0/8. הסר אותה שוב עם no network 10.0.0.0 mask 255.0.0.0 (ב-router bgp 65000, address-family ipv4).",
+  "טבלת הניתוב עכשיו: show ip route במסוף כולל B 203.0.113.0/24 [20/0] via 198.51.100.2. ב-rtr-isp, show ip route bgp כולל את שתי הרשתות של החברה. מ-pc-office, curl -s http://203.0.113.80/ עונה עם 'from 10.80.0.10': שרת הרשת רואה את הכתובת של המחשב עצמו, כי אין כאן NAT, רק נתיבים.",
+  "הסדנה עדיין לא יכולה לצאת: מ-pc-edge, curl -s -m 5 http://203.0.113.80/ נכשל בפסק זמן. rtr-edge מכיר רק את מה ש-OSPF אמר לו, ו-OSPF לא אומר כלום על האינטרנט. תן לו דרך החוצה: במסוף, configure terminal, router ospf 1, default-information originate always, end. ב-rtr-edge, show ip route ב-vtysh כולל O>* 0.0.0.0/0 via 10.80.0.2. עכשיו ה-curl של pc-edge עונה 'from 10.81.0.10'.",
+  "שבור וקרא: במסוף, router bgp 65000, neighbor 198.51.100.2 remote-as 65101. show ip bgp summary: ההפעלה נופלת ונשארת למטה; ב-rtr-isp, show bgp neighbors 198.51.100.1 מציין את ה-NOTIFICATION (bad peer AS). החזר את 65100. clear ip bgp * מאתחל כל הפעלה ידנית, מה ששינוי אמיתי של מדיניות צריך לעתים קרובות.",
+  "show ip protocols במסוף מציג את שני הפרוטוקולים, לאן כל אחד מנתב ואת שכן ה-BGP. write memory שומר. לחץ על בדוק את העבודה שלי."
+ ],
+ "pitfalls": [
+  "Active זה לא פעיל: זה אומר שהנתב מנסה לפתוח את הפעלת ה-TCP ואף אחד לא עונה. בדוק את הכתובת, שהצד השני מציין אותך, ושה-bgpd רץ שם.",
+  "הצהרת network עם מסכה שגויה לא מכריזה על כלום ולא נותנת שגיאה; show ip bgp מציג מה באמת מוכרז.",
+  "ב-FRRouting, eBGP בלי route-map או no bgp ebgp-requires-policy הוא Established עם (Policy) ב-show bgp summary ובלי קידומות: זה RFC 8212, לא תקלה בהפעלה.",
+  "default-information originate בלי always עובד רק כשלנתב עצמו יש נתיב ברירת מחדל; כאן הספק לא שולח אף אחד, ולכן always הוא מה שגורם לזה לקרות.",
+  "הדרך חזרה חשובה כמו הדרך החוצה: pc-edge מגיע ל-inet01 רק כי rtr-isp למד את 10.81.0.0/24 מנתב המעבדה."
+ ],
+ "verify": [
+  "הפעלת ה-BGP והקידומות של נתב המעבדה",
+  "מה שהספק למד מהחברה",
+  "הסדנה מגיעה לאינטרנט עם הכתובת שלה"
+ ],
+ "quiz": [
+  {
+   "q": "מתי 'network 10.81.0.0 mask 255.255.255.0' תחת router bgp מכריז על משהו?",
+   "answer": "כשבדיוק 10.81.0.0/24 נמצא בטבלת הניתוב, מכל מקור",
+   "wrong": [
+    "תמיד, ברגע שהוא מוקלד",
+    "רק כשלממשק יש כתובת בתוכה",
+    "רק אחרי redistribute connected"
+   ],
+   "why": "הפקודה network של BGP מוציאה נתיב קיים; היא לא יוצרת אחד."
+  },
+  {
+   "q": "show ip bgp summary מציג Active עבור שכן. מה זה אומר?",
+   "answer": "הפעלת ה-TCP אל השכן לא עלתה: הנתב ממשיך לנסות",
+   "wrong": [
+    "ההפעלה עלתה ונתיבים זורמים",
+    "השכן כבוי מנהלית",
+    "השכן שלח יותר מדי קידומות"
+   ],
+   "why": "Active ו-Connect הם שניהם ניסיונות לפתוח TCP 179; Established הוא המצב התקין."
+  },
+  {
+   "q": "איזה מרחק ניהולי יש לנתיב eBGP בנתב Cisco?",
+   "answer": "20",
+   "wrong": [
+    "110",
+    "200",
+    "1"
+   ],
+   "why": "eBGP הוא 20, ולכן הוא גובר על OSPF (110); iBGP הוא 200."
+  }
+ ]
+}

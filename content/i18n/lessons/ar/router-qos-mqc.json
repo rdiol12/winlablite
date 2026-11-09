@@ -1,0 +1,71 @@
+{
+ "title": "QoS على الموجّه: صنّف وعلّم وشكّل وقسّم خطًا بطيئًا",
+ "summary": "استخدم Modular QoS CLI على الموجّه: class-maps تفرز حركة المرور، وpolicy-map يمنح الصوت الأولوية، ويضمن لنسخ الملفات حصة ويعلّمها، ومُشكِّل يحوّل شبكة LAN للمستخدمين إلى خط بسرعة 20 Mbit/s، والعدّادات التي تثبت أن كل فئة رأت حركتها.",
+ "why": "الشبكة ذات السعة الفائضة لا تحتاج إلى QoS. تكتسب QoS أهميتها في الموضع الضيق: الخط\nإلى فرع، والوصلة الصاعدة لمكتب مزدحم، واللحظة التي يريد فيها نسخ ملف كبير ومكالمة\nهاتفية الـ 20 Mbit/s نفسها. حينها يجب أن يقرر الموجّه أي الحزم تنتظر وأيها تُسقط، ولا\nيستطيع ذلك إلا لحركة مرور يميّز بينها.\n\nيفعل IOS ذلك بـ Modular QoS CLI (MQC)، في ثلاث خطوات تقابلها أيضًا في جدار الحماية\nالقائم على المناطق: class-map (أي حركة: قيمة DSCP، أو قائمة وصول، أو بروتوكول)،\nوpolicy-map (ما تحصل عليه كل فئة: أولوية للصوت، أو عرض نطاق مضمون، أو معدل policing،\nأو علامة DSCP جديدة)، وservice-policy (على أي واجهة، وفي أي اتجاه). ولا يحدث الاصطفاف\nإلا حيث يتكوّن طابور، عند الخروج من واجهة أكثر انشغالًا من خطها؛ لذا توضع السياسة\nالتي تقسّم خطًا بطيئًا تحت مُشكِّل يجعل الخط بطيئًا، وهي السياسة الهرمية التي يشغّلها\nكل موجّه فرع.\n\nعلى هذا الموجّه تصبح السياسة تحكمًا في حركة مرور Linux: شجرة HTB من الفئات على\nالواجهة، وfq_codel أو FIFO في كل منها، وnftables يعلّم كل حزمة بفئتها وDSCP الجديد.\nفرقان صادقان عن ISR: فئة الأولوية مقيّدة بمعدلها في كل الأوقات (يقيّدها ISR عند ازدحام\nالخط فقط)، وmatch protocol يعمل بالمنفذ المعروف، لا بـ NBAR. وشبكة LAN في المختبر\nنفسها بسرعة جيجابت، لذا تشكّلها لتصنع الازدحام الذي تحتاجه QoS.",
+ "concepts": [
+  "DSCP: ست بتات في ترويسة IP تقول كيف تريد الحزمة أن تُعامل؛ EF (46) للصوت، وAF41 للفيديو، ومن AF11 إلى AF13 للبيانات الكبيرة، وCS0 (0) أفضل جهد؛ والموجّه يثق بها أو يعيد كتابتها",
+  "class-map match-any (يكفي سطر match واحد) أو match-all (كل الأسطر): match dscp ef، وmatch access-group name SMB، وmatch protocol http، وmatch any؛ ويلتقط class-default الباقي",
+  "priority <kbps>: اصطفاف منخفض الكمون، يُخدم أولًا ويُقيَّد بمعدله كي لا يحرم الآخرين؛ وbandwidth <kbps> أو percent: حصة مضمونة يمكنها اقتراض ما هو خامل",
+  "police <bps>: حد صارم، ما يتجاوزه يُسقط (أو يُعاد تعليمه بـ set-dscp-transmit)؛ وshape average <bps>: حد مرن، ما يتجاوزه ينتظر في طابور",
+  "QoS الهرمية: سياسة أم تشكّل class-default على السرعة الحقيقية للخط، وservice-policy ابنة تحتها توزّع تلك السرعة بين الفئات",
+  "الاتجاه: الاصطفاف (priority وbandwidth وshape) عند الخروج فقط؛ وسياسة الدخول لا تستطيع إلا التصنيف والتعليم والـ policing",
+  "show policy-map interface: لكل فئة، الحزم التي طابقت، وما عُلّم، وما أسقطه الـ policing والطابور"
+ ],
+ "steps": [
+  "ابنِ شبكة LAN للمستخدمين إن لم يبنها درس router-zone-firewall: على طاولة الشبكة، مبدّل في منفذ حرّ في الموجّه وعليه كبل pc01، ومنفذ الموجّه 10.10.20.1/24 (no shutdown) وip dhcp pool USERS مع default-router 10.10.20.1 وdns-server 10.10.10.10؛ ثم ipconfig /renew على pc01. نسخ الملفات من fs01 إلى pc01 يعبر الآن الموجّه ويخرج منه عبر ذلك المنفذ (هنا GigabitEthernet0/0/1).",
+  "اصنع شيئًا لنسخه. على fs01: New-Item -ItemType Directory C:\\Big، ثم fsutil file createnew C:\\Big\\test.bin 209715200 (200 MB)، ثم New-SmbShare -Name Big -Path C:\\Big -ReadAccess 'CORP\\Domain Users'.",
+  "قِس الخط غير المشكَّل: على pc01، Measure-Command { Copy-Item \\\\fs01\\Big\\test.bin $env:TEMP\\test.bin -Force } | Select-Object TotalSeconds. بضع ثوانٍ: المختبر بسرعة جيجابت.",
+  "الفئات. في وحدة تحكم الموجّه: configure terminal، ثم ip access-list extended SMB، ثم permit tcp any eq 445 any، ثم exit. class-map match-any VOICE، ثم match dscp ef، ثم exit. class-map match-any FILES، ثم match access-group name SMB، ثم exit.",
+  "السياسة الابنة، التي تقسّم الخط: policy-map USERS-OUT، class VOICE، priority 1000، class FILES، bandwidth 5000، set dscp af11، class class-default، fair-queue، exit، exit.",
+  "السياسة الأم، التي تصنع الخط: policy-map SHAPE-20M، class class-default، shape average 20000000، service-policy USERS-OUT، exit، exit. ضعها على طريق الخروج إلى المستخدمين: interface g0/0/1، service-policy output SHAPE-20M، end.",
+  "انسخ مجددًا من pc01 مع Measure-Command: نحو 80 ثانية الآن، 200 MB عبر مُشكِّل بسرعة 20 Mbit/s. أثناء التشغيل، show policy-map interface g0/0/1 على الموجّه: تعدّ الفئة FILES الحزم ويعدّها سطر QoS Set الخاص بها معلَّمة بـ af11؛ ويُظهر class-default تحت المُشكِّل الطابور.",
+  "Policing بدل التقسيم، لتشعر بالفرق: policy-map USERS-OUT، class FILES، police 8000000 conform-action transmit exceed-action drop، end. انسخ مجددًا: يتباطأ SMB إلى نحو 8 Mbit/s، ويعدّ show policy-map interface g0/0/1 الحزم المتجاوزة المُسقطة. يتراجع TCP بسبب الإسقاطات، فينتهي النسخ مع ذلك. أزله مجددًا: policy-map USERS-OUT، class FILES، no police.",
+  "علّم ما يدخل أيضًا: configure terminal، ip access-list extended SMB-IN، permit tcp any any eq 445، exit، class-map match-any SMB-FROM-USERS، match access-group name SMB-IN، exit، policy-map MARK-IN، class SMB-FROM-USERS، set dscp af21، ثم interface g0/0/1، service-policy input MARK-IN. جرّب مرة واحدة service-policy input SHAPE-20M: يرفض الموجّه الاصطفاف عند الدخول، كما يفعل IOS.",
+  "اقرأ كل شيء: show class-map، وshow policy-map، وshow policy-map interface. احفظه بـ write memory؛ يسرد show running-config الـ class-maps والـ policy-maps قبل الواجهات، وservice-policy تحت interface GigabitEthernet0/0/1."
+ ],
+ "pitfalls": [
+  "السياسة على واجهة سريعة لا تمتلئ أبدًا لا تفعل شيئًا تراه: الطوابير لا تتكوّن إلا مع الازدحام، ولهذا يأتي المُشكِّل أولًا.",
+  "لا يمكن أن يتجاوز مجموع الضمانات الأم: priority 1000 وbandwidth 5000 تحت مُشكِّل بسرعة 20 Mbit/s يتّسعان؛ أما bandwidth 30000 تحته فيُرفض عند ربط السياسة.",
+  "class-map لا تسمّيه أي سياسة، أو policy-map غير مربوط بأي واجهة، لا يصنّف شيئًا: افحص show policy-map interface، لا show running-config.",
+  "class-map وpolicy-map هنا خاصان بـ QoS؛ أما الخاصان بجدار الحماية فهما class-map type inspect وpolicy-map type inspect. الاسم نفسه في الاثنين شيئان مختلفان.",
+  "التعليم لا يفيد إلا حيث يثق به شيء لاحقًا: set dscp على طريق الخروج إلى المستخدمين لا يعني شيئًا لـ Windows، لكنه على الطريق إلى WAN يخبر موجّهات المزوّد بماهية الحزمة.",
+  "على هذا الموجّه تُقيَّد فئة الأولوية بمعدلها حتى عندما يكون الخط خاملًا؛ وعلى ISR يمكنها استخدام عرض النطاق الخامل ولا تُقيَّد إلا عند الازدحام."
+ ],
+ "verify": [
+  "شجرة الاصطفاف على واجهات الموجّه (فئات HTB وما أرسلته)",
+  "كيف يصنّف الموجّه ويعلّم: nftables مع عدّادات لكل فئة",
+  "النسخ من fs01 عبر الخط المشكَّل، مع قياس الزمن"
+ ],
+ "quiz": [
+  {
+   "q": "أي إجراءات يمكن لـ service-policy الدخول استخدامها؟",
+   "answer": "التصنيف والتعليم (set dscp) والـ policing؛ بلا priority ولا bandwidth ولا تشكيل",
+   "wrong": [
+    "كلها، كما في الخروج",
+    "التشكيل فقط",
+    "priority فقط"
+   ],
+   "why": "تتكوّن الطوابير عند الخروج من الواجهة؛ وعند الدخول لا يستطيع الموجّه إلا الفرز والتعليم والإسقاط."
+  },
+  {
+   "q": "لماذا يُعطى class-default في SHAPE-20M سياسة service-policy ابنة؟",
+   "answer": "يصنع المُشكِّل خط الـ 20 Mbit/s؛ وتقسّم الابنة ذلك الخط بين الصوت والملفات والباقي",
+   "wrong": [
+    "لتطبيق policing على class-default",
+    "لأن class-default لا يمكن أن يحتوي على إجراءات",
+    "لتعليم كل حزمة بـ EF"
+   ],
+   "why": "هذه هي QoS الهرمية: بلا المُشكِّل لا تزدحم واجهة الجيجابت أبدًا، ولن يعمل priority وbandwidth في الابنة أبدًا."
+  },
+  {
+   "q": "ماذا يفعل police بالحركة التي تتجاوز معدله، وماذا يفعل shape؟",
+   "answer": "يُسقطها police (أو يعيد تعليمها) فورًا؛ ويضعها shape في طابور ويرسلها لاحقًا",
+   "wrong": [
+    "كلاهما يضعها في طابور",
+    "كلاهما يُسقطها",
+    "police يضعها في طابور، وshape يُسقطها"
+   ],
+   "why": "الـ policer سقف صارم بلا مخزن مؤقت؛ والـ shaper ينعّم الدفعات في طابور، على حساب التأخير."
+  }
+ ]
+}

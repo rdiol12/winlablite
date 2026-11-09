@@ -7,7 +7,7 @@ lab = "ad-ds-basics"
 node = "dc01"
 role = "ad-ds"
 exercise = "promote-first-dc"
-minutes = 45
+minutes = 60
 summary = "Turn a plain server into the forest root domain controller with DNS."
 why = '''
 Active Directory is the database every other Windows service trusts: who a user
@@ -27,19 +27,27 @@ concepts = [
   "SRV records: _ldap._tcp.dc._msdcs.<domain> is how a client discovers a DC; promotion registers them in DNS",
   "DSRM password: the local Administrator password used when the directory is offline for repair",
   "FSMO roles: five single-master roles the first DC holds (schema, naming, RID, PDC emulator, infrastructure)",
+  "Test-ADDSForestInstallation runs every prerequisite check of Install-ADDSForest without changing anything",
 ]
 steps = [
-  "On dc01, confirm the static address and that the preferred DNS server is itself: Get-NetIPConfiguration.",
-  "Install the role and tools: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools.",
-  "Promote: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. The server reboots.",
-  "After the reboot, log on as CORP\\Administrator and run Get-ADDomain and Get-ADForest.",
-  "Check the DNS records promotion registered: Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv.",
-  "Run dcdiag /q: an empty result is a healthy DC. Read anything it prints.",
+  "Start dc01 alone (the other machines need it first) and sign in as the local Administrator. In PowerShell: Get-NetIPConfiguration. You should see IPv4Address 10.10.10.10 and IPv4DefaultGateway 10.10.10.1; Get-NetIPInterface -AddressFamily IPv4 shows Dhcp Disabled on the Ethernet adapter. A DHCP address here means stop and fix it first.",
+  "Point DNS at the server itself: Set-DnsClientServerAddress -InterfaceAlias Ethernet -ServerAddresses 127.0.0.1 (use the alias Get-NetAdapter shows). Get-DnsClientServerAddress -AddressFamily IPv4 now lists 127.0.0.1. Nothing answers on it yet; the DNS server you install in a moment will.",
+  "Check the name before it is baked in: $env:COMPUTERNAME should say DC01. If it does not, Rename-Computer -NewName dc01 -Restart now: renaming a domain controller later is a procedure of its own.",
+  "Install the role and its tools: Install-WindowsFeature AD-Domain-Services -IncludeManagementTools. You should see Success True and Restart Needed No; Get-WindowsFeature AD-Domain-Services shows [X]. The server is still not a DC: the role is only the binaries.",
+  "Rehearse first: Test-ADDSForestInstallation -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString). Type a DSRM password of your own. Expect Status Success with two warnings: the cryptography default for Windows NT 4.0, and that a DNS delegation cannot be created (corp.lab has no parent zone to delegate from, which is normal for a lab forest).",
+  "Promote: Install-ADDSForest -DomainName corp.lab -DomainNetbiosName CORP -InstallDns -SafeModeAdministratorPassword (Read-Host -AsSecureString) -Force. It configures DNS, creates the database and SYSVOL, and restarts by itself. The first start as a DC is slow (Applying computer settings): wait for it.",
+  "Sign in as CORP\\Administrator (the local Administrator's password became the domain's). Get-ADDomain | Format-List DNSRoot, NetBIOSName, DomainMode, PDCEmulator, then Get-ADForest | Format-List Name, ForestMode, SchemaMaster. You should see corp.lab, CORP and dc01.corp.lab in every role. Write down the functional levels: they decide the oldest Windows Server that can ever be a DC here.",
+  "Look at DNS: Get-DnsServerZone lists corp.lab and _msdcs.corp.lab with IsDsIntegrated True (the zones live in AD and replicate with it). Resolve-DnsName -Type SRV _ldap._tcp.dc._msdcs.corp.lab answers dc01.corp.lab on port 389: this is how every client will find the DC. Get-DnsServerResourceRecord -ZoneName _msdcs.corp.lab -RRType Srv lists the rest.",
+  "Check what makes a DC a DC: Get-SmbShare shows NETLOGON and SYSVOL (a DC advertises itself only once SYSVOL is shared), Get-Service NTDS, DNS, Netlogon, Kdc all Running, and netdom query fsmo names DC01 for all five roles.",
+  "Run dcdiag /q: no output means every test passed. If it prints anything, read the test name first (Advertising, FrsEvent, DFSREvent, SystemLog) and fix that before going on; a warning in the System log in the first minutes after promotion can be retried with dcdiag /test:systemlog. Then press Check my work.",
 ]
 pitfalls = [
   "Promoting a DC whose DNS points at an outside resolver leaves the SRV records unregistered; point DNS at the DC itself first.",
   "A DC with a DHCP address is a time bomb: the address changes and every client loses the domain.",
   "The DSRM password is not the domain Administrator password. Write it down somewhere you will find in a disaster.",
+  "A single-label name (corp instead of corp.lab) or a public domain you do not own (corp.com) is a forest you will live with forever: use a name under a domain you control, or a reserved one like .lab in a lab.",
+  "Renaming the server after promotion is not Rename-Computer any more: name it before Install-ADDSForest.",
+  "SYSVOL and NETLOGON missing after the restart means the DC never finished its first replication of SYSVOL and does not advertise itself: read the DFS Replication event log before anything else.",
 ]
 further = [
   "Microsoft Learn: Install Active Directory Domain Services (Level 100)",
@@ -84,3 +92,15 @@ q = "Why should a DC never get its address from DHCP?"
 answer = "If the address changes, clients lose the domain because DNS and SRV records point at the old one"
 wrong = ["DHCP cannot hand out server addresses", "AD refuses to install on DHCP machines in every version", "It makes replication slower"]
 why = "A DC is found by its address; it must be static."
+
+[[quiz]]
+q = "Test-ADDSForestInstallation warns that a delegation for this DNS server cannot be created. What do you do?"
+answer = "Nothing: a new forest's zone has no parent zone to delegate from"
+wrong = ["Stop and install DNS by hand first", "Point the server's DNS at an Internet resolver", "Use -DomainNetbiosName instead"]
+why = "The warning only matters when a parent zone exists that should delegate to the new one."
+
+[[quiz]]
+q = "After promotion, which two shares must a domain controller have before clients can use it?"
+answer = "SYSVOL and NETLOGON"
+wrong = ["ADMIN$ and C$", "IPC$ and print$", "NTDS and DNS"]
+why = "A DC advertises itself only once SYSVOL is shared; NETLOGON holds the logon scripts."

@@ -49,12 +49,31 @@ ifc=$(ip -o link show | awk -F': ' '$2 != "lo" {print $2; exit}' | cut -d@ -f1)
 ip link set "$ifc" up
 SITES_IP=${WINLAB_NIC0_IP:-203.0.113.80}
 PREFIX=${WINLAB_NIC0_PREFIX:-24}
+if [ -n "$WINLAB_INET_PUBLIC" ]; then
+    # The ISP of a client site (winlab/campus.py): NIC 0 is the ISP's end of
+    # the client's line (the address the client's router points its default
+    # route at); the sites and the DNS server are further out on the
+    # Internet, reached through it, and other hosts' public addresses are
+    # routed on to them (WINLAB_INET_ROUTES: prefix=next-hop ...). Like a
+    # real ISP it carries no private addresses: a site that does not NAT
+    # gets no answer.
+    ip addr replace "$SITES_IP/$PREFIX" dev "$ifc" || exit 1
+    SITES_IP=$WINLAB_INET_PUBLIC
+    PREFIX=32
+    sysctl -qw net.ipv4.ip_forward=1
+    for p in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do ip route replace blackhole "$p"; done
+    for pair in $WINLAB_INET_ROUTES; do ip route replace "${pair%%=*}" via "${pair#*=}" dev "$ifc"; done
+    log "ISP end of the line on $WINLAB_NIC0_IP; routes: ${WINLAB_INET_ROUTES:-none}"
+    ifc_sites=lo
+else
+    ifc_sites=$ifc
+fi
 DNS_IP=$(echo "$SITES_IP" | awk -F. '{print $1"."$2"."$3".53"}')
 log "sites $SITES_IP/$PREFIX, DNS $DNS_IP"
-ip addr replace "$SITES_IP/$PREFIX" dev "$ifc" || exit 1
-ip addr replace "$DNS_IP/$PREFIX" dev "$ifc" || exit 1
+ip addr replace "$SITES_IP/$PREFIX" dev "$ifc_sites" || exit 1
+ip addr replace "$DNS_IP/$PREFIX" dev "$ifc_sites" || exit 1
 # Back to the office only through its router (rt01), as on the real Internet.
-[ -n "$WINLAB_NIC0_GW" ] && ip route replace default via "$WINLAB_NIC0_GW"
+[ -n "$WINLAB_NIC0_GW" ] && [ -z "$WINLAB_INET_PUBLIC" ] && ip route replace default via "$WINLAB_NIC0_GW"
 
 mkdir -p "$done_dir" "$etc" "$www"
 touch /var/log/inet-sites.log /var/log/inet-dns.log

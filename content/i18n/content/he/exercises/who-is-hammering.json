@@ -1,0 +1,16 @@
+{
+ "Who is hammering the file server?": "מי מעמיס על שרת הקבצים?",
+ "The office says the file server is slow this afternoon. With the staff at\nwork (the Office window: workday on, a busy day, the clock at the end-of-day\nsaves), keep a counter log of fs01's SMB load, read who is connected and\nwhat they hold open, and find the person whose big copies are hammering the\nserver and the job behind them. Write it down in C:\\winlab\\hammering.txt on\nfs01: account, pc, file and job, one per line.": "המשרד אומר ששרת הקבצים איטי אחר הצהריים. כשהצוות בעבודה (החלון משרד: יום עבודה פעיל, יום עמוס, השעון בשמירות של סוף היום), נהל יומן מונים של עומס ה-SMB של fs01, קרא מי מחובר ומה הוא מחזיק פתוח, ומצא את האדם שההעתקות הגדולות שלו מעמיסות על השרת ואת המשימה שמאחוריהן. רשום זאת ב-C:\\winlab\\hammering.txt ב-fs01: חשבון, pc, קובץ ומשימה, אחד בכל שורה.",
+ "On fs01, a counter log named FileServerLoad (logman) with the SMB Server Shares counters, started": "ב-fs01, יומן מונים בשם FileServerLoad (logman) עם המונים SMB Server Shares, מופעל",
+ "It has written samples to a .blg file under C:\\PerfLogs": "הוא כתב דגימות לקובץ .blg תחת C:\\PerfLogs",
+ "C:\\winlab\\hammering.txt on fs01 names the account and the big file it wrote on the share (account <name>, file <path>)": "C:\\winlab\\hammering.txt ב-fs01 מציין את החשבון ואת הקובץ הגדול שהוא כתב בשיתוף (account <name>, file <path>)",
+ "The note names the PC they work from (pc <computer>) and what the job was (job <what>)": "ההערה מציינת את המחשב שממנו הוא עובד (pc <computer>) ומה הייתה המשימה (job <what>)",
+ "a counter log of the SMB load on fs01": "יומן מונים של עומס ה-SMB ב-fs01",
+ "logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, then logman start FileServerLoad": "logman create counter FileServerLoad -c \"\\SMB Server Shares(*)\\Data Bytes/sec\" \"\\SMB Server Sessions(*)\\Data Bytes/sec\" -si 00:00:15 -o C:\\PerfLogs\\FileServerLoad, ואז logman start FileServerLoad",
+ "the log has samples in a .blg file": "ביומן יש דגימות בקובץ .blg",
+ "logman start FileServerLoad and let it run through the busy minutes; logman stop FileServerLoad closes the file": "logman start FileServerLoad ותן לו לרוץ לאורך הדקות העמוסות; logman stop FileServerLoad סוגר את הקובץ",
+ "the note names the account and the big file it wrote": "ההערה מציינת את החשבון ואת הקובץ הגדול שהוא כתב",
+ "Get-ChildItem D:\\Shares -Recurse -File | Sort-Object Length -Descending, then (Get-Acl -LiteralPath <file>).Owner names who wrote it; lines 'account <name>' and 'file <full path>'": "Get-ChildItem D:\\Shares -Recurse -File | Sort-Object Length -Descending, ואז (Get-Acl -LiteralPath <file>).Owner מציין מי כתב אותו; שורות 'account <name>' ו-'file <full path>'",
+ "the note names their PC and the job": "ההערה מציינת את המחשב שלו ואת המשימה",
+ "Get-SmbSession shows ClientComputerName (an address: Resolve-DnsName it); the Office window's feed says what they were doing; lines 'pc <computer>' and 'job <what>'": "Get-SmbSession מציג את ClientComputerName (כתובת: הפעל עליה Resolve-DnsName); הפיד של החלון משרד אומר מה הם עשו; שורות 'pc <computer>' ו-'job <what>'"
+}

@@ -40,7 +40,7 @@ from . import __version__, paths
 
 # The address the Help window shows and the CLI prints. One place: Ron
 # replaces this placeholder with the real support address before release.
-SUPPORT_EMAIL = "support@example.com"
+SUPPORT_EMAIL = "register@smartcartapp.net"
 
 MAX_BYTES = 20 * 1024 * 1024      # the whole bundle, before compression
 LOG_TAIL = 512 * 1024             # the most of any one log

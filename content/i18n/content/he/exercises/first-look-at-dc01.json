@@ -1,0 +1,13 @@
+{
+ "First look: sign in to dc01 and ask it about itself": "מבט ראשון: היכנס ל-dc01 ושאל אותו על עצמו",
+ "Before any Windows topic, get to a machine and ask it questions. Start dc01,\nsign in on its own screen as Administrator, open PowerShell (not the ISE)\nand ask Windows what it is and whether its gateway answers. winlab grades\nwhat dc01 itself remembers: who is signed in at its screen, and what its\nPowerShell history holds.": "לפני כל נושא של Windows, הגע למכונה ושאל אותה שאלות. הפעל את dc01,\nהיכנס במסך שלו בתור Administrator, פתח PowerShell (לא את ה-ISE)\nושאל את Windows מה הוא והאם השער שלו עונה. winlab מעריך\nאת מה ש-dc01 עצמו זוכר: מי מחובר במסך שלו, ומה שמור\nבהיסטוריית ה-PowerShell שלו.",
+ "Start dc01 and sign in on its screen as Administrator, with the lab password from the key in the taskbar": "הפעל את dc01 והיכנס במסך שלו בתור Administrator, עם סיסמת המעבדה מהמפתח בשורת המשימות",
+ "In PowerShell on dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion": "ב-PowerShell ב-dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion",
+ "In the same window: ipconfig, then Test-NetConnection 10.10.10.1 (the lab router, dc01's default gateway)": "באותו חלון: ipconfig, ואחר כך Test-NetConnection 10.10.10.1 (הנתב של המעבדה, שער ברירת המחדל של dc01)",
+ "Administrator is signed in on dc01's screen": "Administrator מחובר במסך של dc01",
+ "Double-click dc01 in Machines, send Ctrl+Alt+Del from the window's menu and sign in as Administrator; the desktop must be up (explorer running)": "לחץ פעמיים על dc01 ב-Machines, שלח Ctrl+Alt+Del מהתפריט של החלון והיכנס בתור Administrator; שולחן העבודה חייב להיות פתוח (explorer רץ)",
+ "PowerShell on dc01 was asked what the machine is": "PowerShell ב-dc01 נשאל מה המכונה",
+ "Run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion in a PowerShell window on dc01 (the ISE keeps no history file)": "הרץ Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion בחלון PowerShell ב-dc01 (ה-ISE לא שומר קובץ היסטוריה)",
+ "dc01's gateway was tested from inside dc01": "השער של dc01 נבדק מתוך dc01",
+ "In PowerShell on dc01: Test-NetConnection 10.10.10.1 (or ping 10.10.10.1); PingSucceeded True means the lab router answers": "ב-PowerShell ב-dc01: Test-NetConnection 10.10.10.1 (או ping 10.10.10.1); PingSucceeded True פירושו שהנתב של המעבדה עונה"
+}

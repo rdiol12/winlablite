@@ -1,0 +1,67 @@
+{
+ "title": "מעבר תפקיד: מישהו עובר מחלקה",
+ "summary": "העבר אדם מ-Sales ל-Finance: אותו חשבון, מאפיינים חדשים, קבוצות מוחלפות, בלי גישה שנשארה מאחור, ותיקיית הבית בשיתוף של Finance.",
+ "why": "לקליטות ולעזיבות יש תהליך; מעברי תפקיד נשכחים. מישהו עובר מ-Sales ל-Finance, ה-IT מוסיף את קבוצות Finance כי Finance מבקשים בקול רם, ואף אחד לא מסיר את קבוצות Sales כי Sales לא מבקשים בכלל. שלושה מעברים אחר כך האדם יכול לקרוא חצי מהחברה: זחילת הרשאות, והדבר הראשון שסקירת הגישה של מבקר מוצאת.\n\nבמעבר תפקיד החשבון נשמר. ה-SID, תיבת הדואר, היסטוריית הכניסות והקבצים נשארים; מה שתלוי על החשבון משתנה. המחלקה והתפקיד (פנקסי כתובות, קבוצות דינמיות ודוחות משאבי אנוש קוראים אותם), קבוצות התפקיד מוחלפות ולא נוספות, ההרשאות שמעולם לא היו בקבוצה נמצאות ומוסרות, ונתונים שחיים לפי מחלקה עוברים למקום שבו המחלקה החדשה שומרת אותם.\n\nלחץ על שבור ו-Dan Price (dprice) מוגדר ב-Sales על dc01, עם תיקיית בית ב-Home$ וכמו ברוב החברות האמיתיות, הרשאה אחת שמישהו פעם נתן לו ישירות על תיקייה של Sales. הוא מתחיל ב-Finance ביום שני, ותיקיות הבית של Finance חיות בשיתוף משלהן, HomeFinance$.",
+ "concepts": [
+  "קליטה, מעבר, עזיבה: שלושת האירועים של מחזור חיי הזהות, לכל אחד רשימת בדיקה",
+  "זחילת הרשאות: גישה שרק גדלה, כי אף אחד לא מבקש שיסירו גישה",
+  "מאפיינים שמניעים דברים אחרים: Department, Title, Manager (פנקס כתובות, רשימות תפוצה דינמיות, דוחות משאבי אנוש)",
+  "גישה מבוססת קבוצות (AGDLP): G-Sales בתוך DL-Sales-Share; מעבר הוא שני שינויי חברות, לעולם לא עריכת ACL",
+  "הרשאות ישירות: ACE לאדם ולא לקבוצה שורדת כל שינוי קבוצות; מצא אותן עם Get-Acl ו-IsInherited",
+  "העברת תיקיית בית עם ההרשאות שלה: robocopy /E /MOVE /COPYALL, ואז HomeDirectory; תיבת הדואר עוברת באותו אופן ב-Exchange (New-MoveRequest) ונשארת במקומה בשרת דואר יחיד"
+ ],
+ "steps": [
+  "לחץ על שבור (או winlab break dc01 mover-to-finance). קרא קודם את החשבון: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List.",
+  "הצג את כל הקבוצות, כולל איך הוא הגיע אליהן: Get-ADPrincipalGroupMembership dprice | Select-Object Name, GroupScope, GroupCategory.",
+  "קבע את המאפיינים: Set-ADUser dprice -Department Finance -Title 'Finance analyst'.",
+  "החלף את קבוצות התפקיד: Remove-ADGroupMember G-Sales -Members dprice -Confirm:$false; Remove-ADGroupMember 'Sales Team' -Members dprice -Confirm:$false; Add-ADGroupMember G-Finance -Members dprice; Add-ADGroupMember 'Finance Team' -Members dprice.",
+  "מצא את הגישה שאינה בקבוצה: Get-ChildItem C:\\Shares\\Sales -Recurse -Directory | ForEach-Object { $p = $_.FullName; (Get-Acl $p).Access | Where-Object { -not $_.IsInherited } | Select-Object @{n='Path';e={$p}}, IdentityReference, FileSystemRights }.",
+  "הסר את ההענקה הישירה: icacls 'C:\\Shares\\Sales\\Key accounts' /remove CORP\\dprice.",
+  "העבר את תיקיית הבית עם ההרשאות שלה: robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL /R:1 /W:1. ודא ש-Get-Acl C:\\Shares\\HomeFinance\\dprice מציג את dprice עם Modify, ושהתיקייה הישנה נעלמה.",
+  "הפנה את החשבון אליה: Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:. בכניסה הבאה שלו H: הוא התיקייה החדשה.",
+  "קרא את התוצאה בחזרה: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List, ואז לחץ על בדוק את העבודה שלי."
+ ],
+ "pitfalls": [
+  "הוספת הקבוצות החדשות והשארת הישנות היא הממצא הנפוץ ביותר בסקירות גישה.",
+  "מחיקת החשבון ויצירת חשבון חדש לתפקיד החדש מאבדת את ה-SID: קבצים, הרשאות תיבת דואר והיסטוריית ביקורת מצביעים אז על חשבון לא ידוע.",
+  "העתקת תיקיית הבית בלי /COPYALL (או עם Copy-Item) נותנת לקבצים את ה-ACL שעובר בירושה מהתיקייה החדשה: האדם עלול לאבד גישה, או שכולם עלולים לקבל אותה.",
+  "העבר את התיקייה כשהאדם אינו מחובר; robocopy מדלג על קובץ פתוח, והיומן (robocopy /LOG:) אומר על איזה."
+ ],
+ "verify": [
+  "החשבון של מי שעובר תפקיד",
+  "הרשאות מפורשות על תיקיות Sales",
+  "תיקיית הבית הישנה והחדשה"
+ ],
+ "quiz": [
+  {
+   "q": "מישהו עובר מ-Sales ל-Finance. מה קורה לקבוצות של Sales?",
+   "answer": "הן מוסרות באותו שינוי שמוסיף את קבוצות Finance",
+   "wrong": [
+    "הן נשארות חודש למקרה שיצטרך משהו",
+    "הן נשארות; רק קבוצות Finance נוספות",
+    "החשבון נוצר מחדש בלעדיהן"
+   ],
+   "why": "החלפה, לא הוספה, היא מה שעוצר זחילת הרשאות."
+  },
+  {
+   "q": "למה לשמור את אותו חשבון במעבר תפקיד במקום ליצור חדש?",
+   "answer": "ה-SID, תיבת הדואר, הקבצים וההיסטוריה מצביעים כולם על החשבון הקיים",
+   "wrong": [
+    "אי אפשר ליצור חשבונות באמצע השנה",
+    "לחשבון חדש לא תהיה סיסמה",
+    "רק את החשבון של מי שעובר תפקיד אפשר לשנות שם"
+   ],
+   "why": "הרשאות ורשומות ביקורת מפנות ל-SID; חשבון חדש זר לכולן."
+  },
+  {
+   "q": "איזו הרשאה שורדת כל שינוי קבוצות שאתה עושה במעבר תפקיד?",
+   "answer": "רשומת בקרת גישה שהוענקה לאדם ישירות",
+   "wrong": [
+    "הרשאת שיתוף ל-Everyone",
+    "הרשאה שעוברת בירושה מתיקיית האב",
+    "דחייה על Domain Users"
+   ],
+   "why": "מצא אותן עם Get-Acl, Access ו-IsInherited -eq $false: הן בלתי נראות לסקירות קבוצות."
+  }
+ ]
+}

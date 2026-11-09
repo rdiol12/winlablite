@@ -1,0 +1,19 @@
+{
+ "A loop of switches, with the root bridge where it belongs": "לולאה של מתגים, עם גשר השורש במקום הנכון",
+ "Three switches cabled in a ring are a loop. Spanning tree keeps the network\nalive by blocking one cable, but which one it blocks depends on which switch\nis the root bridge, and left alone the root is whichever switch has the\nlowest address: an accident. Build the ring under corp's switch, make the\nswitch the router is cabled to the root on purpose, and choose its backup.\nThe checks read the router's own kernel bridges, where the switches' spanning\ntree runs.": "שלושה מתגים שמחווטים בטבעת הם לולאה. Spanning tree שומר על הרשת\nחיה בכך שהוא חוסם כבל אחד, אבל איזה כבל ייחסם תלוי באיזה מתג\nהוא גשר השורש, ואם לא נוגעים בזה, השורש הוא המתג שיש לו\nהכתובת הנמוכה ביותר: מקרה. בנה את הטבעת מתחת למתג של corp, הפוך\nבכוונה את המתג שהנתב מחווט אליו לשורש, ובחר לו גיבוי.\nהבדיקות קוראות את גשרי הליבה של הנתב עצמו, שם רץ ה-spanning\ntree של המתגים.",
+ "On the Workbench add two switches and cable each one's uplink (Gi0/1) into the switch corp is on": "בשולחן רשת הוסף שני מתגים וחבר את ה-uplink (Gi0/1) של כל אחד מהם למתג ש-corp נמצא עליו",
+ "Drag a free gigabit port of one new switch onto the other: a spare cable, and a loop": "גרור פורט gigabit פנוי של מתג חדש אחד אל השני: כבל רזרבי, ולולאה",
+ "On the console of the switch cabled to the router: spanning-tree vlan 1 priority 4096 (or spanning-tree vlan 1 root primary)": "במסוף של המתג המחווט לנתב: spanning-tree vlan 1 priority 4096 (או spanning-tree vlan 1 root primary)",
+ "On one of the other two: spanning-tree vlan 1 root secondary": "באחד משני האחרים: spanning-tree vlan 1 root secondary",
+ "Leave spanning tree on everywhere, and check with show spanning-tree that one port blocks": "השאר את spanning tree מופעל בכל מקום, ובדוק עם show spanning-tree שפורט אחד חוסם",
+ "the ring is there and spanning tree blocks one port of it": "הטבעת קיימת ו-spanning tree חוסם אחד הפורטים שלה",
+ "Three switches, two uplinks into the top one and a spare cable between the two below: drag a free Gi0/2-4 port of one onto the other. With spanning tree on, one port of the ring blocks (B on the canvas).": "שלושה מתגים, שני uplinks למתג העליון וכבל רזרבי בין שני התחתונים: גרור פורט Gi0/2-4 פנוי של אחד אל השני. כש-spanning tree מופעל, פורט אחד בטבעת חוסם (B על הקנבס).",
+ "spanning tree runs on every switch bridge": "spanning tree רץ בכל גשר מתג",
+ "show spanning-tree on each switch: 'instance for vlan 1 does not exist' means it is off there; spanning-tree vlan 1 in configure terminal turns it back on.": "show spanning-tree בכל מתג: 'instance for vlan 1 does not exist' פירושו שהוא כבוי שם; spanning-tree vlan 1 ב-configure terminal מפעיל אותו מחדש.",
+ "the switch cabled to the router is the root bridge": "המתג המחווט לנתב הוא גשר השורש",
+ "The lowest bridge ID wins: priority first, then the address. On the top switch's console: configure terminal, spanning-tree vlan 1 priority 4096.": "מזהה הגשר הנמוך ביותר מנצח: קודם העדיפות, אחר כך הכתובת. במסוף של המתג העליון: configure terminal, spanning-tree vlan 1 priority 4096.",
+ "it is root by its priority, not by luck of its address": "הוא שורש בזכות העדיפות שלו, לא בזכות מזל בכתובת שלו",
+ "Every switch ships at priority 32768; a root chosen by the address changes the day a switch with a lower one is plugged in.": "כל מתג מגיע עם עדיפות 32768; שורש שנבחר לפי כתובת משתנה ביום שבו מחברים מתג עם כתובת נמוכה יותר.",
+ "a backup root is chosen": "נבחר שורש גיבוי",
+ "spanning-tree vlan 1 root secondary on one of the other switches sets 28672: it takes over if the root goes.": "spanning-tree vlan 1 root secondary באחד המתגים האחרים מגדיר 28672: הוא לוקח פיקוד אם השורש נופל."
+}

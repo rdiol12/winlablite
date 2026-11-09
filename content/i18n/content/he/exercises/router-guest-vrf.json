@@ -1,0 +1,16 @@
+{
+ "The guest network in a VRF of its own: its gateway answers, the office does not": "רשת האורחים ב-VRF משלה: השער שלה עונה, המשרד לא",
+ "Guests and the office hang off the same router, and the router routes between\nthem. Put the guest network into a VRF named GUEST at the lab router's console,\nso the guests' routing table holds only their own network. The checks read the\nrouter's kernel (the VRF device and its table) and ping from the guest's laptop.": "האורחים והמשרד תלויים על אותו נתב, והנתב מנתב ביניהם. העבר את רשת האורחים ל-VRF בשם GUEST בקונסולה של נתב המעבדה, כך שטבלת הניתוב של האורחים תכיל רק את הרשת שלהם. הבדיקות קוראות את הליבה של הנתב (התקן ה-VRF והטבלה שלו) ומבצעות ping מהמחשב הנייד של האורח.",
+ "vrf definition GUEST with rd 65000:20 and address-family ipv4": "vrf definition GUEST עם rd 65000:20 ו-address-family ipv4",
+ "interface g0/0/0: vrf forwarding GUEST, then its address again (ip address 10.80.20.1 255.255.255.0)": "interface g0/0/0: vrf forwarding GUEST, ואז שוב את הכתובת שלו (ip address 10.80.20.1 255.255.255.0)",
+ "show ip route vrf GUEST lists the guest network; show ip route no longer does": "show ip route vrf GUEST מציג את רשת האורחים; show ip route כבר לא",
+ "pc-guest still reaches its gateway and no longer reaches pc-office": "pc-guest עדיין מגיע לשער שלו וכבר לא מגיע ל-pc-office",
+ "the router has a VRF named GUEST": "לנתב יש VRF בשם GUEST",
+ "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 on the console; show vrf lists it": "configure terminal, vrf definition GUEST, rd 65000:20, address-family ipv4 בקונסולה; show vrf מציג אותו",
+ "the guest network's interface is in GUEST, with its address": "הממשק של רשת האורחים נמצא ב-GUEST, עם הכתובת שלו",
+ "interface g0/0/0, vrf forwarding GUEST: IOS removes the address when the VRF changes, so type ip address 10.80.20.1 255.255.255.0 again afterwards": "interface g0/0/0, vrf forwarding GUEST: IOS מסיר את הכתובת כשה-VRF משתנה, אז הקלד שוב ip address 10.80.20.1 255.255.255.0 לאחר מכן",
+ "the guest network is in GUEST's table and not in the global one": "רשת האורחים נמצאת בטבלה של GUEST ולא בטבלה הגלובלית",
+ "show ip route vrf GUEST and show ip route on the console: the guest's C line belongs only in the first": "show ip route vrf GUEST ו-show ip route בקונסולה: שורת ה-C של האורחים שייכת רק לראשונה",
+ "pc-guest reaches its gateway and not the office": "pc-guest מגיע לשער שלו ולא למשרד",
+ "The gateway does not answer: the interface lost its address with vrf forwarding (type it again). The office still answers: the interface is not in the VRF yet (show ip vrf).": "השער לא עונה: הממשק איבד את הכתובת שלו עם vrf forwarding (הקלד אותה שוב). המשרד עדיין עונה: הממשק עדיין לא ב-VRF (show ip vrf)."
+}

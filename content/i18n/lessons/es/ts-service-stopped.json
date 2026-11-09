@@ -1,0 +1,58 @@
+{
+ "title": "El servidor está en marcha, pero el servicio no",
+ "summary": "Los clientes dicen que el servidor DNS ha desaparecido; el servidor responde al ping y puedes iniciar sesión.",
+ "why": "\"El servidor está caído\" suele significar que un servicio está caído. La máquina responde a ping y a RDP; lo que se detuvo es el proceso detrás de un puerto. El reflejo que hay que desarrollar: comprobar el servicio, comprobar su tipo de inicio y leer en el registro System quién lo detuvo, en ese orden. Iniciar un servicio configurado como Disabled falla, y un servicio configurado como Manual no sobrevivirá al siguiente reinicio, así que el estado después de tu arreglo importa tanto como el arreglo.",
+ "concepts": [
+  "Estado del servicio frente a tipo de inicio: en marcha ahora, frente a lo que pasa al arrancar",
+  "Dependencias: Get-Service -RequiredServices y -DependentServices",
+  "Eventos 7036 y 7040 en el registro System: un servicio cambió de estado, un tipo de inicio cambió",
+  "Opciones de recuperación del servicio: reiniciar en caso de error, configuradas en la pestaña Recovery o con sc failure"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break dc01 service-stopped). No leas aún las pistas.",
+  "Reproduce el síntoma como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Arregla la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la prueba que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Start-Service sobre un servicio deshabilitado da un error con un mensaje que oculta la causa real; comprueba primero StartType.",
+  "En un DC, que se detenga el servicio DNS rompe todas las demás máquinas en minutos a medida que caducan sus cachés; es un evento de prioridad uno."
+ ],
+ "verify": [
+  "el servicio DNS",
+  "eventos recientes de servicios"
+ ],
+ "quiz": [
+  {
+   "q": "Start-Service falla con un mensaje poco útil. ¿Qué compruebas primero?",
+   "answer": "El StartType del servicio: puede estar en Disabled",
+   "wrong": [
+    "El tamaño del registro de eventos",
+    "Los reenviadores DNS",
+    "El archivo de paginación"
+   ],
+   "why": "Un servicio deshabilitado no se puede iniciar."
+  },
+  {
+   "q": "¿Qué eventos del registro System muestran que un servicio cambia de estado o de tipo de inicio?",
+   "answer": "7036 y 7040",
+   "wrong": [
+    "4624 y 4625",
+    "1102 y 4688",
+    "41 y 6008"
+   ],
+   "why": "Te dicen cuándo y, con el 7040, que alguien lo cambió."
+  },
+  {
+   "q": "¿Por qué que se detenga el servicio DNS en un DC es un evento de prioridad uno?",
+   "answer": "Todas las máquinas fallan en minutos a medida que caducan sus cachés",
+   "wrong": [
+    "Elimina zonas",
+    "Degrada el DC",
+    "Detiene la replicación para siempre"
+   ],
+   "why": "Todo en AD depende del DNS."
+  }
+ ]
+}

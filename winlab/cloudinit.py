@@ -87,6 +87,10 @@ def network_config(node: Node, lab: Lab, plan) -> dict:
         else:
             eth["dhcp4"] = True
         eths[f"nic{link.nic_index}"] = eth
+    # A laptop's radio card on the real air (winlab/vwifi.py): never cabled
+    # on the canvas, so not in the plan's links.
+    from . import vwifi
+    eths.update(vwifi.network_config(node, lab))
     return {"version": 2, "ethernets": eths}
 
 

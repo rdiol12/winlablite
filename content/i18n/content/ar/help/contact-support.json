@@ -1,0 +1,17 @@
+{
+ "Contact support": "الاتصال بالدعم",
+ "Support": "الدعم",
+ "support": "دعم",
+ "contact": "اتصال",
+ "email": "بريد إلكتروني",
+ "help": "مساعدة",
+ "bug": "خلل",
+ "problem": "مشكلة",
+ "logs": "سجلات",
+ "support file": "ملف دعم",
+ "bundle": "حزمة",
+ "zip": "zip",
+ "report": "تقرير",
+ "Make a support file and send it to us with a few words on what happened.": "أنشئ ملف دعم وأرسله إلينا مع بضع كلمات عمّا حدث.",
+ "If something does not work and the other topics did not help, write to us. A support file lets us see what happened on this PC.\n\n**Make a support file** below collects, in one zip:\n\n- the checks winlab doctor runs, winlab's version, Windows, Python and QEMU versions\n- the labs and the state of their machines\n- the last part of each machine's log and of the base preparation logs\n- winlab's own settings, with secrets taken out\n\nIt never contains disk images, ISOs, USB sticks, lab passwords, your product key or license, or your own files. The zip stays on this PC until you attach it to an email yourself.\n\nFrom a command prompt: `winlab doctor --bundle`": "إذا لم يعمل شيء ولم تساعد المواضيع الأخرى، فاكتب إلينا. يتيح لنا ملف الدعم رؤية ما حدث على هذا الحاسوب.\n\nيجمع **أنشئ ملف دعم** أدناه في ملف zip واحد:\n\n- عمليات التحقق التي يشغّلها winlab doctor، وإصدار winlab، وإصدارات Windows وPython وQEMU\n- المختبرات وحالة أجهزتها\n- الجزء الأخير من سجل كل جهاز ومن سجلات إعداد القاعدة\n- إعدادات winlab نفسه، مع إزالة الأسرار\n\nلا يحتوي أبدًا على صور الأقراص أو ملفات ISO أو ذواكر USB أو كلمات مرور المختبر أو مفتاح المنتج أو الترخيص الخاص بك أو ملفاتك. ويبقى ملف zip على هذا الحاسوب حتى ترفقه بنفسك برسالة بريد إلكتروني.\n\nمن موجّه الأوامر: `winlab doctor --bundle`"
+}

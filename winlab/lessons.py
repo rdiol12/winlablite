@@ -42,11 +42,30 @@ MODULES: tuple[tuple[str, str, str], ...] = (
      "groups, a jump host, private DNS, a replica DC, a share and a backup across the tunnel; "
      "then, in your own browser on a free Azure account, Entra ID, Conditional Access, Intune, "
      "Arc, Monitor and Update Manager; and for the desktop, Autopilot, Intune apps and update "
-     "rings, co-management and Defender for Endpoint."),
+     "rings, co-management and Defender for Endpoint. Offline, against a simulated tenant inside "
+     "the lab: directory sync with pass-through and password hash sign-in, device enrolment, "
+     "compliance, profiles against Group Policy and Conditional Access."),
+    ("linux", "Linux in the Windows domain",
+     "The Linux track: Linux servers inside an Active Directory domain. A Samba file server joined "
+     "with winbind whose shares take their permissions from Explorer, BIND as a secondary of the "
+     "domain's zones and the primary of a delegated subdomain, Linux clients that log domain users "
+     "in with SSSD and mount shares with Kerberos, and the faults that break them."),
     ("troubleshoot", "Troubleshooting",
      "Break a machine on purpose, read the symptom, find the cause, verify the fix."),
     ("operations", "Operations and automation",
      "Desired state, monitoring, remote administration, and the habits that keep a fleet healthy."),
+    ("powershell", "PowerShell automation",
+     "The PowerShell track: objects and the pipeline, functions with real parameters, a "
+     "module of your own with help and Pester tests, remoting to many servers at once, bulk "
+     "work from a CSV that is safe to run twice, and scripts that run on a schedule as a "
+     "gMSA. The check calls your code with fresh data and compares the result with the "
+     "machines."),
+    ("devops", "DevOps and infrastructure as code",
+     "The DevOps track, in a lab with no internet: your own Git server (Forgejo), branches and "
+     "reviewed pull requests, a CI runner that tests, builds and pushes images to the lab's "
+     "registry, secrets kept out of the code, deployments with Docker Compose, Ansible and "
+     "OpenTofu run from the pipeline, a bad release rolled back, and a GitOps repository the "
+     "servers follow."),
     ("capstone", "Capstone",
      "Bare machines and a client's brief: build the whole office yourself, graded in one go."),
 )
@@ -106,6 +125,7 @@ class Lesson:
     nodes: list[str] = field(default_factory=list)   # machines it needs running, when declared
     browser: bool = False   # done in the student's own browser, on their own cloud tenant: no machine
     quiz: list[Question] = field(default_factory=list)   # recall questions after the lesson
+    tracks: list[str] = field(default_factory=list)   # tracks it counts toward beyond its module's (winlab/tracks.py)
 
     def needed_nodes(self) -> list[str]:
         """The machines the Lab guide's "Start these machines" boots for this
@@ -219,14 +239,66 @@ def load(ident: str) -> Lesson:
         nodes=_strs(meta, "nodes", path),
         browser=bool(meta.get("browser", False)),
         quiz=quiz,
+        tracks=_strs(meta, "tracks", path),
     )
     from . import edition
     if edition.is_core() and lesson.role and not content.exists(paths.LABS / f"{lesson.answer_lab}.toml"):
         # The model answer is built from a lab winlab core does not ship.
         lesson.role = lesson.answer_node = ""
+    lesson = translated(lesson)
     # Written against winlab's names; read in the ones the student chose.
     from . import naming
     return naming.for_lab(lesson.lab).lesson(lesson) if lesson.lab else lesson
+
+
+def translated(lesson: Lesson, lang: str | None = None) -> Lesson:
+    """The lesson in the desktop's language: content/i18n/lessons/<lang>/<id>.json
+    holds its title, summary, why, concepts, steps, pitfalls, verify labels and
+    quiz. A field whose translation is missing, or a list whose length does not
+    match the English one, stays in English; commands and checks never change."""
+    from . import i18n
+    lang = lang or i18n.current()
+    if lang == "en":
+        return lesson
+    tr = i18n.lesson_table(lang, lesson.id)
+    if not tr:
+        return lesson
+    from dataclasses import replace
+
+    def text(key, cur):
+        v = tr.get(key)
+        return v.strip() if isinstance(v, str) and v.strip() else cur
+
+    def strs(key, cur):
+        v = tr.get(key)
+        ok = isinstance(v, list) and len(v) == len(cur) and all(isinstance(x, str) and x.strip() for x in v)
+        return [x.strip() for x in v] if ok else cur
+
+    labels = strs("verify", [v.label for v in lesson.verify])
+    verify = [replace(v, label=l) for v, l in zip(lesson.verify, labels)]
+    quiz = list(lesson.quiz)
+    tq = tr.get("quiz")
+    if isinstance(tq, list) and len(tq) == len(quiz):
+        out = []
+        for q, t in zip(quiz, tq):
+            if not isinstance(t, dict):
+                out.append(q)
+                continue
+            wrong = t.get("wrong")
+            wrong = [w.strip() for w in wrong] if isinstance(wrong, list) and len(wrong) == len(q.wrong) \
+                and all(isinstance(w, str) and w.strip() for w in wrong) else None
+            ans = t.get("answer")
+            if not (isinstance(t.get("q"), str) and isinstance(ans, str) and ans.strip() and wrong) \
+                    or ans.strip() in wrong:
+                out.append(q)
+                continue
+            out.append(Question(q=t["q"].strip(), answer=ans.strip(), wrong=wrong,
+                                why=t["why"].strip() if isinstance(t.get("why"), str) else q.why))
+        quiz = out
+    return replace(lesson, title=text("title", lesson.title), summary=text("summary", lesson.summary),
+                   why=text("why", lesson.why), concepts=strs("concepts", lesson.concepts),
+                   steps=strs("steps", lesson.steps), pitfalls=strs("pitfalls", lesson.pitfalls),
+                   verify=verify, quiz=quiz)
 
 
 def footprint(lesson: Lesson) -> tuple[list[str], int, int] | None:
@@ -345,9 +417,11 @@ def validate_all(lessons: list[Lesson] | None = None) -> list[str]:
             problems.append(f"{l.id}: no steps")
         if not l.why:
             problems.append(f"{l.id}: no 'why'")
-        if len(l.quiz) < 2:
-            problems.append(f"{l.id}: fewer than two recall questions")
+        if len(l.quiz) < 3:
+            problems.append(f"{l.id}: fewer than three recall questions")
     covered = {l.exercise for l in lessons if l.exercise}
+    # an exam-only exercise is graded by a practice exam's lab tasks instead
+    covered |= {e.id for e in exercises.list_available() if e.exam_only}
     for ex_id in sorted(ex_ids - covered):
         problems.append(f"exercise {ex_id} has no lesson")
     return problems

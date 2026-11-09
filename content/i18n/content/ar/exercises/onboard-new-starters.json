@@ -1,0 +1,22 @@
+{
+ "Onboard the new starters": "استقبل الموظفين الجدد",
+ "HR's new-starter sheet is on the media shelf (turn the workday on in the\nOffice window if it is not). Everyone on it starts today. Give each of them an\naccount with the attributes on the sheet, their department's group, access to\ntheir department's folder and a home folder, hand out their first passwords\n(the Office window's staff list), and watch them sign in and work. Tickets\nfrom the staff tell you what is still missing.": "ورقة الموظفين الجدد من الموارد البشرية موجودة على رف الوسائط (شغّل يوم العمل في نافذة\nالمكتب إن لم يكن يعمل). كل من فيها يبدأ اليوم. امنح كلًّا منهم\nحسابًا بالسمات الموجودة في الورقة، ومجموعة قسمه، وصلاحية الوصول إلى\nمجلد قسمه ومجلدًا رئيسيًا، ووزّع كلمات مرورهم الأولى\n(قائمة الموظفين في نافذة المكتب)، وراقبهم وهم يسجّلون الدخول ويعملون. تخبرك التذاكر\nالواردة من الموظفين بما لا يزال ناقصًا.",
+ "On dc01, create a global security group per department: G-FrontDesk, G-Finance, G-Sales, G-HR, G-Operations": "على dc01، أنشئ مجموعة أمان عمومية لكل قسم: G-FrontDesk وG-Finance وG-Sales وG-HR وG-Operations",
+ "Create an enabled account for every person on the sheet, with its Department, Title and EmailAddress filled in": "أنشئ حسابًا مفعّلًا لكل شخص في الورقة، مع ملء Department وTitle وEmailAddress",
+ "Make every new starter a member of their department's group": "اجعل كل موظف جديد عضوًا في مجموعة قسمه",
+ "On fs01, give each department a folder in the Company share (FrontDesk, Finance, ...) its group can change": "على fs01، امنح كل قسم مجلدًا في المشاركة Company (FrontDesk وFinance و...) تستطيع مجموعته تغييره",
+ "Give every new starter a home folder (HomeDirectory and HomeDrive set)": "امنح كل موظف جديد مجلدًا رئيسيًا (مع ضبط HomeDirectory وHomeDrive)",
+ "Type their first passwords into the Office window's staff list and let the workday run until they sign in": "اكتب كلمات مرورهم الأولى في قائمة الموظفين في نافذة المكتب ودع يوم العمل يجري حتى يسجّلوا الدخول",
+ "a global security group per department": "مجموعة أمان عمومية لكل قسم",
+ "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security, once per department (the department's name without spaces)": "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security، مرة واحدة لكل قسم (اسم القسم بلا مسافات)",
+ "the new starters have enabled accounts with department, title and mail": "لدى الموظفين الجدد حسابات مفعّلة بالقسم والمسمى الوظيفي والبريد",
+ "Import-Csv the sheet and run New-ADUser per row with -Department, -Title, -EmailAddress, -AccountPassword (Read-Host -AsSecureString) and -Enabled $true": "نفّذ Import-Csv للورقة وشغّل New-ADUser لكل صف مع -Department و-Title و-EmailAddress و-AccountPassword (Read-Host -AsSecureString) و-Enabled $true",
+ "everyone is in their department's group": "الجميع في مجموعة قسمهم",
+ "Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName, per row of the sheet": "Add-ADGroupMember -Identity ('G-' + ($_.Department -replace ' ', '')) -Members $_.SamAccountName، لكل صف من الورقة",
+ "each department's folder in the Company share is granted to its group": "مجلد كل قسم في المشاركة Company ممنوح لمجموعته",
+ "New-Item -ItemType Directory D:\\Shares\\Company\\Finance; icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M', for each department": "New-Item -ItemType Directory D:\\Shares\\Company\\Finance؛ icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'، لكل قسم",
+ "every new starter has a home folder": "لدى كل موظف جديد مجلد رئيسي",
+ "Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:, after making the folder on fs01": "Set-ADUser <account> -HomeDirectory '\\\\fs01\\Home$\\<account>' -HomeDrive H:، بعد إنشاء المجلد على fs01",
+ "the staff are signing in (4624 on the DC)": "الموظفون يسجّلون الدخول (4624 على DC)",
+ "Turn the workday on, type the first passwords into Office > Staff list, and give the clock a working hour (winlab clock jump 09:00 on a weekday)": "شغّل يوم العمل، واكتب كلمات المرور الأولى في المكتب > قائمة الموظفين، وامنح الساعة ساعة عمل (winlab clock jump 09:00 في يوم عمل)"
+}

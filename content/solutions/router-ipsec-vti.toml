@@ -1,0 +1,133 @@
+[solution]
+exercise = "router-ipsec-vti"
+notes = """
+The Workbench's part is done with `winlab workbench` (a command from the
+gapx-sol-net branch): a provider switch with 203.0.113.0/24, cabled into the
+router's GigabitEthernet0/1/0, and a ready-made Ubuntu server br01 on it.
+br01 is not in the lab file, so its commands run through `winlab exec br01`
+(its agent runs each line with sh), as root. The strongswan pack stick
+comes from `winlab media <lab> br01 pack strongswan` (gapx-sol-net). The
+pre-shared key is the lab password, typed on the router and in br01's
+secrets block. br01 also routes 10.10.20.0/24 back into the tunnel, in case
+pc01 sits on the users LAN of router-zone-firewall.
+"""
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-add shelf=switch id=provider cidr=203.0.113.0/24 x=650 y=120
+workbench ad-ds-basics wb-cable node=router network=provider port=g0/1/0
+workbench ad-ds-basics wb-add shelf=linux id=br01 image=ubuntu x=850 y=120
+workbench ad-ds-basics wb-cable node=br01 nic=0 network=provider
+lab up ad-ds-basics --only br01 --display none
+'''
+wait = 180
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface g0/1/0
+description to the provider
+ip address 203.0.113.1 255.255.255.0
+no shutdown
+end
+show ip interface brief
+'''
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+exec br01 --lab ad-ds-basics -- 'nic=$(ls /sys/class/net | grep -v -e "^lo$" -e "^branch$" -e "^xfrm" | head -n 1); ip addr replace 203.0.113.2/24 dev $nic; ip link set $nic up; ip -br addr'
+exec br01 --lab ad-ds-basics -- 'ip link show branch >/dev/null 2>&1 || ip link add branch type dummy; ip addr replace 10.50.0.1/24 dev branch; ip link set branch up'
+exec br01 --lab ad-ds-basics -- 'ping -c 2 203.0.113.1'
+media ad-ds-basics br01 pack strongswan
+'''
+wait = 15
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+crypto ikev2 proposal PROP-AES256
+encryption aes-cbc-256
+integrity sha256
+group 14
+exit
+crypto ikev2 policy POL-HQ
+proposal PROP-AES256
+exit
+crypto ikev2 keyring KR-BRANCH
+peer BR01
+address 203.0.113.2
+pre-shared-key {{winlab:lab-secret}}
+exit
+exit
+crypto ikev2 profile PROF-BRANCH
+match identity remote address 203.0.113.2 255.255.255.255
+authentication remote pre-share
+authentication local pre-share
+keyring local KR-BRANCH
+exit
+crypto ipsec transform-set TS-AES256 esp-aes 256 esp-sha256-hmac
+mode tunnel
+exit
+crypto ipsec profile IPSEC-BRANCH
+set transform-set TS-AES256
+set ikev2-profile PROF-BRANCH
+exit
+interface Tunnel0
+ip address 10.255.0.1 255.255.255.252
+tunnel source g0/1/0
+tunnel mode ipsec ipv4
+tunnel destination 203.0.113.2
+tunnel protection ipsec profile IPSEC-BRANCH
+exit
+ip route 10.50.0.0 255.255.255.0 Tunnel0
+end
+'''
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+exec br01 --lab ad-ds-basics -- 'mkdir -p /mnt/winlab-pack; for i in $(seq 1 30); do [ -e /dev/disk/by-label/WLPACK ] && break; sleep 2; done; mountpoint -q /mnt/winlab-pack || mount -o ro LABEL=WLPACK /mnt/winlab-pack; echo "deb [trusted=yes] file:/mnt/winlab-pack ./" > /etc/apt/sources.list.d/winlab-pack.list; apt-get -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- update; DEBIAN_FRONTEND=noninteractive apt-get -y -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/winlab-pack.list -o Dir::Etc::sourceparts=- install charon-systemd strongswan-swanctl libstrongswan-standard-plugins; rm -f /etc/apt/sources.list.d/winlab-pack.list; umount /mnt/winlab-pack'
+exec br01 --lab ad-ds-basics -- 'sed -i "s/^\([[:space:]]*\)#*[[:space:]]*install_routes[[:space:]]*=.*/\1install_routes = no/" /etc/strongswan.d/charon.conf; grep -n install_routes /etc/strongswan.d/charon.conf; systemctl restart strongswan'
+exec br01 --lab ad-ds-basics -- 'printf "%s\n" "connections {" "  hq {" "    version = 2" "    local_addrs = 203.0.113.2" "    remote_addrs = 203.0.113.1" "    proposals = aes256-sha256-modp2048" "    local {" "      auth = psk" "      id = 203.0.113.2" "    }" "    remote {" "      auth = psk" "      id = 203.0.113.1" "    }" "    children {" "      hq {" "        local_ts = 0.0.0.0/0" "        remote_ts = 0.0.0.0/0" "        esp_proposals = aes256-sha256" "        if_id_in = 42" "        if_id_out = 42" "        start_action = trap" "      }" "    }" "  }" "}" "secrets {" "  ike-hq {" "    id = 203.0.113.1" "    secret = \"{{winlab:lab-secret}}\"" "  }" "}" > /etc/swanctl/conf.d/hq.conf; chmod 600 /etc/swanctl/conf.d/hq.conf'
+exec br01 --lab ad-ds-basics -- 'ip link show xfrm-hq >/dev/null 2>&1 || ip link add xfrm-hq type xfrm if_id 42; ip addr replace 10.255.0.2/30 dev xfrm-hq; ip link set xfrm-hq up; ip route replace 10.10.10.0/24 dev xfrm-hq; ip route replace 10.10.20.0/24 dev xfrm-hq; swanctl --load-all'
+'''
+wait = 20
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+clear crypto session
+show crypto ikev2 sa
+'''
+wait = 20
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Test-Connection 10.50.0.1 -Count 5 -Quiet
+Test-Connection 10.50.0.1 -Count 3 | Format-Table Address, ResponseTime
+'''
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+show crypto ikev2 sa
+show crypto ipsec sa
+write memory
+'''

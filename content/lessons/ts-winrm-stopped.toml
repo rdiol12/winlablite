@@ -55,3 +55,9 @@ q = "A port test is refused at once. What does that mean?"
 answer = "The machine answered and nothing listens on the port"
 wrong = ["A firewall drops the packets", "The machine is off", "DNS is wrong"]
 why = "A firewall drop looks like a timeout."
+
+[[quiz]]
+q = "Why is restarting WinRM without changing its start type not enough?"
+answer = "A Disabled start type keeps it down after the next reboot"
+wrong = ["WinRM only starts at boot", "Restarting it removes the listener", "It also needs the firewall turned off"]
+why = "Set the start type back to Automatic, or run Enable-PSRemoting."

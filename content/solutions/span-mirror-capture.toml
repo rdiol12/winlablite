@@ -1,0 +1,61 @@
+[solution]
+exercise = "span-mirror-capture"
+notes = "Wireshark (and its Npcap) is installed on pc01 from the Wireshark stick, which must be fetched on this PC first (winlab wireshark fetch). The installer runs silently; Npcap's free edition has no silent mode, so its installer is clicked through on pc01's screen if the silent run cannot install it. dc01 is on Fa0/1 and pc01 on Fa0/3; dumpcap captures while fs01 talks to dc01."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+wireshark stick ad-ds-basics
+media ad-ds-basics pc01 plug wireshark
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+$d = (Get-Volume -FileSystemLabel WIRESHARK).DriveLetter
+$exe = Get-ChildItem "${d}:\" -Filter 'Wireshark*.exe' -Recurse | Select-Object -First 1
+Start-Process -FilePath $exe.FullName -ArgumentList '/S', '/desktopicon=no' -Wait
+Test-Path 'C:\Program Files\Wireshark\tshark.exe'
+'''
+timeout = 1200
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+monitor session 1 source interface fa0/1 both
+monitor session 1 destination interface fa0/3
+end
+show monitor
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+$out = 'C:\Users\Public\Documents\span.pcapng'
+$if = (& 'C:\Program Files\Wireshark\dumpcap.exe' -D | Select-Object -First 1).Split('.')[0]
+Start-Process -FilePath 'C:\Program Files\Wireshark\dumpcap.exe' -ArgumentList '-i', $if, '-a', 'duration:90', '-w', $out -WindowStyle Hidden
+'''
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+Start-Sleep -Seconds 10
+Get-ChildItem \\dc01\NETLOGON | Out-Null
+gpupdate /force
+'''
+timeout = 200
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Start-Sleep -Seconds 90
+Get-Item 'C:\Users\Public\Documents\span.pcapng'
+'''

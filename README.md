@@ -14,16 +14,23 @@ The trial has three labs:
 - **router-protocols**: the lab router at its console: OSPF, eBGP to an
   ISP, a guest network in a VRF, VRRP.
 
-43 lessons with Check my work (see CURRICULUM.md), the Troubleshooting
-drills with a three-step hint ladder, the helpdesk queue, Notes, the Command
-reference, Settings and Help. No product key is needed.
+42 lessons with Check my work (see CURRICULUM.md), the Troubleshooting
+drills with a three-step hint ladder, Progress, Notes, the Command
+reference, Settings and Help, in English, Spanish, Hebrew and Arabic
+(Settings > Time & language). No product key is needed.
+
+The trial is its own program, not the full winlab with parts switched off:
+the other labs, their lessons and the code behind them are not in this
+repository or in the installer. In the installed app the trial's lessons
+are encrypted, and the program is compiled to native code.
 
 Every lab runs in total isolation: no path from the lab to your PC or the
 internet.
 
 **The full winlab** has every lab (Windows 11 deployment, ConfigMgr, PKI,
 clusters, Hyper-V, mail, web farms, SAN, security operations and more), the
-whole hardware workbench, scenarios, exam prep and updates:
+whole hardware workbench, the osTicket helpdesk queue, scenarios, exam prep
+and updates:
 https://smartcartapp.net/pricing
 
 ## Screenshots
@@ -70,12 +77,16 @@ On Windows with Inno Setup 6.3+:
 
     powershell -ExecutionPolicy Bypass -File packaging\build-exe.ps1 -Edition core
 
-It writes `dist\winlab-core-<version>-setup.exe` and `-win64.zip`.
+It writes `dist\winlab-core-<version>-setup.exe` and `-win64.zip`. The build
+encrypts the staged lessons into `content\packs\trial.wlpack` with a fresh key
+(`packaging\trialpack.py`) and compiles the whole `winlab` package to native
+code with Cython (`packaging\protect.py`), so it needs a C compiler (the
+Visual Studio Build Tools; GitHub's Windows runners have them).
 
 **Releases:** publish a release on GitHub's Releases page (tag it with the
 version, e.g. `v0.2.0`) and `.github/workflows/release.yml` builds the
 installer and the zip on Windows and attaches them to that release in about
-15 minutes. Pushing a tag `core-v<version>` does the same and creates the
+30 minutes. Pushing a tag `core-v<version>` does the same and creates the
 release itself; running the workflow by hand keeps the files as the run's
 artifact, and attaches them to a release when you type its tag (to rebuild
 a release from the latest main).

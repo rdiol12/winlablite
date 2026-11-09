@@ -6,6 +6,7 @@ set WLDST=C:\winlab
 if not exist "%WLDST%" mkdir "%WLDST%"
 
 copy /y "%~d0\*.ps1"   "%WLDST%\" >nul 2>&1
+copy /y "%~d0\*.cs"    "%WLDST%\" >nul 2>&1
 copy /y "%~d0\*.json"  "%WLDST%\" >nul 2>&1
 copy /y "%~d0\*.cmd"   "%WLDST%\" >nul 2>&1
 copy /y "%~d0\*.zip"   "%WLDST%\" >nul 2>&1

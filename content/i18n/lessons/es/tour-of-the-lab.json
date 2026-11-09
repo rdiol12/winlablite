@@ -1,0 +1,72 @@
+{
+ "title": "Oriéntate en el laboratorio",
+ "summary": "Arranca el laboratorio, llega a una máquina de tres formas y aprende cómo se comprueba una lección.",
+ "why": "Un laboratorio solo es útil si llegar a una máquina no cuesta nada, así que antes de cualquier tema de Windows, aprende la fontanería. winlab ejecuta máquinas virtuales reales en una red aislada: se ven entre sí y nada más. winlab solo conecta cosas: enciende y apaga las máquinas, conecta sus cables, discos, discos ópticos y memorias USB, y muestra la propia pantalla de cada máquina. Todo lo demás lo haces dentro de las máquinas, como en el trabajo.\n\nCada lección termina con una comprobación. En la mayoría de las lecciones es un ejercicio calificado: winlab pregunta a las propias máquinas y compara la respuesta con lo que devuelve un sistema configurado correctamente. Nada se califica por lo que escribas en un formulario; las máquinas son la prueba. Así es también como te juzga un entorno real.",
+ "concepts": [
+  "Red troncal (fabric): el switch/router Alpine al que se conecta cada máquina; tiene la .1 en cada red y es la puerta de enlace predeterminada",
+  "Agente serie: un canal que el host usa para ejecutar comandos dentro de un invitado sin ningún camino de red",
+  "Imagen base: la instalación de Windows de la que se clona cada máquina, para que un laboratorio nuevo arranque en minutos",
+  "Instantánea: una copia del disco de una máquina a la que puedes volver, el botón de deshacer de un ejercicio"
+ ],
+ "steps": [
+  "Abre Instalación y asegúrate de que todos los pasos están en verde: el entorno de ejecución descargado y la base de Windows preparada.",
+  "Abre Máquinas e inicia dc01 (o usa el botón de encendido del menú Inicio para iniciar todo el laboratorio). El primer arranque tarda unos minutos; la fila dice listo cuando Windows está en marcha.",
+  "Pasa el ratón sobre la llave de la barra de tareas para ver la contraseña de Administrator, haz clic para copiarla.",
+  "Haz doble clic en dc01 en Máquinas para abrir su pantalla, pulsa Ctrl+Alt+Del desde el menú de la ventana e inicia sesión como Administrator con esa contraseña.",
+  "Abre PowerShell dentro de dc01 y ejecuta Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion. En una lección, el botón para escribirlo en dc01 teclea un comando en la pantalla de la máquina por ti; tú sigues pulsando Enter.",
+  "En la misma ventana de PowerShell (no en el ISE: la comprobación lee el historial del propio PowerShell), mira la red desde dentro: ipconfig muestra 10.10.10.10 con la puerta de enlace 10.10.10.1. Test-NetConnection 10.10.10.1 dice PingSucceeded True: es el router del laboratorio. Test-NetConnection 1.1.1.1 falla: nada fuera del laboratorio responde, a propósito.",
+  "En Máquinas, toma un punto de control de todo el laboratorio llamado clean, para que cada lección posterior pueda empezar de nuevo desde aquí.",
+  "Pulsa Comprobar mi trabajo. winlab pregunta al propio dc01 quién ha iniciado sesión en su pantalla y qué guarda su historial de PowerShell: la prueba es la máquina, no un formulario."
+ ],
+ "pitfalls": [
+  "Una máquina que muestra que está arrancando durante mucho tiempo en su primer inicio se está instalando desde la imagen base; dale tiempo en lugar de reiniciarla.",
+  "El laboratorio no tiene Internet a propósito. Todo lo que necesite una descarga lo baja winlab en tu PC y llega al laboratorio como llegaría a una red cerrada: en una memoria o un disco que conectas a la máquina.",
+  "Escribir los comandos en el PowerShell ISE o en una sesión remota: la comprobación lee el fichero de historial del PowerShell en la propia pantalla de dc01, que esos no escriben."
+ ],
+ "verify": [
+  "dc01 responde por el agente serie",
+  "el sistema operativo es un Windows Server real"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué usa cada máquina del laboratorio como puerta de enlace predeterminada?",
+   "answer": "El router de la red troncal, que tiene la .1 en cada red",
+   "wrong": [
+    "El controlador de dominio",
+    "El propio adaptador de red de tu PC",
+    "Ninguna: el laboratorio no tiene enrutamiento"
+   ],
+   "why": "La red troncal Alpine es el switch y router al que se conecta cada máquina; tiene la .1 en cada red."
+  },
+  {
+   "q": "¿Cómo ejecuta winlab un comando dentro de una máquina que no tiene camino de red hacia tu PC?",
+   "answer": "Por el canal del agente serie",
+   "wrong": [
+    "Por RDP desde el host",
+    "A través de una carpeta compartida",
+    "Por reenvío de puertos SSH"
+   ],
+   "why": "El agente serie es un canal que no necesita ninguna red, lo que mantiene aislado el laboratorio."
+  },
+  {
+   "q": "¿Para qué sirve un punto de control (instantánea) en un ejercicio?",
+   "answer": "Para devolver el disco de una máquina a un estado conocido: el botón de deshacer",
+   "wrong": [
+    "Para copiar archivos del PC a la máquina",
+    "Para hacer una copia de seguridad del dominio en la nube",
+    "Para que la máquina arranque más rápido"
+   ],
+   "why": "Una instantánea es una copia guardada del disco a la que puedes volver."
+  },
+  {
+   "q": "¿Cómo decide winlab que el trabajo de una lección está hecho?",
+   "answer": "Pregunta a las propias máquinas y compara sus respuestas con un sistema bien configurado",
+   "wrong": [
+    "Cuenta los pasos que marcaste",
+    "Lee lo que escribiste en un formulario",
+    "Graba tu pantalla"
+   ],
+   "why": "Las máquinas son la prueba, como en un entorno real."
+  }
+ ]
+}

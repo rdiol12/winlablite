@@ -1,0 +1,58 @@
+{
+ "title": "Kerberos falla porque el reloj se desvió",
+ "summary": "Los inicios de sesión de dominio en un servidor fallan con un error de desfase de reloj; los inicios de sesión locales funcionan.",
+ "why": "Kerberos rechaza los vales cuya marca de tiempo se desvía más de cinco minutos, así que una máquina\ncon el reloj mal no puede autenticarse en nada, mientras que una cuenta local sigue funcionando. El\ntexto del error es claro cuando sabes buscarlo (KRB_AP_ERR_SKEW), pero el primer aviso es \"no puedo\nconectarme al recurso compartido\" o \"error en la relación de confianza\". Compara primero los relojes,\ny luego mira el servicio de hora.",
+ "concepts": [
+  "Tolerancia máxima para la sincronización del reloj: cinco minutos, establecida en la directiva de Kerberos",
+  "w32tm /stripchart: el desfase entre esta máquina y una referencia, en directo",
+  "w32tm /query /source y /status: de dónde viene la hora y cuándo se sincronizó por última vez",
+  "Jerarquía del dominio: los miembros se sincronizan con los DC, los DC con el emulador de PDC; un miembro con un par manual queda fuera del árbol"
+ ],
+ "pitfalls": [
+  "Ajustar el reloj a mano sin corregir el servicio de hora hace que vuelva a desviarse; la resincronización y el estado del servicio son la corrección.",
+  "Una VM cuyo host impone un reloj erróneo vuelve a desviarse enseguida; revisa también la integración de hora del hipervisor."
+ ],
+ "verify": [
+  "desfase respecto al DC",
+  "el servicio de hora"
+ ],
+ "quiz": [
+  {
+   "q": "Los inicios de sesión de dominio fallan con un error de desfase de reloj. ¿Cuál es el límite?",
+   "answer": "Cinco minutos",
+   "wrong": [
+    "Un segundo",
+    "Una hora",
+    "Un día"
+   ],
+   "why": "La directiva de Kerberos establece la tolerancia."
+  },
+  {
+   "q": "¿Qué comando muestra en directo el desfase respecto a un reloj de referencia?",
+   "answer": "w32tm /stripchart",
+   "wrong": [
+    "w32tm /register",
+    "net time",
+    "Get-TimeZone"
+   ],
+   "why": "Después, /query /source y /status."
+  },
+  {
+   "q": "Ajustar el reloj a mano sin corregir el servicio de hora lleva a…",
+   "answer": "que vuelva a desviarse más tarde",
+   "wrong": [
+    "una corrección permanente",
+    "un cambio de nombre del dominio",
+    "una pantalla azul"
+   ],
+   "why": "Corrige el origen y resincroniza."
+  }
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 time-skew). No leas aún las pistas.",
+  "Reproduce el síntoma como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Corrige la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la evidencia que te lo habría dicho antes, y anota qué supervisión lo habría detectado."
+ ]
+}

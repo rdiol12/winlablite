@@ -1,0 +1,18 @@
+{
+ "Machines and their screens": "Las máquinas y sus pantallas",
+ "Using winlab": "Usar winlab",
+ "machine": "máquina",
+ "screen": "pantalla",
+ "console": "consola",
+ "vm": "vm",
+ "ctrl+alt+del": "ctrl+alt+del",
+ "full screen": "pantalla completa",
+ "checkpoint": "punto de control",
+ "snapshot": "instantánea",
+ "password": "contraseña",
+ "power": "encendido",
+ "suspend": "suspender",
+ "keyboard": "teclado",
+ "Power, screens, the keyboard, checkpoints and the Administrator password.": "Encendido, pantallas, el teclado, los puntos de control y la contraseña de Administrador.",
+ "**Machines** lists every machine in the lab with its power state, memory and processors.\n\n- Double-click a machine to open its screen in a Virtual Machine Connection window. You see it from the firmware to the sign-in screen.\n- **Ctrl+Alt+Del** is a button on the window's toolbar (Ctrl+Alt+End does the same). **Type text** sends text as keystrokes.\n- Hold Esc to leave full screen. The View menu fits the screen to the window or opens it in a window of its own.\n- The **Administrator password** is behind the key in the taskbar. Each lab has its own, made on this PC.\n- **Checkpoints** save a machine's disks. Take one before something risky, and go back to it from the Action menu.\n- **Suspend** hibernates a machine, and its next start resumes it.\n\nFrom a command prompt: `winlab lab up <lab>`, `winlab lab down <lab>`, `winlab console <machine> --lab <lab>` and `winlab snap <lab> save <name>`.": "**Máquinas** enumera todas las máquinas del laboratorio con su estado de encendido, memoria y procesadores.\n\n- Haz doble clic en una máquina para abrir su pantalla en una ventana de Conexión a máquina virtual. La ves desde el firmware hasta la pantalla de inicio de sesión.\n- **Ctrl+Alt+Supr** es un botón de la barra de herramientas de la ventana (Ctrl+Alt+End hace lo mismo). **Escribir texto** envía texto como pulsaciones de teclas.\n- Mantén pulsada Esc para salir de la pantalla completa. El menú Ver ajusta la pantalla a la ventana o la abre en una ventana propia.\n- La **contraseña de Administrador** está detrás de la llave en la barra de tareas. Cada laboratorio tiene la suya, creada en este PC.\n- Los **Puntos de control** guardan los discos de una máquina. Crea uno antes de algo arriesgado y vuelve a él desde el menú Acción.\n- **Suspender** hiberna una máquina, y su siguiente inicio la reanuda.\n\nDesde un símbolo del sistema: `winlab lab up <lab>`, `winlab lab down <lab>`, `winlab console <machine> --lab <lab>` y `winlab snap <lab> save <name>`."
+}

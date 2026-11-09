@@ -126,6 +126,14 @@ def fit(lab, node_id: str) -> str:
             f"(the management VLAN); its user and password are on the toe tag")
 
 
+def _firmware_disc(lab_name: str) -> str:
+    """The server vendor's support disc (firmware packages, SHA256SUMS,
+    release notes) put on the lab's media shelf with the port (winlab/bmcfw.py)."""
+    from . import bmcfw
+    disc = bmcfw.ensure_disc(lab_name)
+    return f"; the vendor's firmware disc {disc} is on the media shelf" if disc else ""
+
+
 def remove(lab, node_id: str) -> str:
     node = _node(lab, node_id)
     if not fitted(node):
@@ -230,7 +238,7 @@ def handler_script() -> str:
 def render(plan) -> list[str]:
     """The router's part: the Wake-on-LAN listener on its switch, and one
     BMC per cabled management port (run at boot, and again live by push)."""
-    from . import openbmcui
+    from . import bmcfw, openbmcui
     bmcs = ports(plan.lab, plan)
     out = ["### remote power (winlab/power.py): Wake-on-LAN listener, server management ports",
            f"[ -f {WOL_PID} ] && kill $(cat {WOL_PID}) 2>/dev/null",
@@ -255,6 +263,7 @@ def render(plan) -> list[str]:
                 f"printf '%s\\n' '{b['mac']}' > {d}/mac; printf '%s\\n' '{b['mask']}' > {d}/mask; "
                 f"printf '%s\\n' '{b['gateway']}' > {d}/gateway",
                 f"printf '%s\\n' '{b['cpus']}' > {d}/cpus; printf '%s\\n' '{b['memory']}' > {d}/memory",
+                *bmcfw.router_lines(plan.lab.name, b["node"], d),
                 f"printf '%s\\n' {' '.join(repr(x) for x in accounts_of(plan.lab.name, b['node'])) or chr(39) * 2} "
                 f"| grep . > {d}/accounts; true",
                 f"ip netns add {ns}",
@@ -1005,6 +1014,9 @@ class Watcher:
             if verb == "Boot":
                 target, _, enabled = arg.partition(":")
                 return set_boot_override(lab, nid, target, enabled or "Once")
+            if verb == "Firmware":
+                from . import bmcfw
+                return bmcfw.keep(lab.name, nid, arg)
             if verb == "Keys":
                 n = send_keys(lab.name, nid, keys_from(arg), qmp=self._qmp)
                 return "Info", f"Virtual console: {n} key{'s' if n != 1 else ''} typed"
@@ -1106,6 +1118,14 @@ class Watcher:
             lines.append(self._log(lab, node.id, what))
             if node.id in by_node:
                 lines.append(self._event(by_node[node.id], "Info", f"Server {what}"))
+            if on and node.id in by_node:
+                # a BIOS image the BMC staged is written at a power-on from off (winlab/bmcfw.py)
+                from . import bmcfw
+                flashed = bmcfw.power_on(lab.name, node.id)
+                if flashed:
+                    record(lab.name, node.id, flashed, "management port")
+                    lines.append(self._event(by_node[node.id], "Info", flashed))
+                    lines += bmcfw.router_lines(lab.name, node.id, by_node[node.id]["dir"])
         return out
 
     def _wake(self, lab, t: dict, running: set[str]) -> str:
@@ -1227,6 +1247,12 @@ FAULT_HINTS = (
 )
 
 
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 def misplug(lab, node_id: str, rng=None) -> str:
     """The management cable in a port of another VLAN: the BMC is on the
     wrong network, its address belongs to none it can reach."""
@@ -1290,7 +1316,7 @@ def fault_hint(lab, node_id: str) -> str:
     def more(data):
         data["faults"][node.id]["hints"] = n + 1
     _update(lab.name, more)
-    return FAULT_HINTS[n].format(server=naming.display(lab, node.id), want=f["want"])
+    return _pt(FAULT_HINTS[n]).format(server=naming.display(lab, node.id), want=f["want"])
 
 
 # ------------------------------------------------------------------ the desktop
@@ -1353,7 +1379,7 @@ def act(dash, action: str, params: dict) -> dict:
             if op in ("fit", "remove") and node_id in _running(lab.name):
                 raise PowerError(f"shut {naming.display(lab, node_id)} down before you open the case")
             if op == "fit":
-                msg = fit(lab, node_id)
+                msg = fit(lab, node_id) + _firmware_disc(lab.name)
             elif op == "remove":
                 msg = remove(lab, node_id)
             elif op == "unplug":
@@ -1375,7 +1401,7 @@ def add_cli(sub) -> None:
     p = sub.add_parser("power", help="servers' management ports (BMC), Wake-on-LAN, the power history")
     p.add_argument("lab")
     p.add_argument("what", choices=["status", "fit", "remove", "cable", "unplug", "hang", "history",
-                                    "watch", "fault", "check", "hint"])
+                                    "watch", "fault", "check", "hint", "firmware"])
     p.add_argument("node", nargs="?", default="")
     p.add_argument("network", nargs="?", default="")
     p.add_argument("--ip", default="")
@@ -1427,6 +1453,17 @@ def run_cli(args) -> int:
         if args.what == "hang":
             print(hang(lab, nid))
             return 0
+        if args.what == "firmware":
+            from . import bmcfw
+            if not fitted(lab.nodes[nid]):
+                raise PowerError(f"{nid} has no management port: fit one first")
+            st = bmcfw.state(lab.name, nid)
+            print(f"{nid}: BMC {st['bmc']} (backup {st['bmc_backup']}), BIOS {st['bios']} ({st['bios_date']})"
+                  + (f", BIOS {st['pending']} staged for the next power-on from off" if st.get("pending") else ""))
+            disc = bmcfw.ensure_disc(lab.name)
+            print(f"the vendor's support disc {disc} is on the lab's media shelf" if disc
+                  else "the support disc could not be made")
+            return 0
         if args.what == "check":
             print(fault_check(lab, nid)["message"])
             return 0
@@ -1435,7 +1472,7 @@ def run_cli(args) -> int:
             return 0
         if args.what in ("fit", "remove") and nid in _running(lab.name):
             raise PowerError(f"shut {nid} down before you open the case")
-        msg = {"fit": lambda: fit(lab, nid), "remove": lambda: remove(lab, nid),
+        msg = {"fit": lambda: fit(lab, nid) + _firmware_disc(lab.name), "remove": lambda: remove(lab, nid),
                "unplug": lambda: unplug(lab, nid), "fault": lambda: misplug(lab, nid),
                "cable": lambda: cable(lab, nid, args.network, args.ip)}[args.what]()
     except (PowerError, editor.EditError) as exc:

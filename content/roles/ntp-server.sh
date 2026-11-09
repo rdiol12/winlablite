@@ -45,6 +45,12 @@ mkdir -p /etc/chrony /etc/winlab-ntp /var/lib/chrony "$done_dir"
 for net in $WINLAB_NTP_ALLOW; do echo "allow $net" >> /etc/winlab-ntp/allow; done
 [ -s /etc/winlab-ntp/allow ] || echo 'allow' > /etc/winlab-ntp/allow
 cat /etc/winlab-ntp/allow >> "$conf"
+# Symmetric keys the admin put on the appliance (NTP authentication) stay:
+# chrony answers a request signed with one of them with a signed reply.
+if [ -s /etc/chrony/chrony.keys ]; then
+    chmod 640 /etc/chrony/chrony.keys
+    echo "keyfile /etc/chrony/chrony.keys" >> "$conf"
+fi
 rm -f "$conf.winlab"
 
 rc-service chronyd stop >/dev/null 2>&1

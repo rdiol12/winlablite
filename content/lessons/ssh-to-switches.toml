@@ -27,9 +27,9 @@ ip default-gateway.
 
 In this lab the switch's SSH server is Dropbear on the router, inside the
 switch's own management address, and the session it opens is the same
-console you type into with the cable. One difference from a real switch:
-the password is asked by the switch inside the session (Password:) rather
-than by your ssh client, because the user list it checks is the switch's own.
+console you type into with the cable. With login local your ssh client asks
+the password, as with a real switch, and it is checked against the switch's
+own username list (the user's secret, as you typed it at the console).
 '''
 concepts = [
   "Telnet sends the password in clear; SSH encrypts the whole session and authenticates the server with its host key",
@@ -46,7 +46,7 @@ steps = [
   "Now the key: crypto key generate rsa (without the size, it asks: How many bits in the modulus [512]: answer 2048). The name for the keys will be: CORP-SW1.corp.lab, and %SSH-5-ENABLED: SSH 1.99 has been enabled. do show ip ssh, and do show crypto key mypubkey rsa to see the public half.",
   "Turn version 1 off: ip ssh version 2. Then a user and a privileged secret: username admin privilege 15 secret, then a password of your own; and enable secret with another one (show running-config shows both as type 9 hashes, never the words).",
   "The vty lines: line vty 0 4, login local, transport input ssh, end. Then copy running-config startup-config: the key pair is kept with it, and an unsaved one is gone after a reload.",
-  "Log in from pc01: open PowerShell and run ssh admin@10.10.10.2 (the OpenSSH client is part of Windows 11). The first time it shows the switch's host key fingerprint: compare it with the one show ip ssh prints, and answer yes. Then the switch asks Password:, and you land at CORP-SW1#.",
+  "Log in from pc01: open PowerShell and run ssh admin@10.10.10.2 (the OpenSSH client is part of Windows 11). The first time it shows the switch's host key fingerprint: compare it with the one show ip ssh prints, and answer yes. Then ssh asks admin@10.10.10.2's password:, and you land at CORP-SW1#.",
   "It is the same switch: show running-config | include hostname, and show ssh (your session, version 2.0). Make a change over SSH (interface fa0/1, description pc01) and see it on the console too. exit ends the session.",
   "See the vty rules bite: on the console, line vty 0 4, transport input telnet. ssh from pc01 now closes at once: the line takes no SSH. Put back transport input ssh. Then try username admin privilege 1 (same secret): your SSH login lands at CORP-SW1>, and enable without an enable secret would answer % No password set.",
   "Do the same on the router if you like: it has addresses on every VLAN already (10.10.10.1 here): hostname, ip domain-name, crypto key generate rsa modulus 2048, username, line vty 0 4 login local transport input ssh; then ssh admin@10.10.10.1 from pc01.",

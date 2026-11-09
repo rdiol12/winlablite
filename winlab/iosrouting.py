@@ -1,6 +1,6 @@
-"""The lab router as a router that talks to other routers: OSPF and BGP typed
-at its console, VRFs (VRF-lite) that keep networks apart, and VRRP with a
-second gateway.
+"""The lab router as a router that talks to other routers: OSPF, EIGRP and BGP
+typed at its console, VRFs (VRF-lite) that keep networks apart, and VRRP and
+HSRP with a second gateway.
 
 Everything typed is kept with the router's other settings in the lab file
 ([devices."router"]) and is made real on the router (the Alpine VM that is
@@ -23,23 +23,21 @@ in line when a command changes it (winlab/livenet.py):
   table of its own, and ``vrf forwarding`` on an interface enslaves that
   interface's SVI to it: the network's connected route moves out of the
   main table, so it is routed only with the networks in the same VRF;
+* ``router eigrp`` is FRRouting's eigrpd (winlab/ioseigrp.py, which says
+  what eigrpd lacks: it is alpha by its own project's word, with no stub,
+  no redistribution, no authentication, no named mode), routes at distance
+  90 beside OSPF's 110;
+* ``standby`` (HSRP) is winlab's own HSRP speaker, winlab-hsrpd
+  (winlab/hsrpd.py, winlab/ioshsrp.py): no open-source router speaks HSRP,
+  so winlab wrote one from the published packet formats; rtr-edge runs the
+  same speaker, and on real gear both ends would be Cisco routers;
 * ``show ip route`` reads the routes zebra selected (``vtysh -c 'show ip
   route json'``) beside the connected and static ones, and ``show ip ospf
-  neighbor``, ``show ip bgp summary`` and ``show vrrp`` read the daemons.
+  neighbor``, ``show ip eigrp neighbors``, ``show ip bgp summary``, ``show
+  vrrp`` and ``show standby`` read the daemons.
 
 What is not here, and why:
 
-* EIGRP. It is Cisco's own protocol; FRRouting's eigrpd exists but its own
-  documentation calls it alpha, with no stub routing, no authentication
-  and no named mode, and the routers the lab router could peer with are
-  FRRouting too, so an EIGRP lesson would teach FRRouting's gaps rather
-  than EIGRP. ``router eigrp`` says so and points at OSPF.
-* HSRP (``standby``). It is Cisco's own first-hop protocol and nothing a
-  Linux router runs speaks it; a second "HSRP router" would have to be
-  pretend. VRRP (RFC 3768 / 5798) is the open standard that does the same
-  job, and FRRouting's vrrpd speaks it on both gateways, so ``standby``
-  says so and points at ``vrrp``. A second gateway is a real router: an
-  Ubuntu router with FRRouting on the same LAN (content/labs/router-protocols.toml).
 * More than one OSPF process in one VRF: FRRouting's ospfd runs one
   instance per VRF, so a second ``router ospf <pid>`` there is refused
   with that reason, and the process number is the console's own label.
@@ -88,12 +86,6 @@ _VRF_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,14}$")
 _TAKEN = re.compile(r"^(lab0|lo|eth\d|stp|vr\d|wl|br|bond|dummy|gre|tun|sit|ip6)", re.I)
 _IP = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
 
-NO_EIGRP = ("% EIGRP is not in this router. It is Cisco's own protocol, and FRRouting's eigrpd (the only one a\n"
-            "% Linux router runs) is alpha by its own project's word: no stub, no authentication, no named\n"
-            "% mode. Route with OSPF instead (router ospf 1): it is the open standard every vendor speaks.")
-NO_HSRP = ("% HSRP is not in this router. It is Cisco's own first-hop protocol and no Linux router speaks it,\n"
-           "% so the second gateway would have to be pretend. Use VRRP, the open standard that does the same\n"
-           "% job and that the other gateway speaks too: vrrp <group> ip <virtual address>.")
 
 
 def _err(text: str):
@@ -168,11 +160,26 @@ def vroutes(own: dict) -> list[tuple[str, ipaddress.IPv4Network, str, int]]:
 def active(lab) -> bool:
     """Whether the console has anything of this module's: routing protocols,
     VRFs, VRRP."""
-    return any(k.startswith(("ospf:", "vrf:", "vrrp:", "vroute:")) or k == "bgp" for k in _own(lab))
+    from . import ioseigrp, ioshsrp, iossla, iosv6  # IPv6 typed at the console: addresses, RAs, static routes, OSPFv3
+    own = _own(lab)
+    return (any(k.startswith(("ospf:", "vrf:", "vrrp:", "vroute:")) or k == "bgp" for k in own) or iosv6.active(own)
+            or ioseigrp.active(own) or ioshsrp.active(own) or iossla.active(own) or _more_active(own))
+
+
+def _more_active(own: dict) -> bool:
+    """GLBP (winlab's own speaker), PIM and IS-IS (FRRouting's pimd, isisd)."""
+    from . import iosglbp, iosisis, iospim
+    from . import iosbfd, iosmpls, iosrpolicy  # BFD, loopbacks and MPLS, route-maps and prefix-lists
+    return (iosglbp.active(own) or iospim.active(own) or iosisis.active(own) or iosmpls.active(own)
+            or iosrpolicy.active(own) or iosbfd.active(own))
 
 
 def wants_frr(own: dict) -> bool:
-    return bool(ospf_pids(own) or bgp_as(own) or any(k.startswith("vrrp:") for k in own))
+    from . import ioseigrp, iosv6
+    from . import iosisis, iospim
+    return (bool(ospf_pids(own) or bgp_as(own) or any(k.startswith("vrrp:") for k in own)) or iosv6.wants_frr(own)
+            or ioseigrp.active(own) or iosisis.active(own) or iospim.runs(own)
+            or any(k.startswith(("mpls-if:", "ospf-ldpauto:")) for k in own))
 
 
 def _wild_prefix(addr: str, wild: str) -> ipaddress.IPv4Network | None:
@@ -235,7 +242,7 @@ def _redist(src: str, opts: str, ospf: bool) -> str:
     static routes are kernel routes on the router (winlab/iosl3.py), so
     'static' is FRRouting's 'kernel'."""
     w = src.split()
-    proto = {"static": "kernel", "connected": "connected", "ospf": "ospf", "bgp": "bgp"}[w[0]]
+    proto = {"static": "kernel", "connected": "connected", "ospf": "ospf", "bgp": "bgp", "eigrp": "eigrp"}[w[0]]
     line = f"redistribute {proto}"
     m = re.search(r"\bmetric (\d+)", opts)
     if m:
@@ -244,13 +251,16 @@ def _redist(src: str, opts: str, ospf: bool) -> str:
         t = re.search(r"\bmetric-type ([12])", opts)
         if t:
             line += f" metric-type {t.group(1)}"
+    r = re.search(r"\broute-map (\S+)", opts)
+    if r:
+        line += f" route-map {r.group(1)}"
     return line
 
 
 def frr_conf(plan) -> str:
     """/etc/frr/frr.conf from the console's settings; "" when the router
     runs no routing protocol and no VRRP."""
-    from . import devcli
+    from . import devcli, iosv6
     lab = plan.lab
     own = _own(lab)
     if not wants_frr(own):
@@ -259,6 +269,10 @@ def frr_conf(plan) -> str:
     out = ["! generated by winlab from the router's console (winlab/iosrouting.py)",
            "frr defaults traditional", f"hostname {devcli.ios_name(lab, devcli.ROUTER)}",
            "log syslog informational", "service integrated-vtysh-config", "!"]
+    from . import iosospfauth  # key chains first: the interfaces name them
+    out += iosospfauth.frr_keychain_lines(own)
+    from . import iosbfd, iosbgpx, iosmpls, iosospfx, iosrpolicy  # BFD, BGP policy and VPNs, MPLS, OSPF areas
+    out += iosbfd.frr_lines(plan)
     pids = ospf_pids(own)
     for name, dev in sorted(svis.items(), key=lambda kv: kv[1]):
         body = []
@@ -271,6 +285,8 @@ def frr_conf(plan) -> str:
                     body.append(f" ip ospf {word} {own[f'ospf-{key}:{name}']}")
             if own.get(f"ospf-p2p:{name}"):
                 body.append(" ip ospf network point-to-point")
+            body += iosospfauth.frr_iface_lines(own, name)
+            body += iosbfd.frr_iface_lines(own, name, dev)
             for pid in pids:
                 if own.get(f"ospf:{pid}", "") != vrf_of(own, name):
                     continue
@@ -288,6 +304,7 @@ def frr_conf(plan) -> str:
             if own.get(f"vrrp-nopre:{name}:{grp}"):
                 body.append(f" no vrrp {grp} preempt")
             body.append(f" vrrp {grp} ip {vip}")
+        body += iosv6.frr_iface_lines(own, name)
         if body:
             out += [f"interface {dev}"] + body + ["exit", "!"]
     for pid in pids:
@@ -299,6 +316,8 @@ def frr_conf(plan) -> str:
             out.append(" log-adjacency-changes")
         if own.get(f"ospf-pasdef:{pid}"):
             out.append(" passive-interface default")
+        out += iosospfauth.frr_area_lines(own, pid)
+        out += iosospfx.frr_lines(own, pid)
         for addr, wild, area in ospf_nets(own, pid):
             net = _wild_prefix(addr, wild)
             if net is not None:
@@ -316,6 +335,11 @@ def frr_conf(plan) -> str:
             line += f" metric-type {t.group(1)}" if t else ""
             out.append(line)
         out += ["exit", "!"]
+    from . import ioseigrp  # router eigrp, then its interface lines (eigrpd wants that order)
+    out += ioseigrp.frr_lines(plan)
+    from . import iosisis, iospim  # router isis then its interfaces (isisd); PIM's RPs and interfaces (pimd)
+    out += iosisis.frr_lines(plan)
+    out += iospim.frr_lines(plan)
     asn = bgp_as(own)
     if asn:
         out.append(f"router bgp {asn}")
@@ -328,12 +352,14 @@ def frr_conf(plan) -> str:
         out.append(" no bgp ebgp-requires-policy")
         # and, as IOS does, announces a network only when exactly it is in the table
         out.append(" bgp network import-check")
+        out += iosbgpx.frr_global(own)
         for ip in bgp_nbrs(own):
             out.append(f" neighbor {ip} remote-as {own[f'bgp-nbr:{ip}']}")
             if own.get(f"bgp-desc:{ip}"):
                 out.append(f" neighbor {ip} description {own[f'bgp-desc:{ip}']}")
             if own.get(f"bgp-shut:{ip}"):
                 out.append(f" neighbor {ip} shutdown")
+            out += iosbgpx.frr_nbr_global(own, plan, ip)
         af = [f"  network {n}" for n in bgp_nets(own)]
         af += ["  " + _redist(k[11:], v, False) for k, v in sorted(own.items()) if k.startswith("bgp-redist:")]
         for ip in bgp_nbrs(own):
@@ -341,20 +367,31 @@ def frr_conf(plan) -> str:
                 af.append(f"  no neighbor {ip} activate")
             if own.get(f"bgp-dorig:{ip}"):
                 af.append(f"  neighbor {ip} default-originate")
+            af += iosbgpx.frr_nbr_af(own, ip)
         if af:
             out += [" !", " address-family ipv4 unicast"] + af + [" exit-address-family"]
+        out += iosbgpx.frr_extra_afs(own, bgp_nbrs(own))
         out += ["exit", "!"]
+        out += iosbgpx.frr_vrf_blocks(own)
+    out += iosmpls.frr_lines(plan)
+    out += iosrpolicy.frr_lines(own)
+    out += iosv6.frr_global_lines(plan)
     return "\n".join(out) + "\n"
 
 
 def daemons_file(own: dict) -> str:
-    on = {"ospfd": bool(ospf_pids(own)), "bgpd": bool(bgp_as(own)),
-          "vrrpd": any(k.startswith("vrrp:") for k in own)}
+    from . import ioseigrp, iosisis, iospim, iosv6
+    on = {"ospfd": bool(ospf_pids(own)), "bgpd": bool(bgp_as(own)), "eigrpd": ioseigrp.active(own),
+          "vrrpd": any(k.startswith("vrrp:") for k in own), "ospf6d": bool(iosv6.ospf_pids(own)),
+          "isisd": iosisis.active(own), "pimd": iospim.runs(own),
+          "bfdd": any(k.startswith("bfd-if:") for k in own),
+          "ldpd": not own.get("mpls-off") and any(k.startswith(("mpls-if:", "ospf-ldpauto:")) for k in own)}
     lines = ["# generated by winlab (winlab/iosrouting.py): the daemons the router's console needs"]
     lines += [f"{d}={'yes' if on.get(d) else 'no'}" for d in DAEMONS]
     lines += ["vtysh_enable=yes", 'zebra_options="  -A 127.0.0.1 -s 90000000"',
               'mgmtd_options="  -A 127.0.0.1"', 'staticd_options="-A 127.0.0.1"']
-    lines += [f'{d}_options="  -A 127.0.0.1"' for d in ("bgpd", "ospfd", "vrrpd")]
+    lines += [f'{d}_options="  -A 127.0.0.1"' for d in ("bgpd", "ospfd", "ospf6d", "vrrpd", "eigrpd", "isisd", "pimd",
+                                                                "bfdd", "ldpd")]
     return "\n".join(lines) + "\n"
 
 
@@ -464,9 +501,18 @@ def render(plan, reset: bool = False) -> list[str]:
     own = _own(plan.lab)
     if not active(plan.lab) and not reset:
         return []
-    out = ["", "### OSPF, BGP, VRFs and VRRP as typed at the router's console (winlab/iosrouting.py)"]
+    out = ["", "### OSPF, EIGRP, BGP, VRFs, VRRP and HSRP as typed at the router's console (winlab/iosrouting.py)"]
     out += _vrf_lines(plan)
     out += _vrrp_lines(plan)
+    from . import ioshsrp, iossla  # winlab's own HSRP speaker (winlab/hsrpd.py), IP SLA (winlab/slad.py)
+    out += iossla.router_lines(plan)
+    out += ioshsrp.router_lines(plan)
+    from . import iosglbp  # winlab's own GLBP speaker (winlab/glbpd.py)
+    out += iosglbp.router_lines(plan)
+    from . import iosv6  # IPv6 forwarding and addresses, before zebra reads the interfaces
+    out += iosv6.kernel_lines(plan, reset)
+    from . import iosmpls  # loopbacks, and MPLS forwarding before zebra starts
+    out += iosmpls.kernel_lines(plan)
     conf = frr_conf(plan)
     if conf:
         out += [INSTALL] + _write_files(conf, daemons_file(own))
@@ -500,7 +546,8 @@ def _tree(text: str) -> list[tuple[str, ...]]:
             stack.pop()
         path = tuple(s for _, s in stack) + (raw.strip(),)
         out.append(path)
-        if raw.strip().startswith(("interface ", "router ", "address-family ", "vrf ")):
+        if raw.strip().startswith(("interface ", "router ", "address-family ", "vrf ", "key chain ", "key ",
+                                   "route-map ", "mpls ldp", "profile ")) or raw.strip() == "bfd":
             stack.append((depth, raw.strip()))
     return out
 
@@ -523,7 +570,8 @@ def delta(old: str, new: str) -> list[list[str]]:
         if len(path) == 1:
             if last.startswith(_FIXED):
                 continue
-            if path in heads and last.startswith(("router ", "vrf ")):
+            if path in heads and (last.startswith(("router ", "vrf ", "key chain ", "route-map ", "mpls ldp"))
+                                  or last == "bfd"):
                 gone_blocks.add(path)
                 cmds.append(["configure terminal", "no " + last, "end"])
             elif path in heads:
@@ -553,8 +601,17 @@ def live_script(plan, runner) -> list[str]:
     brought in line without a restart when only its configuration changed
     (a new daemon, or FRRouting not running yet, starts it again)."""
     own = _own(plan.lab)
-    out = ["", "### OSPF, BGP, VRFs and VRRP changed at the console (winlab/iosrouting.py)"]
+    out = ["", "### OSPF, EIGRP, BGP, VRFs, VRRP and HSRP changed at the console (winlab/iosrouting.py)"]
     out += _vrf_lines(plan) + _vrrp_lines(plan)
+    from . import ioshsrp, iossla
+    out += iossla.router_lines(plan, runner)
+    out += ioshsrp.router_lines(plan, runner)
+    from . import iosglbp
+    out += iosglbp.router_lines(plan, runner)
+    from . import iosv6
+    out += iosv6.kernel_lines(plan, reset=True)
+    from . import iosmpls
+    out += iosmpls.kernel_lines(plan)
     conf = frr_conf(plan)
     if not conf:
         return out + [f"[ -x {FRR_INIT} ] && {FRR_INIT} stop >/dev/null 2>&1 || true",
@@ -580,7 +637,10 @@ def live_script(plan, runner) -> list[str]:
 
 # ------------------------------------------------------------------ show running-config
 def vrf_lines(own: dict) -> list[str]:
-    out = []
+    from . import iosospfauth  # key chain blocks print before the VRFs and the interfaces, as on IOS
+    out = iosospfauth.keychain_run_lines(own)
+    from . import iospim  # ip multicast-routing prints with the global lines, before the interfaces
+    out += iospim.global_lines(own)
     for name in vrfs(own):
         kind = own.get(f"vrf-kind:{name}", "definition")
         out.append(f"vrf definition {name}" if kind == "definition" else f"ip vrf {name}")
@@ -588,9 +648,13 @@ def vrf_lines(own: dict) -> list[str]:
             out.append(f" description {own[f'vrf-desc:{name}']}")
         if own.get(f"vrf:{name}"):
             out.append(f" rd {own[f'vrf:{name}']}")
+        from . import iosmpls
+        out += iosmpls.vrf_lines(own, name)
         if kind == "definition" and own.get(f"vrf-af:{name}"):
             out += [" !", " address-family ipv4", " exit-address-family"]
         out.append("!")
+    from . import iosmpls  # mpls label protocol, mpls ldp router-id
+    out += iosmpls.global_lines(own)
     return out
 
 
@@ -603,7 +667,9 @@ def iface_pre(own: dict, ifname: str) -> list[str]:
 
 
 def iface_lines(own: dict, ifname: str) -> list[str]:
-    out = []
+    from . import ioseigrp, iosglbp, ioshsrp, iosisis, iospim
+    out = ioseigrp.iface_lines(own, ifname) + ioshsrp.iface_lines(own, ifname) + iosglbp.iface_lines(own, ifname)
+    out += iospim.iface_lines(own, ifname) + iosisis.iface_lines(own, ifname)
     for _, grp, vip in vrrp_groups(own, ifname):
         if own.get(f"vrrp-desc:{ifname}:{grp}"):
             out.append(f" vrrp {grp} description {own[f'vrrp-desc:{ifname}:{grp}']}")
@@ -614,6 +680,8 @@ def iface_lines(own: dict, ifname: str) -> list[str]:
             out.append(f" no vrrp {grp} preempt")
         if own.get(f"vrrp-prio:{ifname}:{grp}"):
             out.append(f" vrrp {grp} priority {own[f'vrrp-prio:{ifname}:{grp}']}")
+        from . import iossla
+        out += iossla.vrrp_lines(own, ifname, grp)
     if own.get(f"ospf-area:{ifname}"):
         pid, area = own[f"ospf-area:{ifname}"].split()
         out.append(f" ip ospf {pid} area {area}")
@@ -622,6 +690,10 @@ def iface_lines(own: dict, ifname: str) -> list[str]:
             out.append(f" ip ospf {word} {own[f'ospf-{key}:{ifname}']}")
     if own.get(f"ospf-p2p:{ifname}"):
         out.append(" ip ospf network point-to-point")
+    from . import iosospfauth
+    out += iosospfauth.iface_lines(own, ifname)
+    from . import iosbfd, iosmpls
+    out += iosbfd.iface_lines(own, ifname) + iosmpls.iface_lines(own, ifname)
     return out
 
 
@@ -641,6 +713,10 @@ def run_lines(con) -> list[str]:
             out.append(f" router-id {own[f'ospf-rid:{pid}']}")
         if own.get(f"ospf-log:{pid}"):
             out.append(" log-adjacency-changes")
+        from . import iosospfauth
+        out += iosospfauth.area_run_lines(own, pid)
+        from . import iosbfd, iosmpls, iosospfx
+        out += iosospfx.run_lines(own, pid) + iosmpls.ospf_run_lines(own, pid) + iosbfd.ospf_run_lines(own, pid)
         for k, v in sorted(own.items()):
             if k.startswith(f"ospf-redist:{pid}:"):
                 out.append(f" redistribute {k.split(':', 2)[2]}" + (f" {v}" if v else ""))
@@ -658,6 +734,9 @@ def run_lines(con) -> list[str]:
         if f"ospf-dio:{pid}" in own:
             out.append(" default-information originate" + (f" {own[f'ospf-dio:{pid}']}" if own[f"ospf-dio:{pid}"] else ""))
         out.append("!")
+    from . import ioseigrp, iosisis
+    out += ioseigrp.run_lines(own)
+    out += iosisis.run_lines(own)
     asn = bgp_as(own)
     if asn:
         out.append(f"router bgp {asn}")
@@ -665,12 +744,15 @@ def run_lines(con) -> list[str]:
             out.append(f" bgp router-id {own['bgp-rid']}")
         if own.get("bgp-log"):
             out.append(" bgp log-neighbor-changes")
+        from . import iosbgpx
+        out += iosbgpx.run_global(own)
         for ip in bgp_nbrs(own):
             out.append(f" neighbor {ip} remote-as {own[f'bgp-nbr:{ip}']}")
             if own.get(f"bgp-desc:{ip}"):
                 out.append(f" neighbor {ip} description {own[f'bgp-desc:{ip}']}")
             if own.get(f"bgp-shut:{ip}"):
                 out.append(f" neighbor {ip} shutdown")
+            out += iosbgpx.run_nbr_global(own, ip)
         out += [" !", " address-family ipv4"]
         for k, v in sorted(own.items()):
             if k.startswith("bgp-redist:"):
@@ -682,11 +764,16 @@ def run_lines(con) -> list[str]:
                 out.append(f"  neighbor {ip} activate")
             if own.get(f"bgp-dorig:{ip}"):
                 out.append(f"  neighbor {ip} default-originate")
-        out += [" exit-address-family", "!"]
+            out += iosbgpx.run_nbr_af(own, ip)
+        out += [" exit-address-family"] + iosbgpx.run_extra_afs(own, bgp_nbrs(own)) + ["!"]
     vr = vroutes(own)
     for vrf, net, target, dist in vr:
         out.append(f"ip route vrf {vrf} {net.network_address} {net.netmask} {target}" + (f" {dist}" if dist != 1 else ""))
     out += ["!"] if vr else []
+    from . import iospim
+    out += iospim.run_lines(own)
+    from . import iosrpolicy  # ip as-path, ip community-list, ip prefix-list, route-map
+    out += iosrpolicy.run_lines(own)
     return out
 
 
@@ -726,7 +813,8 @@ def add_specs(con, add, U, E, C, IF) -> None:
     add("no router ospf <num>", lambda a: _no_ospf(con, a[0]), "Negate a command or set its defaults", C)
     add("router bgp <num>", lambda a: _bgp(con, a[0]), "Border Gateway Protocol (BGP)", C + MODES)
     add("no router bgp <num>", lambda a: _no_bgp(con, a[0]), "Negate a command or set its defaults", C)
-    add("router eigrp <line>", lambda a: NO_EIGRP, "Enhanced Interior Gateway Routing Protocol (EIGRP)", C + MODES)
+    from . import ioseigrp, ioshsrp  # EIGRP (FRRouting's eigrpd) and HSRP (winlab's own speaker)
+    add("router eigrp <line>", lambda a: ioseigrp.router_eigrp(con, a[0]), "Enhanced Interior Gateway Routing Protocol (EIGRP)", C + MODES)
     # inside router ospf / router bgp
     add("router-id <ip>", lambda a: _rid(con, a[0]), "router-id for this OSPF process", RM)
     add("no router-id", lambda a: _rid(con, ""), "Negate a command or set its defaults", RM)
@@ -785,8 +873,6 @@ def add_specs(con, add, U, E, C, IF) -> None:
     add("vrrp <num> <line>", lambda a: _vrrp(con, a[0], a[1], True), "VRRP Interface configuration commands", IF)
     add("no vrrp <num>", lambda a: _vrrp(con, a[0], "", False), "Negate a command or set its defaults", IF)
     add("no vrrp <num> <line>", lambda a: _vrrp(con, a[0], a[1], False), "Negate a command or set its defaults", IF)
-    add("standby <line>", lambda a: NO_HSRP, "HSRP interface configuration commands", IF)
-    add("no standby <line>", lambda a: NO_HSRP, "Negate a command or set its defaults", IF)
     # VRFs
     add("vrf definition <name>", lambda a: _vrf(con, a[0], "definition"), "VRF definition", C + VM + VAF)
     add("ip vrf <name>", lambda a: _vrf(con, a[0], "ip"), "Configure an IP VPN Routing/Forwarding instance", C + VM + VAF)
@@ -812,6 +898,12 @@ def add_specs(con, add, U, E, C, IF) -> None:
     add("show ip ospf interface brief", lambda a: show_ospf_brief(con), "Brief summary of OSPF interface information", U)
     add("show ip ospf interface <line>", lambda a: _frr_show(con, "show ip ospf interface", a[0]), "Interface information", U)
     add("show ip ospf database", lambda a: _frr_show(con, "show ip ospf database"), "Database summary", U)
+    for kind, hlp in (("router", "Router link states"), ("network", "Network link states"),
+                      ("summary", "Network summary link states"), ("asbr-summary", "ASBR summary link states"),
+                      ("external", "External link states"), ("nssa-external", "NSSA external link states")):
+        add(f"show ip ospf database {kind}", lambda a, k=kind: _frr_show(con, f"show ip ospf database {k}"), hlp, U)
+    add("show ip ospf border-routers", lambda a: _frr_show(con, "show ip ospf border-routers"), "Border and boundary router information", U)
+    add("show ip ospf virtual-links", lambda a: _frr_show(con, "show ip ospf interface"), "Virtual link information", U)
     add("show ip bgp", lambda a: _frr_show(con, "show ip bgp"), "BGP information", U)
     add("show ip bgp summary", lambda a: _frr_show(con, "show ip bgp summary"), "Summary of BGP neighbor status", U)
     add("show ip bgp neighbors", lambda a: _frr_show(con, "show ip bgp neighbors"), "Detailed information on TCP and BGP neighbor connections", U)
@@ -820,12 +912,31 @@ def add_specs(con, add, U, E, C, IF) -> None:
     add("show vrf", lambda a: show_vrf(con), "VPN Routing/Forwarding instance information", U)
     add("show vrrp", lambda a: _frr_show(con, "show vrrp"), "VRRP information", U)
     add("show vrrp brief", lambda a: show_vrrp_brief(con), "Brief output", U)
-    add("show standby", lambda a: NO_HSRP, "Hot standby protocol information", U)
     add("clear ip ospf process", lambda a: _clear(con, "clear ip ospf process"), "Reset OSPF process", E)
     add("clear ip bgp *", lambda a: _clear(con, "clear bgp *"), "Clear all peers", E)
     add("clear ip bgp <ip>", lambda a: _clear(con, f"clear bgp {_ip(a[0])}"), "BGP neighbor address to clear", E)
+    add("clear ip bgp * soft", lambda a: _clear(con, "clear bgp * soft"), "Soft reconfiguration", E)
+    for d in ("in", "out"):
+        add(f"clear ip bgp * soft {d}", lambda a, d=d: _clear(con, f"clear bgp * soft {d}"), "Soft reconfiguration " + ("inbound" if d == "in" else "outbound") + " update", E)
+        add(f"clear ip bgp <ip> soft {d}", lambda a, d=d: _clear(con, f"clear bgp {_ip(a[0])} soft {d}"), "Soft reconfiguration " + ("inbound" if d == "in" else "outbound") + " update", E)
+    add("clear ip bgp <ip> soft", lambda a: _clear(con, f"clear bgp {_ip(a[0])} soft"), "Soft reconfiguration", E)
     add("ping vrf <name> <ip>", lambda a: _vping(con, a[0], a[1]), "VPN Routing/Forwarding instance name", U)
     add("traceroute vrf <name> <ip>", lambda a: _vtrace(con, a[0], a[1]), "VPN Routing/Forwarding instance name", U)
+    ioseigrp.add_specs(con, add, U, E, C, IF, RM)
+    ioshsrp.add_specs(con, add, U, IF)
+    from . import iosospfauth  # OSPF authentication and key chains
+    iosospfauth.add_specs(con, add, U, C, IF, RM)
+    from . import iosglbp  # GLBP (winlab's own speaker)
+    iosglbp.add_specs(con, add, U, IF)
+    from . import iosisis, iospim  # IS-IS (FRRouting's isisd) and PIM sparse mode (pimd)
+    iosisis.add_specs(con, add, U, C, IF, RM)
+    iospim.add_specs(con, add, U, C, IF)
+    from . import iosbfd, iosbgpx, iosmpls, iosospfx, iosrpolicy  # the CCNP routing commands
+    iosrpolicy.add_specs(con, add, U, C)
+    iosbgpx.add_specs(con, add, U, RM, RAF)
+    iosospfx.add_specs(con, add, RM)
+    iosbfd.add_specs(con, add, U, IF, RM)
+    iosmpls.add_specs(con, add, U, C, IF, RM, VM, VAF)
 
 
 def _own_c(con) -> dict:
@@ -847,7 +958,8 @@ def _ip(text: str) -> str:
 def _exit(con) -> str:
     m = con.s.mode
     if m == "config-router-af":
-        con.s.mode = "config-router"
+        from .iosbgpx import base_ctx
+        con.s.mode, con.s.ctx = "config-router", base_ctx(con.s.ctx)
     elif m == "config-vrf-af":
         con.s.mode = "config-vrf"
     else:
@@ -871,7 +983,9 @@ def _af(con) -> str:
 
 
 def _exit_af(con) -> str:
+    from .iosbgpx import base_ctx
     con.s.mode = "config-router" if con.s.mode == "config-router-af" else "config-vrf"
+    con.s.ctx = base_ctx(con.s.ctx)
     return ""
 
 
@@ -911,6 +1025,12 @@ def _no_ospf(con, pid_text: str) -> str:
         del own[k]
     for k in [k for k in own if k.startswith("ospf-area:") and own[k].split()[0] == str(pid)]:
         del own[k]
+    from . import iosospfauth
+    iosospfauth.forget_pid(own, pid)
+    from . import iosbfd, iosmpls, iosospfx
+    iosospfx.forget_pid(own, pid)
+    iosbfd.forget_pid(own, pid)
+    iosmpls.forget_pid(own, pid)
     return _done(con)
 
 
@@ -921,6 +1041,8 @@ def _cur(con) -> tuple[str, str]:
 
 def _rid(con, ip: str) -> str:
     kind, ident = _cur(con)
+    if kind in ("eigrp", "isis"):   # IOS: eigrp router-id; IS-IS's ID is in its NET
+        raise _err("% Invalid input detected at '^' marker.")
     own = _own_c(con)
     key = f"ospf-rid:{ident}" if kind == "ospf" else "bgp-rid"
     if ip:
@@ -959,8 +1081,13 @@ def _ospf_net(con, a, on: bool) -> str:
 
 
 def _passive(con, text: str, on: bool) -> str:
-    from . import devcli
+    from . import devcli, ioseigrp
     kind, pid = _cur(con)
+    if kind == "eigrp":
+        return ioseigrp.passive_cmd(con, text, on)
+    if kind == "isis":
+        from . import iosisis
+        return iosisis.passive_cmd(con, text, on)
     if kind != "ospf":
         raise _err("% Invalid input detected at '^' marker.")
     own = _own_c(con)
@@ -1007,18 +1134,32 @@ def _dio(con, rest: str, on: bool) -> str:
 
 
 def _redistribute(con, rest: str, on: bool) -> str:
+    from . import ioseigrp
     kind, ident = _cur(con)
+    if kind == "eigrp":
+        return ioseigrp.redistribute_cmd(con, rest, on)
+    if kind == "isis":
+        from . import iosisis
+        return iosisis.NO_REDIST
+    from . import iosbgpx
+    af = iosbgpx.sub_af(con)
+    if af.startswith("vrf:"):
+        return iosbgpx.vrf_redist(con, rest, on)
+    if af:
+        raise _err("% Invalid input detected at '^' marker.")
     own = _own_c(con)
     w = rest.split()
-    if not w or w[0] not in ("connected", "static", "ospf", "bgp"):
-        if w and w[0] in ("eigrp", "rip", "isis"):
+    if not w or w[0] not in ("connected", "static", "ospf", "bgp", "eigrp"):
+        if w and w[0] in ("rip", "isis"):
             raise _err(f"% {w[0].upper()} is not running on this router")
         raise _err("% Invalid input detected at '^' marker.")
     src = w[0]
     opts = w[1:]
-    if src in ("ospf", "bgp"):
+    if src in ("ospf", "bgp", "eigrp"):
         if not opts or not opts[0].isdigit():
             raise _err("% Incomplete command.")
+        if src == "eigrp" and opts[0] != ioseigrp.asn(own):
+            raise _err(f"% EIGRP is not running with AS {opts[0]}")
         if src == "ospf" and int(opts[0]) not in ospf_pids(own):
             raise _err(f"% OSPF process {opts[0]} is not running")
         if src == "bgp" and opts[0] != bgp_as(own):
@@ -1035,6 +1176,12 @@ def _redistribute(con, rest: str, on: bool) -> str:
         elif t in ("metric", "metric-type") and i + 1 < len(opts) and opts[i + 1].isdigit():
             keep += opts[i:i + 2]
             i += 2
+        elif t == "route-map" and i + 1 < len(opts) and re.match(r"^[A-Za-z0-9_.-]{1,63}$", opts[i + 1]):
+            keep += opts[i:i + 2]
+            i += 2
+        elif t == "tag" and kind == "ospf":
+            raise _err("% This router's OSPF (FRRouting's ospfd) tags redistributed routes with a route-map: "
+                       "route-map <name> permit 10, set tag <n>, then redistribute ... route-map <name>")
         else:
             raise _err("% Invalid input detected at '^' marker.")
     key = (f"ospf-redist:{ident}:" if kind == "ospf" else "bgp-redist:") + src
@@ -1053,6 +1200,9 @@ def _redistribute(con, rest: str, on: bool) -> str:
 
 def _flag(con, what: str, on: bool) -> str:
     kind, ident = _cur(con)
+    if kind == "isis":
+        from . import iosisis
+        return iosisis.log_cmd(con, on)
     own = _own_c(con)
     key = f"ospf-{what}:{ident}" if kind == "ospf" else f"bgp-{what}"
     if on:
@@ -1090,7 +1240,16 @@ def _no_bgp(con, asn: str) -> str:
 
 def _bgp_net(con, addr: str, mask: str, on: bool) -> str:
     kind, _ = _cur(con)
+    if kind == "eigrp" and not mask:   # network <classful network> under router eigrp
+        from . import ioseigrp
+        return ioseigrp.net_cmd(con, addr, "", on)
     if kind != "bgp":
+        raise _err("% Invalid input detected at '^' marker.")
+    from . import iosbgpx
+    af = iosbgpx.sub_af(con)
+    if af.startswith("vrf:"):
+        return iosbgpx.vrf_net(con, addr, mask, on)
+    if af:
         raise _err("% Invalid input detected at '^' marker.")
     try:
         net = ipaddress.IPv4Network(f"{addr}/{mask}") if mask else _classful(addr)
@@ -1108,6 +1267,9 @@ def _nbr_as(con, ip: str, asn: str) -> str:
     kind, _ = _cur(con)
     if kind != "bgp":
         raise _err("% Invalid input detected at '^' marker.")
+    from . import iosbgpx
+    if iosbgpx.sub_af(con).startswith("vrf:"):
+        raise _err(iosbgpx.NO_PECE)
     ip = _ip(ip)
     if not asn.isdigit() or not 1 <= int(asn) <= 4294967295:
         raise _err("% Invalid input detected at '^' marker.")
@@ -1120,6 +1282,12 @@ def _nbr_opt(con, ip: str, what: str, value: str) -> str:
     kind, _ = _cur(con)
     if kind != "bgp":
         raise _err("% Invalid input detected at '^' marker.")
+    from . import iosbgpx
+    af = iosbgpx.sub_af(con)
+    if af == "vpnv4" and what == "noact":
+        return iosbgpx.vpn_activate(con, ip, not value)
+    if af:
+        raise _err(iosbgpx.NO_PECE if af.startswith("vrf:") else "% Invalid input detected at '^' marker.")
     ip = _ip(ip)
     own = _own_c(con)
     if f"bgp-nbr:{ip}" not in own:
@@ -1220,25 +1388,44 @@ def _vrrp(con, grp_text: str, rest: str, on: bool) -> str:
     w = rest.split()
     key = f"{ifname}:{grp}"
     if not on and not w:
-        for k in [k for k in own if k.startswith("vrrp") and k.endswith(f":{key}")]:
+        for k in [k for k in own if k.startswith("vrrp") and (k.endswith(f":{key}") or k.startswith(f"vrrp-track:{key}:"))]:
             del own[k]
         return _done(con)
     if not w:
         raise _err("% Incomplete command.")
     word = w[0].lower()
     opts = {"ip": "ip", "priority": "prio", "preempt": "nopre", "timers": "adv", "description": "desc",
-            "shutdown": "shutdown"}
+            "shutdown": "shutdown", "track": "track"}
     hit = [k for k in opts if k.startswith(word)]
     if len(hit) != 1:
         raise _err("% Invalid input detected at '^' marker.")
     what = hit[0]
     if what == "shutdown":
         raise _err("% vrrp <group> shutdown is not in this router: no vrrp <group> takes the group away")
+    if what == "track":   # vrrp <g> track <object> [decrement <n>] (winlab/iossla.py lowers vrrpd's priority)
+        if len(w) < 2 or not w[1].isdigit() or not 1 <= int(w[1]) <= 1000:
+            raise _err("% Invalid input detected at '^' marker.")
+        tkey = f"vrrp-track:{key}:{int(w[1])}"
+        if not on:
+            own.pop(tkey, None)
+            return _done(con)
+        if f"vrrp:{key}" not in own:
+            raise _err(f"% VRRP group {grp} has no virtual address yet: vrrp {grp} ip <address> first")
+        dec = 10
+        if len(w) > 2:
+            if len(w) != 4 or not "decrement".startswith(w[2].lower()) or not w[3].isdigit() or not 1 <= int(w[3]) <= 254:
+                raise _err("% Invalid input detected at '^' marker.")
+            dec = int(w[3])
+        own[tkey] = str(dec)
+        note = _done(con)
+        if f"track:{int(w[1])}" not in own:
+            note = "\n".join(x for x in (f"% Track object {int(w[1])} does not exist yet: it counts as Down", note) if x)
+        return note
     if what != "ip" and on and f"vrrp:{key}" not in own and what != "description":
         raise _err(f"% VRRP group {grp} has no virtual address yet: vrrp {grp} ip <address> first")
     if what == "ip":
         if not on:
-            for k in [k for k in own if k.startswith("vrrp") and k.endswith(f":{key}")]:
+            for k in [k for k in own if k.startswith("vrrp") and (k.endswith(f":{key}") or k.startswith(f"vrrp-track:{key}:"))]:
                 del own[k]
             return _done(con)
         if len(w) < 2:
@@ -1327,6 +1514,8 @@ def _no_vrf(con, name: str) -> str:
         del own[k]
     for k in [k for k in own if k.startswith(f"vroute:{name} ")]:
         del own[k]
+    from . import iosmpls
+    iosmpls.forget_vrf(own, name)
     for pid in ospf_pids(own):
         if own.get(f"ospf:{pid}") == name:
             for k in [k for k in own if k == f"ospf:{pid}" or k.startswith((f"ospf-net:{pid}:", f"ospf-pas:{pid}:"))]:
@@ -1418,6 +1607,8 @@ def _map_ifaces(con, text: str) -> str:
     """FRRouting names the router's Linux devices; the console names its
     interfaces."""
     svis = svi_map(con.lab, con.plan)
+    from . import iosmpls
+    svis.update(iosmpls.loopback_map(_own(con.lab)))
     for ifname, dev in sorted(svis.items(), key=lambda kv: -len(kv[1])):
         text = re.sub(rf"(?<![\w.]){re.escape(dev)}(?![\w.])", ifname, text)
         for _, grp, _ in vrrp_groups(_own(con.lab), ifname):
@@ -1443,6 +1634,9 @@ def _frr_show(con, cmd: str, arg: str = "") -> str:
     text = _vtysh(con, cmd)
     if text.strip().startswith("%"):
         return _frr_note(text)
+    if "bgp" in cmd:
+        from .iosbgpx import ios_text
+        text = ios_text(text)
     return _map_ifaces(con, text.rstrip())
 
 
@@ -1614,11 +1808,12 @@ CODES = ["Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - 
          "       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area",
          "       N1 - OSPF NSSA external type 1, N2 - OSPF NSSA external type 2",
          "       E1 - OSPF external type 1, E2 - OSPF external type 2",
+         "       i - IS-IS, su - IS-IS summary, L1 - IS-IS level-1, L2 - IS-IS level-2",
          "       * - candidate default, U - per-user static route, o - ODR"]
 
 
 def parse_routes(text: str) -> list[dict]:
-    """zebra's show ip route json: the selected OSPF and BGP routes."""
+    """zebra's show ip route json: the selected OSPF, EIGRP, IS-IS and BGP routes."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -1626,7 +1821,7 @@ def parse_routes(text: str) -> list[dict]:
     out = []
     for prefix, entries in (data.items() if isinstance(data, dict) else []):
         for e in entries if isinstance(entries, list) else []:
-            if e.get("protocol") not in ("ospf", "bgp") or not e.get("selected"):
+            if e.get("protocol") not in ("ospf", "bgp", "eigrp", "isis") or not e.get("selected"):
                 continue
             hops = [(h.get("ip", ""), h.get("interfaceName", "")) for h in e.get("nexthops", [])
                     if h.get("active", True)]
@@ -1648,47 +1843,76 @@ def show_route(con, vrf: str, only: str = "") -> str:
     for name, net, up in con.router_ifaces():
         if net is not None and net.routed and vrf_of(own, name) == vrf and con._router_status(name, up)[0] == "up":
             conn.append((net.net, name, net.router_ip))
+    if not vrf:
+        from . import iosmpls  # interface Loopback<n>
+        conn += iosmpls.connected(own)
     stat = []
-    statics = ([(d, t, dist) for d, t, dist in iosl3.routes(own)] if not vrf else
+    from . import iossla  # ip route ... track <n>: out of the table while the object is Down
+    hidden = iossla.hidden_routes(con) if not vrf else set()
+    statics = ([(d, t, dist) for d, t, dist in iosl3.routes(own) if f"{d} {t}" not in hidden] if not vrf else
                [(d, t, dist) for v, d, t, dist in vroutes(own) if v == vrf])
     for dest, target, dist in statics:
         if _IP.match(target):
             if any(ipaddress.IPv4Address(target) in n for n, _, _ in conn):
-                stat.append((dest, f"[{dist}/0] via {target}"))
+                stat.append((dest, dist, f"[{dist}/0] via {target}"))
         elif any(nm == target for _, nm, _ in conn):
-            stat.append((dest, f"is directly connected, {target}"))
+            stat.append((dest, dist, f"is directly connected, {target}"))
+    stat = iosl3.best(stat)
     dyn = []
     if wants_frr(own) and con.powered():
         text = _vtysh(con, f"show ip route vrf {vrf} json" if vrf else "show ip route json")
         if not text.strip().startswith("%"):
             dyn = parse_routes(text)
+    # A static route and a learnt one to the same place: the lower
+    # administrative distance is in the table (a floating static behind OSPF).
+    learnt: dict = {}
+    for r in dyn:
+        try:
+            learnt[ipaddress.IPv4Network(r["prefix"])] = min(learnt.get(ipaddress.IPv4Network(r["prefix"]), 256),
+                                                             int(r["distance"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    sdist = {d: dist for d, dist, _ in stat}
+    stat = [(d, how) for d, dist, how in stat if dist <= learnt.get(d, 256)]
     rev = {dev: name for name, dev in svi_map(lab, con.plan).items()}
     rows = []
     if only in ("", "connected"):
         for n, name, ip in conn:
             rows.append((n, f"C        {n} is directly connected, {name}"))
-            rows.append((ipaddress.IPv4Network(f"{ip}/32"), f"L        {ip}/32 is directly connected, {name}"))
+            if n.prefixlen < 32:
+                rows.append((ipaddress.IPv4Network(f"{ip}/32"), f"L        {ip}/32 is directly connected, {name}"))
     if only in ("", "static"):
         for d, how in stat:
             rows.append((d, f"S{'*' if d.prefixlen == 0 else ' '}       {d} {how}"))
     default = next((v.split("via ")[-1] for d, v in stat if d.prefixlen == 0 and "via" in v), "")
+    lvl: dict[str, str] = {}
+    okind: dict[str, str] = {}
+    if any(r["proto"] == "ospf" for r in dyn) and only in ("", "ospf") and not vrf:
+        from . import iosospfx  # O IA, O E1/E2, O N1/N2 from ospfd's own table
+        okind = iosospfx.route_kinds(con)
+    if any(r["proto"] == "isis" for r in dyn) and only in ("", "isis"):
+        from . import iosisis  # i L1 / i L2: the level isisd learnt the prefix at
+        lvl = iosisis.levels(con)
     for r in dyn:
         try:
             d = ipaddress.IPv4Network(r["prefix"])
         except ValueError:
             continue
-        code = "O" if r["proto"] == "ospf" else "B"
+        code = {"ospf": "O", "eigrp": "D", "isis": "i"}.get(r["proto"], "B")
         if only and only != r["proto"]:
             continue
-        if any(d == s for s, _ in stat) and r["distance"] > 1:
+        if d in sdist and r["distance"] > sdist[d]:
             continue
         star = "*" if d.prefixlen == 0 else " "
         hops = r["hops"] or [("", "")]
         first = True
         for ip, dev in hops:
             where = f"via {ip}" if ip else "is directly connected"
-            tail = f", {r['uptime']}" + (f", {rev.get(dev, dev)}" if code == "O" and dev else "")
-            lead = f"{code}{star}{'':<7}{d} " if first else f"{'':<10}{'':<{len(str(d))}}"
+            tail = f", {r['uptime']}" + (f", {rev.get(dev, dev)}" if code in ("O", "D", "i") and dev else "")
+            kind = f"{code}{star}" + (lvl.get(r["prefix"], "L2") if code == "i" else "")
+            if code == "O" and okind.get(r["prefix"]):
+                kind = f"O{star}{okind[r['prefix']]}"
+            lead = f"{kind:<9}{d} " if first else f"{'':<10}{'':<{len(str(d))}}"
             rows.append((d, f"{lead}[{r['distance']}/{r['metric']}] {where}{tail}"))
             first = False
         if d.prefixlen == 0 and not default and hops[0][0]:
@@ -1721,7 +1945,10 @@ def show_protocols(con) -> str:
         if redist:
             out.append(" Redistributing External Routes from,")
             out += [f"    {r}" for r in redist]
-        out += [f"  Number of areas in this router is {len(areas)}. {len(areas)} normal 0 stub 0 nssa",
+        from . import iosospfx
+        areas = sorted(set(areas) | set(iosospfx.all_areas(own, pid)), key=lambda a: int(iosospfx._area_key(a)))
+        normal, stub, nssa = iosospfx.area_counts(own, pid, areas)
+        out += [f"  Number of areas in this router is {normal + stub + nssa}. {normal} normal {stub} stub {nssa} nssa",
                 "  Maximum path: 4", "  Routing for Networks:"]
         out += [f"    {a} {w} area {ar}" for a, w, ar in ospf_nets(own, pid)]
         ifs = [k.split(":", 1)[1] for k, v in sorted(own.items()) if k.startswith("ospf-area:") and v.split()[0] == str(pid)]
@@ -1738,6 +1965,9 @@ def show_protocols(con) -> str:
             out += [f"    {p}" for p in pas]
         out += ["  Routing Information Sources:", "    Gateway         Distance      Last Update",
                 "  Distance: (default is 110)", ""]
+    from . import ioseigrp, iosisis
+    out += ioseigrp.protocols(con)
+    out += iosisis.protocols(con)
     asn = bgp_as(own)
     if asn:
         out += [f"Routing Protocol is \"bgp {asn}\"",
@@ -1758,8 +1988,6 @@ def show_protocols(con) -> str:
 def other_protocol(text: str) -> str:
     """router <anything else>: what the console says about it."""
     w = text.split()
-    word = w[0].lower() if w else ""
-    if word and "eigrp".startswith(word):
-        return NO_EIGRP
-    return ("% This router runs OSPF (router ospf <process>) and BGP (router bgp <as>); "
+    return ("% This router runs OSPF (router ospf <process>), EIGRP (router eigrp <as>), IS-IS (router isis [<tag>]) "
+            "and BGP (router bgp <as>); "
             f"{(w[0].upper() + ' is') if w else 'that is'} not in it")

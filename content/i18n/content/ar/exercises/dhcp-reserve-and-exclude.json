@@ -1,0 +1,13 @@
+{
+ "A reservation for pc01 and a block kept back for printers": "حجز لـ pc01 وكتلة عناوين محجوزة للطابعات",
+ "pc01 runs a licence dongle server that other machines find by address, so it\nmust always get 10.10.10.60, still from DHCP so its gateway and DNS options\nstay managed in one place. The top of the scope is promised to network\nprinters that will be set by hand.": "يشغّل pc01 خادم مفاتيح ترخيص (dongle) تعثر عليه الأجهزة الأخرى عبر عنوانه، لذا يجب أن يحصل دائماً على 10.10.10.60، ولكن من DHCP حتى تبقى خيارات البوابة وDNS الخاصة به مُدارة في مكان واحد. الجزء العلوي من النطاق موعود لطابعات شبكة ستُضبط يدوياً.",
+ "Reserve 10.10.10.60 for pc01 (its MAC address is the client id)": "احجز 10.10.10.60 لـ pc01 (عنوان MAC الخاص به هو معرّف العميل)",
+ "Exclude 10.10.10.140 to 10.10.10.150 from the 10.10.10.0 scope": "استثنِ من 10.10.10.140 إلى 10.10.10.150 من النطاق 10.10.10.0",
+ "Renew on pc01 (ipconfig /renew) so it moves to its reserved address": "جدّد على pc01 (ipconfig /renew) لينتقل إلى عنوانه المحجوز",
+ "a reservation of 10.10.10.60 exists": "يوجد حجز للعنوان 10.10.10.60",
+ "Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <pc01 MAC, from Get-DhcpServerv4Lease> -Name pc01": "Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <عنوان MAC لـ pc01، من Get-DhcpServerv4Lease> -Name pc01",
+ "printers' range is excluded": "نطاق الطابعات مستثنى",
+ "Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (an exclusion must fall inside the scope's range)": "Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (يجب أن يقع الاستثناء داخل نطاق العناوين)",
+ "pc01 now holds 10.10.10.60": "يحمل pc01 الآن 10.10.10.60",
+ "The reservation applies at the next lease: ipconfig /release, then ipconfig /renew on pc01. A wrong MAC (dashes, not colons) is the usual reason it does not.": "يُطبَّق الحجز عند التأجير التالي: ipconfig /release، ثم ipconfig /renew على pc01. عنوان MAC الخاطئ (شرطات بدلاً من النقطتين) هو السبب المعتاد لعدم نجاحه."
+}

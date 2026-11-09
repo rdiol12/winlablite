@@ -1,0 +1,19 @@
+{
+ "A 20 Mbit/s line to the users, shared out by class": "קו של 20 Mbit/s אל המשתמשים, שמחולק לפי מחלקות",
+ "The users' LAN behind the router is to behave like a 20 Mbit/s branch line,\nand on it voice must go first and file copies must get a fair share, marked\nso the rest of the network knows them. Build it with the router's Modular\nQoS CLI: class-maps, a child policy that shares the line, a parent that\nshapes it, attached on the way out to the users. Then copy a large file from\nfs01 to pc01 through it. The checks read the router's own queues and its\nclassification counters.": "רשת ה-LAN של המשתמשים מאחורי הנתב צריכה להתנהג כמו קו סניף של 20 Mbit/s, ובו קול צריך לעבור ראשון והעתקות קבצים צריכות לקבל חלק הוגן, מסומנות כדי ששאר הרשת תזהה אותן. בנה זאת עם Modular QoS CLI של הנתב: class-maps, מדיניות צאצא שמחלקת את הקו, מדיניות הורה שמעצבת אותו, מוצמדת ביציאה אל המשתמשים. אחר כך העתק דרכו קובץ גדול מ-fs01 אל pc01. הבדיקות קוראות את התורים של הנתב עצמו ואת מוני הסיווג שלו.",
+ "The user LAN on its own router port, with pc01 on it (as in lesson router-zone-firewall)": "רשת ה-LAN של המשתמשים בפורט נתב משלה, ו-pc01 עליה (כמו בשיעור router-zone-firewall)",
+ "class-map VOICE (match dscp ef) and FILES (an access list for SMB, tcp port 445)": "class-map VOICE (match dscp ef) ו-FILES (רשימת גישה עבור SMB, tcp פורט 445)",
+ "A child policy-map: priority for VOICE, bandwidth and set dscp af11 for FILES, fair-queue in class-default": "policy-map צאצא: priority עבור VOICE, bandwidth ו-set dscp af11 עבור FILES, fair-queue ב-class-default",
+ "A parent policy-map whose class-default shapes to 20000000 bit/s with the child under it, as service-policy output on the users' port": "policy-map הורה שה-class-default שלו מעצב ל-20000000 bit/s עם הצאצא מתחתיו, כ-service-policy output בפורט של המשתמשים",
+ "Copy a file of 100 MB or more from a share on fs01 to pc01": "העתק קובץ של 100 MB או יותר משיתוף ב-fs01 אל pc01",
+ "an output policy queues on a router interface": "מדיניות יציאה מתזמנת תורים בממשק של הנתב",
+ "interface g0/0/1 (the users' port), service-policy output with a policy that has priority, bandwidth or shape in it.": "interface g0/0/1 (הפורט של המשתמשים), service-policy output עם מדיניות שיש בה priority, bandwidth או shape.",
+ "the line is shaped, with a child policy sharing it": "הקו מעוצב, עם מדיניות צאצא שמחלקת אותו",
+ "policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT.": "policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT.",
+ "a class has a priority or a bandwidth guarantee": "למחלקה יש עדיפות או רוחב פס מובטח",
+ "In the child policy-map: class VOICE, priority 1000; class FILES, bandwidth 5000.": "ב-policy-map הצאצא: class VOICE, priority 1000; class FILES, bandwidth 5000.",
+ "file traffic was classified and marked": "תעבורת הקבצים סווגה וסומנה",
+ "class FILES needs set dscp af11 and a class-map that matches SMB from fs01 (permit tcp any eq 445 any: the server's packets come from port 445). show policy-map interface counts what it marked.": "class FILES צריכה set dscp af11 ו-class-map שתואם SMB מ-fs01 (permit tcp any eq 445 any: החבילות של השרת מגיעות מפורט 445). show policy-map interface סופר את מה שהיא סימנה.",
+ "a large copy went through the shaped line": "העתקה גדולה עברה דרך הקו המעוצב",
+ "Copy a file of 100 MB or more from \\\\fs01 to pc01 (fsutil file createnew makes one) after the service-policy is on.": "העתק קובץ של 100 MB או יותר מ-\\\\fs01 אל pc01 (fsutil file createnew יוצר כזה) אחרי שה-service-policy מופעלת."
+}

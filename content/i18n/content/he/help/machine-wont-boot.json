@@ -1,0 +1,16 @@
+{
+ "A machine will not boot": "מכונה לא עולה",
+ "Common problems": "בעיות נפוצות",
+ "boot": "אתחול",
+ "won't start": "לא מתחיל",
+ "black screen": "מסך שחור",
+ "no bootable device": "no bootable device",
+ "crash": "קריסה",
+ "qemu": "qemu",
+ "log": "יומן",
+ "stuck": "תקוע",
+ "firmware": "קושחה",
+ "boot order": "סדר אתחול",
+ "Where to look when a machine stops at a black screen or does not start at all.": "איפה לחפש כשמכונה נעצרת במסך שחור או לא מתחילה בכלל.",
+ "**It does not start at all.** The message in the taskbar's job list or in Machines says why. Each machine writes a log at var\\labs\\<lab>\\<machine>\\qemu.log in the winlab folder; the last lines name the problem.\n\n**It stops at \"no bootable device\" or a firmware screen.** Look at **Boots from** in the machine's panel. A machine set to boot from its DVD drive with no disc in it, or one installed by hand that has not finished installing, has nothing to boot from.\n\n**Windows shows a recovery screen.** Treat it as a real PC: Startup Repair, or go back to a checkpoint from the Action menu.\n\n**It froze.** Use the power button in Machines to turn it off and on, as you would hold the power button on a real PC.\n\nIf none of this helps, make a support file (see Contact support) and send it to us. It holds the machine's logs.": "**היא לא מתחילה בכלל.** ההודעה ברשימת המשימות של שורת המשימות או במכונות אומרת למה. כל מכונה כותבת יומן ב-var\\labs\\<lab>\\<machine>\\qemu.log בתיקיית winlab; השורות האחרונות מציינות את הבעיה.\n\n**היא נעצרת ב-\"no bootable device\" או במסך קושחה.** הסתכל על **מאתחלת מ-** בלוח של המכונה. מכונה שמוגדרת לעלות מכונן ה-DVD שלה בלי דיסק בתוכו, או כזו שהותקנה ידנית ולא סיימה את ההתקנה, אין לה ממה לעלות.\n\n**Windows מציג מסך שחזור.** התייחס אליו כמו למחשב אמיתי: Startup Repair, או חזור לנקודת ביקורת מהתפריט פעולה.\n\n**היא קפאה.** השתמש בלחצן ההפעלה במכונות כדי לכבות ולהדליק אותה, כפי שהיית מחזיק את לחצן ההפעלה במחשב אמיתי.\n\nאם שום דבר מזה לא עוזר, צור קובץ תמיכה (ראה יצירת קשר עם התמיכה) ושלח אותו אלינו. הוא מכיל את היומנים של המכונה."
+}

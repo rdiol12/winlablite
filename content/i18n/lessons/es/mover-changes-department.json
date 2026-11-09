@@ -1,0 +1,67 @@
+{
+ "title": "Un cambio de puesto: alguien cambia de departamento",
+ "summary": "Mueve a una persona de Sales a Finance: la misma cuenta, atributos nuevos, grupos intercambiados, ningún acceso sobrante y la carpeta personal en el recurso compartido de Finance.",
+ "why": "Las altas y las bajas tienen un proceso; los cambios de puesto se olvidan. Alguien pasa de Sales a Finance, TI añade los grupos de Finance porque Finance lo pide a gritos, y nadie quita los grupos de Sales porque Sales no pide nada. Tres cambios después, la persona puede leer media empresa: acumulación de privilegios, y lo primero que encuentra la revisión de accesos de un auditor.\n\nUn cambio de puesto conserva la cuenta. El SID, el buzón, el historial de inicios de sesión y los archivos se quedan; lo que cambia es lo que cuelga de la cuenta. El departamento y el cargo (los leen las libretas de direcciones, los grupos dinámicos y los informes de RR. HH.), los grupos de rol intercambiados, no añadidos, los permisos que nunca estuvieron en un grupo encontrados y eliminados, y los datos que viven por departamento movidos a donde los guarda el nuevo departamento.\n\nPulsa Romper y Dan Price (dprice) queda configurado en Sales en dc01, con una carpeta personal en Home$ y, como en la mayoría de empresas reales, un permiso que alguien le dio una vez directamente sobre una carpeta de Sales. Empieza en Finance el lunes, y las carpetas personales de Finance viven en su propio recurso compartido, HomeFinance$.",
+ "concepts": [
+  "Alta, cambio de puesto, baja: los tres eventos del ciclo de vida de la identidad, cada uno con su lista de comprobación",
+  "Acumulación de privilegios: accesos que solo crecen, porque nadie pide que se los quiten",
+  "Atributos que alimentan otras cosas: Department, Title, Manager (libreta de direcciones, listas de distribución dinámicas, informes de RR. HH.)",
+  "Acceso basado en grupos (AGDLP): G-Sales dentro de DL-Sales-Share; un cambio de puesto son dos cambios de pertenencia, nunca una edición de ACL",
+  "Permisos directos: una ACE para una persona, no para un grupo, sobrevive a todo cambio de grupos; encuéntralos con Get-Acl e IsInherited",
+  "Mover una carpeta personal con sus permisos: robocopy /E /MOVE /COPYALL, y después HomeDirectory; el buzón se mueve igual en Exchange (New-MoveRequest) y se queda donde está en un único servidor de correo"
+ ],
+ "steps": [
+  "Pulsa Romper (o winlab break dc01 mover-to-finance). Lee primero la cuenta: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List.",
+  "Lista todos los grupos, incluido cómo llegó a ellos: Get-ADPrincipalGroupMembership dprice | Select-Object Name, GroupScope, GroupCategory.",
+  "Establece los atributos: Set-ADUser dprice -Department Finance -Title 'Finance analyst'.",
+  "Intercambia los grupos de rol: Remove-ADGroupMember G-Sales -Members dprice -Confirm:$false; Remove-ADGroupMember 'Sales Team' -Members dprice -Confirm:$false; Add-ADGroupMember G-Finance -Members dprice; Add-ADGroupMember 'Finance Team' -Members dprice.",
+  "Encuentra el acceso que no está en un grupo: Get-ChildItem C:\\Shares\\Sales -Recurse -Directory | ForEach-Object { $p = $_.FullName; (Get-Acl $p).Access | Where-Object { -not $_.IsInherited } | Select-Object @{n='Path';e={$p}}, IdentityReference, FileSystemRights }.",
+  "Elimina la concesión directa: icacls 'C:\\Shares\\Sales\\Key accounts' /remove CORP\\dprice.",
+  "Mueve la carpeta personal con sus permisos: robocopy C:\\Shares\\Home\\dprice C:\\Shares\\HomeFinance\\dprice /E /MOVE /COPYALL /R:1 /W:1. Comprueba que Get-Acl C:\\Shares\\HomeFinance\\dprice muestra dprice con Modify, y que la carpeta antigua ya no existe.",
+  "Apunta la cuenta a ella: Set-ADUser dprice -HomeDirectory \\\\dc01\\HomeFinance$\\dprice -HomeDrive H:. En su próximo inicio de sesión, H: es la carpeta nueva.",
+  "Vuelve a leer el resultado: Get-ADUser dprice -Properties Department, Title, HomeDirectory, MemberOf | Format-List, y después pulsa Comprobar mi trabajo."
+ ],
+ "pitfalls": [
+  "Añadir los grupos nuevos y dejar los antiguos es el hallazgo más común que existe en una revisión de accesos.",
+  "Eliminar la cuenta y crear una nueva para el nuevo puesto pierde el SID: los archivos, los permisos del buzón y el historial de auditoría apuntan entonces a una cuenta desconocida.",
+  "Copiar la carpeta personal sin /COPYALL (o con Copy-Item) da a los archivos la ACL heredada de la carpeta nueva: la persona puede perder el acceso, o todo el mundo puede ganarlo.",
+  "Mueve la carpeta mientras la persona no ha iniciado sesión; robocopy omite los archivos abiertos, y el registro (robocopy /LOG:) dice cuáles."
+ ],
+ "verify": [
+  "la cuenta de la persona que cambia de puesto",
+  "los permisos explícitos en las carpetas de Sales",
+  "la carpeta personal antigua y la nueva"
+ ],
+ "quiz": [
+  {
+   "q": "Alguien pasa de Sales a Finance. ¿Qué pasa con los grupos de Sales?",
+   "answer": "Se quitan en el mismo cambio que añade los grupos de Finance",
+   "wrong": [
+    "Se quedan un mes por si necesita algo",
+    "Se quedan; solo se añaden los grupos de Finance",
+    "La cuenta se vuelve a crear sin ellos"
+   ],
+   "why": "Intercambiar, no añadir, es lo que frena la acumulación de privilegios."
+  },
+  {
+   "q": "¿Por qué conservar la misma cuenta en un cambio de puesto en lugar de crear una nueva?",
+   "answer": "El SID, el buzón, los archivos y el historial apuntan a la cuenta existente",
+   "wrong": [
+    "No se pueden crear cuentas a mitad de año",
+    "Una cuenta nueva no tendría contraseña",
+    "Solo se puede renombrar la cuenta de alguien que cambia de puesto"
+   ],
+   "why": "Los permisos y los registros de auditoría hacen referencia al SID; una cuenta nueva es una desconocida para todos ellos."
+  },
+  {
+   "q": "¿Qué permiso sobrevive a todos los cambios de grupos que haces en un cambio de puesto?",
+   "answer": "Una entrada de control de acceso concedida directamente a la persona",
+   "wrong": [
+    "Un permiso de recurso compartido para Everyone",
+    "Un permiso heredado de la carpeta principal",
+    "Una denegación sobre Domain Users"
+   ],
+   "why": "Encuéntralos con Get-Acl, Access e IsInherited -eq $false: son invisibles para las revisiones de grupos."
+  }
+ ]
+}

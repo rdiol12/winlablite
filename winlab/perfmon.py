@@ -15,7 +15,7 @@ to the router.
 
 A sampler thread reads everything every few seconds while the desktop polls
 (slower while nobody looks), keeps a few minutes of history for the
-sparklines, and checks each machine's alert rules: CPU or memory high for a
+sparklines and the Performance window's charts (each sample with its time), and checks each machine's alert rules: CPU or memory high for a
 while, disk latency high, a link down, errors on a cable, a machine that
 went off without winlab stopping it. The rules a user changes, and the
 alerts with their history, are kept beside the lab's machines (alerts.json),
@@ -319,7 +319,7 @@ class Monitor:
             u["rx_bps"] += r["tx_bps"]  # out of the router's interface: down the uplink to the switch
             u["tx_bps"] += r["rx_bps"]
         nic_down = {(f["node"], f["nic"]) for f in physfaults.load(lab.name)["faults"]
-                    if f["state"] == "on" and f["kind"] == "nic"}
+                    if f["state"] == "on" and physfaults.card_side(f["kind"])}
         machines = {}
         for node in lab.node_list():
             ns = nss.get(node.id)
@@ -356,8 +356,10 @@ class Monitor:
                 if ns:  # a new QEMU on that port is asked for its reports again
                     _BALLOON.pop(ns.qmp_port, None)
             h = self._hist.setdefault(node.id, deque(maxlen=KEEP))
-            h.append((m["cpu_pct"], m["mem_pct"] or 0, m["disk"]["rd_bps"] + m["disk"]["wr_bps"],
-                      m["net"]["rx_bps"] + m["net"]["tx_bps"]) if alive else (0, 0, 0, 0))
+            # Each sample with the wall-clock time it was taken: the charts'
+            # time axis (winlab/chartview.py).
+            h.append(((m["cpu_pct"], m["mem_pct"] or 0, m["disk"]["rd_bps"] + m["disk"]["wr_bps"],
+                       m["net"]["rx_bps"] + m["net"]["tx_bps"]) if alive else (0, 0, 0, 0)) + (round(time.time(), 1),))
             machines[node.id] = m
         with self._lock:
             self.machines, self.cables, self.uplinks, self.at = machines, cables, uplinks, time.time()
@@ -501,8 +503,10 @@ class Monitor:
     def view(self, lab) -> dict:
         data = load(lab.name)
         with self._lock:
-            machines = {k: {**v, "hist": [list(x) for x in zip(*self._hist.get(k, ()))] or [[], [], [], []]}
-                        for k, v in self.machines.items()}
+            machines = {}
+            for k, v in self.machines.items():
+                cols = [list(x) for x in zip(*self._hist.get(k, ()))]
+                machines[k] = {**v, "hist": cols[:4] or [[], [], [], []], "hist_t": cols[4] if cols else []}
             out = {"ok": True, "at": self.at, "every": EVERY, "router": self.router,
                    "errors_hidden": _hidden_errors(lab.name),
                    "machines": machines, "cables": dict(self.cables), "uplinks": dict(self.uplinks)}

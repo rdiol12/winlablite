@@ -1,0 +1,66 @@
+{
+ "title": "Configuración inicial de un switch por el cable de consola",
+ "summary": "Un switch recién sacado de la caja no tiene una dirección por la que llegar a él: conecta el cable de consola azul a un PC, abre un terminal en su puerto COM a 9600 8N1, y dale al switch su nombre, su banner y las descripciones de puertos desde su propia línea de comandos.",
+ "why": "Un switch o router nuevo no tiene dirección de administración ni acceso remoto configurado, así que la red aún no puede llegar a él. Todos tienen un puerto de consola para eso: una línea serie, a la que se llega con un cable rollover (de consola) desde un portátil o un PC junto al rack. Hoy el extremo del PC es un adaptador USB-serie, que Windows muestra como puerto COM, y el programa que se usa es un emulador de terminal: PuTTY, o unas pocas líneas de PowerShell. La consola habla a 9600 baudios, 8 bits de datos, sin paridad, 1 bit de parada (9600 8N1) salvo que alguien lo haya cambiado; cualquier otra velocidad se lee como basura.\n\nLa consola es también el camino de vuelta cuando todo lo demás falla: una VLAN equivocada en el puerto de administración, una dirección olvidada, una configuración que te dejó fuera. Saber cómo llegar a ella, y cómo debe configurarse la línea, es lo primero que aprende un administrador de redes en el trabajo.",
+ "concepts": [
+  "Puerto de consola: la línea serie del dispositivo (RJ-45 o USB), siempre presente, independiente de la red",
+  "Cable rollover (de consola): el cable azul, RJ-45 en el dispositivo, DB-9 o un adaptador USB-serie en el PC",
+  "Puerto COM: cómo llama Windows a una línea serie; el adaptador añade uno (aquí COM2, COM1 está ocupado)",
+  "9600 8N1: 9600 baudios, 8 bits de datos, sin paridad, 1 bit de parada, sin control de flujo; la línea por defecto de la consola",
+  "Modos EXEC de usuario (>) y EXEC privilegiado (#), configuración global (config)#, configuración de interfaz (config-if)#",
+  "La configuración en ejecución y cómo guardarla: write memory, o copy running-config startup-config"
+ ],
+ "steps": [
+  "En el Banco de red, arrastra el Cable de consola desde la estantería hasta el switch corp y elige pc01 como el otro extremo: el adaptador USB-serie va a pc01. Si pc01 estaba en marcha, reinícialo para que Windows encuentre el puerto nuevo.",
+  "En pc01, encuentra el puerto del adaptador: Device Manager, Ports (COM & LPT), o en PowerShell Get-CimInstance Win32_SerialPort | Select-Object DeviceID, Description y [System.IO.Ports.SerialPort]::GetPortNames(). COM1 pertenece a winlab; COM2 es el adaptador.",
+  "Abre un terminal en COM2 a 9600 8N1 sin control de flujo. Con PuTTY desde tu propia memoria USB: Connection type Serial, Serial line COM2, Speed 9600. Sin él, Conectar desde… pc01 del Banco de red sobre el puerto de consola del switch abre un terminal serie en pc01; configura allí la misma línea.",
+  "O con lo que trae Windows: mode COM2 BAUD=9600 PARITY=n DATA=8 STOP=1 configura la línea, luego $p = New-Object System.IO.Ports.SerialPort COM2,9600,None,8,One; $p.Open(); $p.Write(\"`r\"); Start-Sleep 1; $p.ReadExisting() envía Enter y lee la respuesta del switch. $p.Close() libera el puerto para PuTTY.",
+  "Pulsa Enter en 'Press RETURN to get started'. En corp> escribe enable, luego show version y show interfaces status: el puerto de pc01, Fa0/1, está connected.",
+  "Configúralo: configure terminal, hostname CORP-SW1, banner motd #Authorized access only#, interface fa0/1, description pc01, luego end (o Ctrl+Z). El prompt dice ahora CORP-SW1#.",
+  "Vuelve a leerla con show running-config y guárdala con write memory (copy running-config startup-config hace lo mismo).",
+  "Mira cómo se ve una línea mal configurada: cierra el terminal y ábrelo de nuevo a 115200. La respuesta del switch es basura; de vuelta a 9600 vuelve a ser legible.",
+  "Cierra el terminal para que COM2 quede libre, luego pulsa Comprobar mi trabajo: la comprobación abre COM2 en el propio pc01 y lee la configuración en ejecución del switch."
+ ],
+ "pitfalls": [
+  "Nada en la pantalla: pulsa Enter primero, comprueba el número de puerto COM (Device Manager) y que el cable llegue al adaptador de este PC.",
+  "Los caracteres basura significan que la velocidad o el formato de trama son incorrectos: 9600 8N1 salvo que se haya cambiado la línea del dispositivo.",
+  "Un puerto COM solo se abre en un programa a la vez: cierra PuTTY, o $p.Close() en PowerShell, antes de que otro terminal pueda usarlo.",
+  "Los cambios se aplican al momento, pero solo sobreviven a un corte de corriente una vez guardados: write memory."
+ ],
+ "verify": [
+  "los puertos serie que tiene pc01",
+  "COM2, el adaptador"
+ ],
+ "quiz": [
+  {
+   "q": "Un switch recién sacado de la caja aún no tiene dirección IP. ¿Cómo llegas a su línea de comandos?",
+   "answer": "Por su puerto de consola, con un cable de consola al puerto serie de un PC",
+   "wrong": [
+    "Por SSH a su dirección predeterminada",
+    "Escritorio remoto",
+    "Su página web por la red"
+   ],
+   "why": "La consola es una línea serie en el propio dispositivo: no necesita dirección ni red."
+  },
+  {
+   "q": "PuTTY en COM2 solo muestra caracteres basura. ¿Qué falla primero?",
+   "answer": "La velocidad o el formato de trama de la línea: debería ser 9600 8N1",
+   "wrong": [
+    "La VLAN del switch",
+    "La dirección IP del PC",
+    "El cable es un latiguillo Ethernet"
+   ],
+   "why": "Una velocidad en baudios o un formato de trama incorrectos convierten cada carácter en basura; la red no interviene en una línea serie."
+  },
+  {
+   "q": "¿Qué prompt te permite escribir configure terminal?",
+   "answer": "CORP-SW1#",
+   "wrong": [
+    "CORP-SW1>",
+    "CORP-SW1(config-if)#",
+    "C:\\>"
+   ],
+   "why": "configure terminal se ejecuta en el modo EXEC privilegiado, el prompt # al que llegas con enable."
+  }
+ ]
+}

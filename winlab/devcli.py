@@ -72,7 +72,8 @@ class Session:
 
 # ------------------------------------------------------------------ helpers
 def device_kind(device: str) -> str:
-    return ROUTER if device == ROUTER else "switch"
+    from .routers import is_router  # the lab router and the others (winlab/routers.py)
+    return ROUTER if is_router(device) else "switch"
 
 
 def switch_id(device: str) -> str:
@@ -101,7 +102,7 @@ def ios_name(lab, device: str) -> str:
 def switches(lab) -> list[str]:
     """The switches on the canvas: networks that are not a VLAN made on
     another switch's console."""
-    return sorted(nid for nid, net in lab.networks.items() if not net.switch)
+    return sorted(nid for nid, net in lab.networks.items() if not net.switch and not getattr(net, "link", False))
 
 
 def vlans_of(lab, sw: str) -> list:
@@ -218,7 +219,9 @@ def plug_router(lab, sw: str, port: str = "") -> str:
     else:
         free = [n for n in ROUTER_IFS if n not in taken]
         if not free:
-            raise CliError("% Every router port has a cable in it")
+            raise CliError(f"% Every router port has a cable in it ({len(ROUTER_IFS)} ports). Cable this "
+                           f"switch to another switch that is already on the router (a trunk), carry it "
+                           f"as a VLAN on one, or add a second router from the shelf")
         port = free[0]
     if ports.get(sw):
         unplug_router(lab, sw)
@@ -302,6 +305,22 @@ def upstream(lab, sw: str) -> str:
     """The switch this one's uplink is cabled to ("" for the router or none)."""
     net = lab.networks.get(sw)
     return net.upstream if net else ""
+
+
+def same_vlan_down_trunk(lab, a, b) -> bool:
+    """Whether two networks are one VLAN number on two switches cabled one
+    below the other: the floor switch's VLAN 1 is the hq switch's VLAN 1
+    across their trunk, the same subnet by design, never an overlap."""
+    if a.vlan_no != b.vlan_no or a.home == b.home:
+        return False
+
+    def chain(sw: str) -> list[str]:
+        seen: list[str] = []
+        while sw and sw not in seen:
+            seen.append(sw)
+            sw = upstream(lab, sw)
+        return seen
+    return b.home in chain(a.home) or a.home in chain(b.home)
 
 
 def downlinks(lab, sw: str) -> list[tuple[str, str]]:
@@ -708,8 +727,13 @@ class Console:
     are seams for the tests."""
 
     def __init__(self, dash, device: str, runner_factory=None, link=None):
+        from .routers import rid_of
         self.dash = dash
-        self.device = device
+        # Another router than the lab router (winlab/routers.py): its console
+        # is the router console on that router's view of the lab.
+        self.rid = rid_of(device)
+        self.device = ROUTER if self.rid else device
+        self._views: tuple = (None, None, None, None)
         self.s = Session(device)
         self._runner_factory = runner_factory
         self._link = link
@@ -718,11 +742,31 @@ class Console:
     # ---- state of the world
     @property
     def lab(self):
-        return self.dash.lab
+        if not self.rid:
+            return self.dash.lab
+        return self._view()[0]
 
     @property
     def plan(self):
-        return self.dash.plan
+        if not self.rid:
+            return self.dash.plan
+        return self._view()[1]
+
+    @property
+    def dev_key(self) -> str:
+        """The device's own key in the lab file's devices table."""
+        return f"router:{self.rid}" if self.rid else self.device
+
+    def _view(self):
+        """This router's view of the lab and plan, kept until the desktop
+        reads the lab again (a view keeps what refresh_routed worked out)."""
+        lab, plan = self.dash.lab, self.dash.plan
+        if self._views[0] is not lab or self._views[1] is not plan:
+            from . import routers
+            v = routers.view(lab, self.rid)
+            p = routers.plan_view(plan, self.rid, v) if plan is not None else None
+            self._views = (lab, plan, v, p)
+        return self._views[2], self._views[3]
 
     def _running(self) -> set[str]:
         from .workbench import _running
@@ -731,13 +775,28 @@ class Console:
     def powered(self) -> bool:
         if self.device != ROUTER and switch_off(self.lab, switch_id(self.device)):
             return False
+        if self.rid:
+            from .routers import powered
+            if not powered(self.dash.lab, self.rid):
+                return False
         return "fabric" in self._running()
 
     def _runner(self):
         if self._runner_factory is not None:
-            return self._runner_factory()
-        from .cli import _fabric_runner
-        return _fabric_runner(self.lab.name)
+            run, why = self._runner_factory()
+        else:
+            from .cli import _fabric_runner
+            run, why = _fabric_runner(self.lab.name)
+        if run and self.rid:
+            # Inside this router's own network stack (winlab/routers.py).
+            from .routers import wrap
+            inner, rid = run, self.rid
+
+            def run(cmd, timeout=60):
+                return inner(wrap(rid, cmd), timeout=timeout)
+            if getattr(inner, "close", None):
+                run.close = inner.close  # type: ignore[attr-defined]
+        return run, why
 
     def _on_router(self, cmd: str, timeout: float = 30) -> str:
         run, why = self._runner()
@@ -777,6 +836,10 @@ class Console:
     def prompt(self) -> str:
         if self.s.ask:
             return self.s.ask["prompt"]
+        from . import iosboot  # ROMMON and the switch's boot loader
+        mon = iosboot.prompt(self)
+        if mon is not None:
+            return mon
         if self.s.mode == "idle":
             return ""
         host = ios_name(self.lab, self.device)
@@ -801,6 +864,10 @@ class Console:
         if not self.powered():
             return ""
         self._fresh()
+        from . import iosboot  # a boot monitor, or the setup dialog after a start without configuration
+        said = iosboot.banner(self)
+        if said is not None:
+            return said
         if self.s.mode == "idle":
             self.s.mode = "user"
         from . import iosnv
@@ -857,7 +924,6 @@ class Console:
             add("show ip dhcp pool", self._show_pools, "DHCP pools information", U)
             add("ping <ip>", self._ping, "Send echo messages", U)
             add("traceroute <ip>", self._trace, "Trace route to destination", U)
-            add("show cdp neighbors", self._show_cdp, "CDP neighbor entries", U)
             add("wake <line>", self._wake_on_lan, "Send a Wake-on-LAN magic packet to a MAC address", U)
         else:
             add("show vlan brief", self._show_vlan, "VTP all VLAN status in brief", U)
@@ -867,9 +933,8 @@ class Console:
             add("show mac address-table interface <line>", lambda a: self._show_mac(a, port=a[0]), "interface keyword", U)
             add("show interfaces status", self._show_status, "Show interface line status", U)
             add("show interfaces trunk", self._show_trunk, "Show interface trunk information", U)
-            add("show interfaces", self._show_status, "Interface status and configuration", U)
+            add("show interfaces", lambda a: netauto.sw_interfaces(self), "Interface status and configuration", U)
             add("show ip interface brief", self._sw_ip_brief, "Brief summary of IP status and configuration", U)
-            add("show cdp neighbors", self._show_cdp, "CDP neighbor entries", U)
             add("ping <ip>", self._sw_ping, "Send echo messages", U)
         # configuration
         SI, V = ("config-subif",), ("config-vlan",)
@@ -941,9 +1006,15 @@ class Console:
             iosl3.add_specs(self, add, U, E, C, I + SI)
             from . import iosrouting  # OSPF, BGP, VRFs and VRRP (FRRouting on the router)
             iosrouting.add_specs(self, add, U, E, C, I + SI)
+            from . import iosv6  # ipv6 unicast-routing, addresses, RAs, static routes, OSPFv3
+            iosv6.add_specs(self, add, U, E, C, I + SI)
+            from . import acl6  # ipv6 access-list, ipv6 traffic-filter (nftables' ip6 family)
+            acl6.add_specs(self, add, U, E, C, I + SI)
 
             from . import routerpolicy  # zone firewall, Tunnel and IPsec, QoS
             routerpolicy.add_specs(self, add, U, E, C, I + SI)
+            from . import iossla  # ip sla, track, and what follows an object
+            iossla.add_specs(self, add, U, E, C, I + SI)
         else:
             add("vlan <num>", self._vlan, "VLAN commands", C + V)
             add("no vlan <num>", self._no_vlan, "Delete a VLAN", C)
@@ -970,10 +1041,28 @@ class Console:
             from . import etherchannel, span  # channel-group, port-channels; SPAN (monitor session)
             etherchannel.add_specs(self, add, U, C, I + R)
             span.add_specs(self, add, U, C, I)
+            from . import iosv6  # the management interface's IPv6 address
+            iosv6.add_switch_specs(self, add, U, C, I)
+            from . import acl6, l2sec  # private VLANs, storm control, RA and DHCPv6 guard; IPv6 port ACLs
+            l2sec.add_specs(self, add, U, C, I + R, V)
+            acl6.add_specs(self, add, U, E, C, I + R, switch=True)
         from . import iosssh  # ip domain-name, crypto key generate rsa, ip ssh: SSH to the device's addresses
         iosssh.add_specs(self, add, U, C, I)
+        from . import aaa  # aaa authentication login, tacacs server, login authentication, test aaa
+        aaa.add_specs(self, add, U, E, C, L)
         from . import nms  # syslog, SNMP and NTP: logging host, snmp-server, ntp server, show logging
         nms.add_specs(self, add, U, C, I)
+        from . import lldp, tftpcopy  # CDP and LLDP (lldpd), the voice VLAN; copy to and from a TFTP server
+        lldp.add_specs(self, add, U, C, I)
+        from . import poe  # Power over Ethernet: show power inline, power inline never / auto / static
+        poe.add_specs(self, add, U, C, I)
+        tftpcopy.add_specs(self, add, E)
+        from . import ftpscp  # ip ftp username / password: the login copy ... ftp: uses (winlab/ftpscp.py)
+        ftpscp.add_specs(self, add, C)
+        from . import iosboot  # flash and images, boot system, config-register (winlab/iosimage.py)
+        iosboot.add_specs(self, add, U, E, C)
+        from . import netauto  # what Netmiko, NAPALM and Ansible send; RESTCONF (winlab/restconf.py)
+        netauto.add_specs(self, add, U, C, I)
         return sp
 
     # ---- running a line
@@ -983,6 +1072,10 @@ class Console:
             return ""
         self._fresh()
         line = line.rstrip("\n")
+        from . import iosboot  # the Break in the boot window, and lines typed at a boot monitor
+        said = iosboot.intercept(self, line)
+        if said is not None:
+            return said
         if self.s.ask:
             from . import iosnv
             return iosnv.answer(self, line)
@@ -1006,7 +1099,12 @@ class Console:
                 if self.s.mode in ("config", "user", "enable") or not self.s.mode.startswith(("config", "dhcp")):
                     raise
                 spec, args = self._match(text, "config")
+                if self.s.mode == "config-mst":
+                    from . import mst  # leaving the MST submode applies the region typed in it
+                    mst.apply(self)
                 self.s.mode, self.s.ctx = "config", ""
+            from . import aaa  # aaa authorization commands: the method list says yes or no first
+            acct = aaa.gate(self, spec, args)
             from . import etherchannel  # interface port-channel: its own settings, the rest on its members
             po = etherchannel.on_po(self, spec, args)
             if po is not None:
@@ -1016,6 +1114,7 @@ class Console:
                 out = self._each(spec, args)
             else:
                 out = spec.run(args) or ""
+            aaa.account(self, acct)   # aaa accounting commands: the command's stop record
         except CliError as exc:
             return str(exc)
         if pipe:
@@ -1210,7 +1309,7 @@ class Console:
 
     def _show_startup(self, a):
         from . import iosnv
-        return iosnv.startup_text(self.lab, self.device)
+        return iosnv.startup_text(self.lab, self.dev_key)
 
     # ---- passwords and lines (winlab/iosnv.py)
     def _set_key(self, key: str, value: str):
@@ -1252,7 +1351,10 @@ class Console:
         except ValueError as exc:
             raise CliError(str(exc)) from None
         settings(self.lab, self.device)[f"user:{name}"] = f"{priv} {kept}"
+        from . import iosssh  # the crypt an SSH login (login local) is checked with
+        note = iosssh.remember(self, name, rest[1:])
         self._save()   # live: the router's SSH server knows its users (winlab/iosssh.py)
+        return note
 
     def _line(self, which: str):
         self.s.mode, self.s.ctx = "config-line", which
@@ -1314,6 +1416,9 @@ class Console:
         from . import routerpolicy  # interface Tunnel<n> (winlab/vti.py)
         if router and routerpolicy.is_tunnel(a[0]):
             return routerpolicy.enter_tunnel(self, a[0])
+        from . import iosmpls  # interface Loopback<n>
+        if router and iosmpls.loopback_name(a[0]):
+            return iosmpls.enter(self, a[0])
 
         from . import etherchannel  # interface port-channel <n>
         if not router and etherchannel.enter(self, a[0]):
@@ -1423,6 +1528,9 @@ class Console:
         from . import routerpolicy  # no interface Tunnel<n> (winlab/vti.py)
         if routerpolicy.is_tunnel(a[0]):
             return routerpolicy.no_tunnel(self, a[0])
+        from . import iosmpls  # no interface Loopback<n>
+        if iosmpls.loopback_name(a[0]):
+            return iosmpls.no_loopback(self, a[0])
         ctx = parse_if(a[0], self._if_names(), sub=True)
         if "." not in ctx:
             raise CliError("% Physical interfaces cannot be removed")
@@ -1597,7 +1705,7 @@ class Console:
 
     def _set_link(self, link, up: bool) -> None:
         from . import physfaults
-        if up and any(r["kind"] == "nic" for r in physfaults.active(self.lab.name, link=link.label)):
+        if up and any(physfaults.card_side(r["kind"]) for r in physfaults.active(self.lab.name, link=link.label)):
             return  # a dead card stays dead, whatever the switch port does
         if self._link is not None:
             self._link(link, up)
@@ -1616,7 +1724,8 @@ class Console:
             raise CliError("% Bad mask /%d for address %s" % (iface.network.prefixlen, iface.ip))
         own = settings(self.lab, ROUTER)
         for other in self.lab.networks.values():
-            if other.id != net.id and other.net.overlaps(iface.network):
+            if other.id != net.id and other.net.overlaps(iface.network) \
+                    and not same_vlan_down_trunk(self.lab, net, other):
                 raise CliError(f"% {iface.network} overlaps with {self.iface_of(other) or other.id}")
         renumber = str(iface.network) != str(net.net)
         if renumber:
@@ -1852,7 +1961,9 @@ class Console:
                 note = (note + self._save()).strip()
             return note
         if link.network_id != net.id:
-            editor.cable(self.lab, link.node_id, link.nic_index, net.id)
+            from . import netbasics  # back where a ticket moved it from: its own address again
+            editor.cable(self.lab, link.node_id, link.nic_index, net.id,
+                         ip=netbasics.home_ip(self.lab, link.node_id, link.nic_index, net.id))
             note = (note + self._save()).strip()
         return note
 
@@ -1863,6 +1974,9 @@ class Console:
         mode = a[0].strip().lower().split()
         word = mode[0] if mode else ""
         uplink = self.s.ctx.startswith("GigabitEthernet")
+        if not uplink and word and any(m.startswith(word) for m in ("access", "trunk", "dynamic")):
+            from . import l2sec  # no longer a private-VLAN port
+            l2sec.leave(self)
         if word and "trunk".startswith(word):
             if uplink:
                 return ""
@@ -1879,8 +1993,10 @@ class Console:
                 return ""
             settings(self.lab, self.device).pop(f"mode:{link.label}", None)
             nic = self.lab.nodes[link.node_id].nics[link.nic_index]
-            if nic.trunk:
-                nic.trunk = []
+            from . import lldp  # an access port keeps its voice VLAN tagged
+            keep = lldp.voice_trunk(self.lab, switch_id(self.device), link.label)
+            if nic.trunk != keep:
+                nic.trunk = keep
                 return self._save().strip()
             self._save(live=False)
             return ""
@@ -1926,6 +2042,8 @@ class Console:
                 own.pop(f"native:{key}", None)
             else:
                 own[f"native:{key}"] = str(tag)
+            from . import netbasics  # CDP's word on a trunk whose two ends disagree
+            netbasics.native_log(self.lab)
             return self._save().strip()
         # A machine's trunk: its native VLAN is the one its untagged frames are in.
         net = vlan_net(self.lab, switch_id(self.device), tag)
@@ -1948,35 +2066,42 @@ class Console:
 
     # ---- show
     def _show_version(self, a):
-        """A version block in IOS's shape, in winlab's own words."""
+        """A version block in IOS's shape, in winlab's own words (the hardware
+        lines as IOS prints them: what Netmiko, NAPALM and Ansible read)."""
+        from . import netauto
         kind = device_kind(self.device)
         host = ios_name(self.lab, self.device)
         if kind == ROUTER:
             nim = len(router_port_names(self.lab)) > len(ONBOARD)
-            hw = [f"{PLATFORM[ROUTER]} (2 RU) processor with 1795999K/6147K bytes of memory.",
+            hw = [f"cisco {MODEL[ROUTER]} (1RU) processor with 1795999K/6147K bytes of memory.",
+                  f"Processor board ID {netauto.serial(self.lab, self.device)}",
                   f"{len(router_port_names(self.lab))} Gigabit Ethernet interfaces"
                   + (" (2 on board, 8 on a NIM in subslot 0/1)" if nim else ""),
                   "32768K bytes of non-volatile configuration memory.",
-                  "3207167K bytes of physical memory.", "", "Configuration register is 0x2102"]
-            image = "bootflash:router-universal.bin"
+                  "3207167K bytes of physical memory.", ""]
         else:
-            hw = [f"{PLATFORM['switch']}24TT-L (PowerPC405) processor with 65536K bytes of memory.",
+            from . import poe  # the switch's model: a PoE one when one was fitted
+            model = poe.model_name(self.lab, switch_id(self.device))
+            hw = [f"cisco {model} (PowerPC405) processor (revision B0) with 65536K bytes of memory.",
+                  f"Processor board ID {netauto.serial(self.lab, self.device)}",
                   f"{SWITCH_PORTS} FastEthernet interfaces", f"{GIG_PORTS} Gigabit Ethernet interfaces",
                   "64K bytes of flash-simulated non-volatile configuration memory.",
                   f"Base ethernet MAC Address       : {self._sw_mac()}",
-                  f"Model number                    : {MODEL['switch']}", "",
-                  "Configuration register is 0xF"]
-            image = "flash:switch-lanbase.bin"
+                  f"Model number                    : {model}", ""]
+        from . import iosboot  # the image that runs and the configuration register
+        boot = iosboot.version_lines(self)
+        hw.append(boot["register"])
+        image = boot["image"]
         return "\n".join([
             "winlab Internetwork Operating System Software",
-            f"{MODEL[kind]} Software, Version 15.2(7)WL, RELEASE SOFTWARE",
+            f"{MODEL[kind]} Software, Version {boot['version']}, RELEASE SOFTWARE",
             "This device is part of a winlab lab: its software is winlab's, running on the lab router",
             "(Alpine Linux, no disk, no way out to this PC or the internet).", "",
             f"ROM: Bootstrap program is {'IOS-XE ROMMON' if kind == ROUTER else 'C2960 boot loader'}", "",
             f"{host} uptime is {self._uptime()}",
             "System returned to ROM by reload",
             f'System image file is "{image}"', "",
-            f"winlab {MODEL[kind]} ({PLATFORM[kind].rstrip('-')}) processor"] + hw)
+            ] + hw)
 
     def _uptime(self) -> str:
         try:
@@ -2003,7 +2128,9 @@ class Console:
         out = ["!", "version 15.2"]
         out += [l for l in nms.run_lines(lab, self.device) if l.startswith(("service timestamps", "no service timestamps"))]
         out += ["service password-encryption"] if enc else ["no service password-encryption"]
-        out += ["!", f"hostname {ios_name(lab, self.device)}", "!", "boot-start-marker", "boot-end-marker", "!"]
+        out += ["!", f"hostname {ios_name(lab, self.device)}", "!", "boot-start-marker"]
+        from . import iosboot, iosimage
+        out += iosimage.boot_lines(lab, self.device) + ["boot-end-marker", "!"]
         if own.get("enable-secret"):
             out.append(f"enable secret {iosnv.run_form(own['enable-secret'], enc)}")
         if own.get("enable-password"):
@@ -2046,6 +2173,10 @@ class Console:
 
             from . import routerpolicy  # class-maps, policy-maps, zones, crypto (winlab/routerpolicy.py)
             out += routerpolicy.global_lines(own)
+            from . import iosv6  # ipv6 unicast-routing, the interfaces' ipv6 lines, ipv6 route, ipv6 router ospf
+            out += iosv6.global_lines(own)
+            from . import iosmpls  # interface Loopback<n> prints first, as IOS orders interfaces
+            out += iosmpls.loopback_blocks(own)
             for name, net, up in self.router_ifaces():
                 out.append(f"interface {name}")
                 if own.get(f"desc:{name}"):
@@ -2067,6 +2198,9 @@ class Console:
                 if own.get(f"nat:{name}"):
                     out.append(f" ip nat {own[f'nat:{name}']}")
                 out += iosrouting.iface_lines(own, name)
+                out += iosv6.iface_lines(own, name)
+                from . import acl6  # ipv6 traffic-filter
+                out += acl6.iface_lines(own, name)
 
                 out += routerpolicy.iface_lines(own, name)
                 if not up:
@@ -2078,6 +2212,11 @@ class Console:
 
             out += routerpolicy.tunnel_blocks(own)
             out += iosl3.run_lines(own)
+            from . import iossla  # track objects and ip sla operations
+            out += iossla.run_lines(own)
+            out += iosv6.run_lines(own)
+            from . import acl6  # ipv6 access-list blocks
+            out += acl6.run_lines(own)
         else:
             from . import stp  # spanning tree lines, and the spare cables' ports
             from . import portsec
@@ -2095,7 +2234,7 @@ class Console:
                     out.append(f" description {desc}")
                 nic = lab.nodes[link.node_id].nics[link.nic_index] if link else None
                 tag = lab.networks[link.network_id].vlan_no if link else 1
-                if nic is not None and nic.trunk:
+                if nic is not None and nic.trunk and not own.get(f"voice:{link.label}"):
                     if tag != 1:
                         out.append(f" switchport trunk native vlan {tag}")
                     allow = allowed_tags(lab, sid, link.label)
@@ -2115,7 +2254,9 @@ class Console:
             up = upstream(lab, sid)
             for port in gig_names():
                 out.append(f"interface {port}")
-                if port == "GigabitEthernet0/1":
+                if own.get(f"desc:{port}"):   # one typed under the port wins over winlab's own
+                    out.append(f" description {own[f'desc:{port}']}")
+                elif port == "GigabitEthernet0/1":
                     out += ([f" description uplink to {hostname(lab, f'sw:{up}')}"] if up else
                             [" description uplink to the router"] if uplinked(lab, sid) else [])
                 else:
@@ -2138,6 +2279,8 @@ class Console:
                     out.append(f" ip address {ip.ip} {ip.netmask}")
                 else:
                     out.append(" no ip address")
+                from . import iosv6
+                out += iosv6.sw_iface_lines(own, int(vname[4:]))
                 if not upv:
                     out.append(" shutdown")
                 out.append("!")
@@ -2145,6 +2288,9 @@ class Console:
                 out += [f"ip default-gateway {own['default-gw']}", "!"]
         out += [l for l in nms.run_lines(lab, self.device)
                 if not l.startswith(("service timestamps", "no service timestamps"))]
+        from . import ftpscp
+        ftp = ftpscp.run_lines(lab, self.device)
+        out += ftp + (["!"] if ftp else [])
         if own.get("banner"):
             out += [f"banner motd ^C{own['banner']}^C", "!"]
         for line, label in (("con", "line con 0"), ("vty", "line vty 0 4")):
@@ -2162,9 +2308,14 @@ class Console:
                 out.append(" login")
             if own.get(f"line-{line}:transport"):
                 out.append(f" transport input {own[f'line-{line}:transport']}")
-        out += ["!", "end"]
-        from . import iosssh  # domain name, SSH, local users; channel groups, port-channels, SPAN sessions
-        out = iosssh.run_lines(self, out)
+        out += ["!"] + iosboot.run_lines(lab, self.device) + ["end"]
+        from . import iosssh, lldp  # domain name, SSH, local users; channel groups, port-channels, SPAN; CDP, LLDP
+        out = iosssh.run_lines(self, lldp.run_lines(self, out))
+        if self.device != ROUTER:
+            from . import poe  # power inline under each interface
+            out = poe.run_lines(self, out)
+            from . import l2sec  # private VLANs, storm control, RA and DHCPv6 guard, IPv6 lists
+            out = l2sec.run_lines(self, out)
         body = "\n".join(out)
         return f"Building configuration...\n\nCurrent configuration : {len(body)} bytes\n{body}"
 
@@ -2182,6 +2333,8 @@ class Console:
             rows.append(f"{name:<23}{ip:<16}{'YES':<4}{how:<7}{status:<22}{proto}")
         from . import routerpolicy  # interface Tunnel<n>
         rows += routerpolicy.brief_rows(self)
+        from . import iosmpls  # interface Loopback<n>
+        rows += iosmpls.brief_rows(self)
         return "\n".join(rows)
 
     def _show_interfaces(self, a):
@@ -2201,12 +2354,17 @@ class Console:
         from . import routerpolicy  # interface Tunnel<n>
         conn += routerpolicy.connected(self)
         stat = []
+        from . import iossla  # ip route ... track <n>: out of the table while the object is Down
+        hidden = iossla.hidden_routes(self)
         for dest, target, dist in iosl3.routes(own):
+            if f"{dest} {target}" in hidden:
+                continue
             if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
                 if any(ipaddress.IPv4Address(target) in n for n, _, _ in conn):
-                    stat.append((dest, f"[{dist}/0] via {target}"))
+                    stat.append((dest, dist, f"[{dist}/0] via {target}"))
             elif any(nm == target for _, nm, _ in conn):
-                stat.append((dest, f"is directly connected, {target}"))
+                stat.append((dest, dist, f"is directly connected, {target}"))
+        stat = [(d, how) for d, _, how in iosl3.best(stat)]
         default = next((v for d, v in stat if d.prefixlen == 0), "")
         out = ["Codes: L - local, C - connected, S - static, R - RIP, M - mobile, B - BGP",
                "       D - EIGRP, EX - EIGRP external, O - OSPF, IA - OSPF inter area",
@@ -2291,11 +2449,17 @@ class Console:
             raise CliError(f"% Unrecognized host or address: {text}") from None
 
     def _ping(self, a):
+        if ":" in a[0]:
+            from . import iosv6  # ping <IPv6 address>
+            return iosv6.ping(self, a[0])
         ip = self._target(a[0])
         text = self._on_router(f"ping -c 5 -W 2 {ip} 2>&1", timeout=20)
         return format_ping(ip, text)
 
     def _trace(self, a):
+        if ":" in a[0]:
+            from . import iosv6  # traceroute <IPv6 address>
+            return iosv6.traceroute(self, a[0])
         ip = self._target(a[0])
         text = self._on_router(f"traceroute -n -q 1 -w 2 -m 10 {ip} 2>&1", timeout=40)
         out = ["Type escape sequence to abort.", f"Tracing the route to {ip}", ""]
@@ -2311,6 +2475,9 @@ class Console:
 
     def _sw_ping(self, a):
         """ping from the switch: from its management address (winlab/iosl2.py)."""
+        if ":" in a[0]:
+            from . import iosv6
+            return iosv6.sw_ping(self, a[0])
         ip = self._target(a[0])
         from . import iosl2
         ns = iosl2.netns(self.lab, switch_id(self.device))
@@ -2332,21 +2499,8 @@ class Console:
                 "*  0 con 0                idle                 00:00:00")
 
     def _show_flash(self, a):
-        from . import iosnv
-        text = iosnv.startup_text(self.lab, self.device)
-        size = 0 if text.startswith("startup") else len(text)
-        if self.device == ROUTER:
-            rows = [("-rw-", 512331776, "router-universal.bin"), ("-rw-", size, "nvram_config")]
-            total = 7194652672
-        else:
-            rows = [("-rwx", 11832064, "switch-lanbase.bin"), ("-rwx", 616, "vlan.dat"),
-                    ("-rwx", size, "config.text")]
-            total = 64016384
-        out = [f"Directory of {'bootflash' if self.device == ROUTER else 'flash'}:/", ""]
-        out += [f"{i:>4}  {p}  {n:>10}  {name}" for i, (p, n, name) in enumerate(rows, 1)]
-        used = sum(n for _, n, _ in rows)
-        out += ["", f"{total} bytes total ({total - used} bytes free)"]
-        return "\n".join(out)
+        from . import iosimage  # the images and files the device keeps
+        return iosimage.show_flash(self)
 
     def _clock_set(self, a):
         """clock set hh:mm:ss day month year: the router's own clock (the
@@ -2537,6 +2691,7 @@ class Console:
         return "\n".join(out)
 
     def _switchport_block(self, name: str) -> str:
+        from . import lldp  # the voice VLAN line
         own = self.lab.devices.get(self.device, {})
         sid = switch_id(self.device)
         if name.startswith("GigabitEthernet"):
@@ -2556,7 +2711,8 @@ class Console:
             link = ports[int(m.group(1)) - 1]
         net = self.lab.networks.get(link.network_id) if link else None
         tag = net.vlan_no if net else 1
-        trunk = bool(link and self.lab.nodes[link.node_id].nics[link.nic_index].trunk)
+        trunk = bool(link and self.lab.nodes[link.node_id].nics[link.nic_index].trunk
+                     and not own.get(f"voice:{link.label}"))  # a voice VLAN is tagged on an access port
         mode = "trunk" if trunk else "static access"
         allow = allowed_tags(self.lab, sid, link.label) if link else None
         name_of = (net.description if net and net.description else f"VLAN{tag:04d}") if tag != 1 else "default"
@@ -2566,6 +2722,7 @@ class Console:
                           f"Negotiation of Trunking: {'On' if trunk else 'Off'}",
                           f"Access Mode VLAN: {tag} ({name_of})",
                           f"Trunking Native Mode VLAN: {tag if trunk else 1} ({name_of if trunk else 'default'})",
+                          lldp.voice_line(self.lab, sid, link.label if link else name),
                           f"Trunking VLANs Enabled: {'ALL' if allow is None else vlan_text(allow) or 'NONE'}"])
 
     def _sw_ip_brief(self, a):
@@ -2652,10 +2809,23 @@ class Console:
                             and link.mac.lower() in seen and node_id in running:
                         rows.append((self.lab.networks[link.network_id].vlan_no, dotted_mac(link.mac), f"Fa0/{k}"))
         sid = switch_id(self.device)
+        # Machines on the other switches, learnt on the trunk that leads to
+        # them, in this switch's VLAN that is one network with theirs across
+        # it (Lab.segment_id: a VLAN a trunk does not carry, or a native VLAN
+        # mismatch, changes that).
+        mine = {self.plan.segment_of(n.id).network.id: n.vlan_no for n in vlans_of(self.lab, sid)}
+        for link in self.plan.ports:
+            net = self.lab.networks.get(link.network_id) if link.plugged else None
+            if net is None or net.home == sid or link.mac.lower() not in seen or link.node_id not in running:
+                continue
+            tag = mine.get(self.plan.segment_of(net.id).network.id)
+            port = self._toward(net.home)
+            if tag is not None and port:
+                rows.append((tag, dotted_mac(link.mac), short_if(port)))
         router_mac = data.get("router_mac", "")
-        if router_mac and uplinked(self.lab, sid) and self.powered():
+        if router_mac and (uplinked(self.lab, sid) or upstream(self.lab, sid)) and self.powered():
             for net in vlans_of(self.lab, sid):
-                if net.routed:
+                if self.plan.segment_of(net.id).network.routed:
                     rows.append((net.vlan_no, dotted_mac(router_mac), "Gi0/1"))
         out = ["          Mac Address Table", "-------------------------------------------", "",
                f"{'Vlan':<8}{'Mac Address':<19}{'Type':<12}Ports", f"{'----':<8}{'-----------':<19}{'--------':<12}-----"]
@@ -2663,6 +2833,19 @@ class Console:
         out += [f"{t:<8}{m:<19}{'DYNAMIC':<12}{p}" for t, m, p in sorted(rows)]
         out.append(f"Total Mac Addresses for this criterion: {len(rows)}")
         return "\n".join(out)
+
+    def _toward(self, other: str) -> str:
+        """The gigabit port of this switch that leads to switch `other`: the
+        downlink above it, else the uplink; "" when there is no way."""
+        sid = switch_id(self.device)
+        for port, below in downlinks(self.lab, sid):
+            hop, been = other, set()
+            while hop and hop not in been:
+                if hop == below:
+                    return port
+                been.add(hop)
+                hop = upstream(self.lab, hop)
+        return "GigabitEthernet0/1" if upstream(self.lab, sid) else ""
 
     @staticmethod
     def _wifi():
@@ -2711,7 +2894,8 @@ class Console:
                 name = own.get(f"desc:{link.label}") or naming.display(self.lab, link.node_id)
                 status = ("disabled" if own.get(f"shut:{link.label}") else
                           "err-disabled" if own.get(f"psec-err:{link.label}") else
-                          "connected" if link.node_id in running and self.powered() else "notconnect")
+                          "connected" if link.node_id in running and self.powered()
+                          and not own.get(f"nocable:{link.label}") else "notconnect")
                 tag = self.lab.networks[link.network_id].vlan_no
             look = self._look(link)
             if link and look["down"] and status == "connected":
@@ -2744,7 +2928,8 @@ class Console:
         live = [(p, far) for p, far, up in self._trunks() if up]
         ports = self._ports()
         machine = [(f"Fa0/{i}", l) for i, l in enumerate(ports, 1)
-                   if l is not None and self.lab.nodes[l.node_id].nics[l.nic_index].trunk]
+                   if l is not None and self.lab.nodes[l.node_id].nics[l.nic_index].trunk
+                   and not own.get(f"voice:{l.label}")]
         if not live and not machine:
             return ""
         rows = []   # (port, native, allowed set or None, active tags)
@@ -2766,36 +2951,6 @@ class Console:
         out += [f"{p:<12}{vlan_text(set(act)) or 'none'}" for p, _, _, act in rows]
         out += ["", f"{'Port':<12}Vlans in spanning tree forwarding state and not pruned"]
         out += [f"{p:<12}{vlan_text(set(act)) or 'none'}" for p, _, _, act in rows]
-        return "\n".join(out)
-
-    def _show_cdp(self, a):
-        """Who is cabled to this device's gigabit ports, as CDP shows it."""
-        lab = self.lab
-        out = ["Capability Codes: R - Router, S - Switch", "",
-               f"{'Device ID':<17}{'Local Intrfce':<16}{'Capability':<12}{'Platform':<16}Port ID"]
-        if self.device == ROUTER:
-            for name, sw in router_ports(lab):
-                if sw and uplinked(lab, sw):
-                    out.append(f"{hostname(lab, f'sw:{sw}'):<17}{short_if(name):<16}{'S':<12}"
-                               f"{PLATFORM['switch'] + '24TT':<16}Gi0/1")
-            return "\n".join(out)
-        sid = switch_id(self.device)
-        up = upstream(lab, sid)
-        if up:
-            port = dict((s, p) for p, s in downlinks(lab, up)).get(sid, "")
-            out.append(f"{hostname(lab, f'sw:{up}'):<17}{'Gi0/1':<16}{'S':<12}{PLATFORM['switch'] + '24TT':<16}{short_if(port)}")
-        elif uplinked(lab, sid):
-            port = dict((s, p) for p, s in router_ports(lab)).get(sid, "")
-            out.append(f"{hostname(lab, ROUTER):<17}{'Gi0/1':<16}{'R':<12}{PLATFORM[ROUTER]:<16}{short_if(port)}")
-        for port, below in downlinks(lab, sid):
-            out.append(f"{hostname(lab, f'sw:{below}'):<17}{short_if(port):<16}{'S':<12}{PLATFORM['switch'] + '24TT':<16}Gi0/1")
-        from . import stp
-        for c in stp.cables(lab):
-            for e in c.ends():
-                if c.kind == "extra" and e.sw == sid:
-                    f = c.far(e)
-                    out.append(f"{hostname(lab, f'sw:{f.sw}'):<17}{short_if(e.port):<16}{'S':<12}"
-                               f"{PLATFORM['switch'] + '24TT':<16}{short_if(f.port)}")
         return "\n".join(out)
 
 
@@ -2883,4 +3038,5 @@ def held_down(lab, link) -> bool:
         return True
     own = lab.devices.get(f"sw:{net.home}", {}) if net is not None else {}
     # err-disabled by port security holds it down too (winlab/portsec.py)
-    return bool(own.get(f"shut:{link.label}") or own.get(f"psec-err:{link.label}"))
+    # a cable not yet run and patched in the lab's building (winlab/buildlife.py) has no link
+    return bool(own.get(f"shut:{link.label}") or own.get(f"psec-err:{link.label}") or own.get(f"nocable:{link.label}"))

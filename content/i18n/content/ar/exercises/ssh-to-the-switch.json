@@ -1,0 +1,17 @@
+{
+ "Manage corp's switch over SSH from pc01, and only over SSH": "أدِر مبدّل corp عبر SSH من pc01، وعبر SSH فقط",
+ "corp's switch is managed with the console cable only. Give it an address,\nan RSA key of 2048 bits, SSH version 2, a local admin and vty lines that\ntake SSH alone with login local, then log in from pc01 with ssh. The checks\nread the router, where the switch's SSH server runs and every login over it\nis logged, and pc01's known_hosts.": "لا يُدار مبدّل corp إلا بكابل وحدة التحكم. أعطه عنوانًا، ومفتاح RSA بطول 2048 بت، وSSH الإصدار 2، ومسؤولًا محليًا، وخطوط vty لا تقبل إلا SSH مع login local، ثم سجّل الدخول من pc01 باستخدام ssh. تقرأ عمليات التحقق الموجّه، حيث يعمل خادم SSH الخاص بالمبدّل ويُسجَّل كل دخول عبره، وملف known_hosts في pc01.",
+ "On corp's switch: interface vlan 1 with 10.10.10.2/24, no shutdown, and ip default-gateway 10.10.10.1": "على مبدّل corp: interface vlan 1 بالعنوان 10.10.10.2/24، وno shutdown، وip default-gateway 10.10.10.1",
+ "hostname, ip domain-name corp.lab, crypto key generate rsa modulus 2048, ip ssh version 2": "hostname, ip domain-name corp.lab, crypto key generate rsa modulus 2048, ip ssh version 2",
+ "username admin privilege 15 with a secret of your own": "username admin privilege 15 مع secret من اختيارك",
+ "line vty 0 4: login local, transport input ssh; then save the configuration": "line vty 0 4: login local، وtransport input ssh؛ ثم احفظ الإعدادات",
+ "From pc01: ssh admin@10.10.10.2, accept the host key after comparing its fingerprint with show ip ssh, and log in": "من pc01: ssh admin@10.10.10.2، واقبل مفتاح المضيف بعد مقارنة بصمته مع show ip ssh، وسجّل الدخول",
+ "the switch's SSH server runs on its management address, with a key of 2048 bits or more": "خادم SSH الخاص بالمبدّل يعمل على عنوان الإدارة، بمفتاح طوله 2048 بت أو أكثر",
+ "SSH starts when the switch has a key and an address: interface vlan 1 (ip address, no shutdown), hostname, ip domain-name, crypto key generate rsa modulus 2048. show ip ssh says SSH Enabled.": "يبدأ SSH عندما يكون للمبدّل مفتاح وعنوان: interface vlan 1 (ip address، no shutdown)، وhostname، وip domain-name، وcrypto key generate rsa modulus 2048. ويقول show ip ssh إن SSH Enabled.",
+ "SSH version 2 only, and the vty lines take SSH alone with login local": "SSH الإصدار 2 فقط، وخطوط vty لا تقبل إلا SSH مع login local",
+ "ip ssh version 2 in configure terminal; under line vty 0 4: login local and transport input ssh (not all, not telnet ssh).": "ip ssh version 2 في configure terminal؛ وتحت line vty 0 4: login local وtransport input ssh (لا all، ولا telnet ssh).",
+ "someone logged in to the switch over SSH from a lab machine": "سجّل أحدهم الدخول إلى المبدّل عبر SSH من جهاز في المختبر",
+ "From pc01: ssh admin@10.10.10.2, then the password you gave username admin. Permission denied, please try again means the secret did not match (or the user is missing); a connection that closes at once means the vty lines do not take SSH.": "من pc01: ssh admin@10.10.10.2، ثم كلمة المرور التي أعطيتها لـ username admin. الرسالة Permission denied, please try again تعني أن secret لم يتطابق (أو أن المستخدم غير موجود)؛ والاتصال الذي يُغلق فورًا يعني أن خطوط vty لا تقبل SSH.",
+ "pc01 knows the switch's host key": "يعرف pc01 مفتاح المضيف الخاص بالمبدّل",
+ "The first ssh admin@10.10.10.2 asks to confirm the fingerprint; answering yes stores it in your profile's .ssh\\known_hosts.": "يطلب أول ssh admin@10.10.10.2 تأكيد البصمة؛ والإجابة بـ yes تحفظها في .ssh\\known_hosts في ملفك الشخصي."
+}

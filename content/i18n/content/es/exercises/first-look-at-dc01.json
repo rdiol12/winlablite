@@ -1,0 +1,13 @@
+{
+ "First look: sign in to dc01 and ask it about itself": "Primer vistazo: inicia sesión en dc01 y pregúntale por sí mismo",
+ "Before any Windows topic, get to a machine and ask it questions. Start dc01,\nsign in on its own screen as Administrator, open PowerShell (not the ISE)\nand ask Windows what it is and whether its gateway answers. winlab grades\nwhat dc01 itself remembers: who is signed in at its screen, and what its\nPowerShell history holds.": "Antes de cualquier tema de Windows, llega a una máquina y hazle preguntas. Arranca dc01,\ninicia sesión en su propia pantalla como Administrator, abre PowerShell (no el ISE)\ny pregunta a Windows qué es y si su puerta de enlace responde. winlab califica\nlo que recuerda el propio dc01: quién ha iniciado sesión en su pantalla y qué guarda\nsu historial de PowerShell.",
+ "Start dc01 and sign in on its screen as Administrator, with the lab password from the key in the taskbar": "Arranca dc01 e inicia sesión en su pantalla como Administrator, con la contraseña del laboratorio de la llave de la barra de tareas",
+ "In PowerShell on dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion": "En PowerShell en dc01: Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion",
+ "In the same window: ipconfig, then Test-NetConnection 10.10.10.1 (the lab router, dc01's default gateway)": "En la misma ventana: ipconfig, y luego Test-NetConnection 10.10.10.1 (el router del laboratorio, la puerta de enlace predeterminada de dc01)",
+ "Administrator is signed in on dc01's screen": "Administrator ha iniciado sesión en la pantalla de dc01",
+ "Double-click dc01 in Machines, send Ctrl+Alt+Del from the window's menu and sign in as Administrator; the desktop must be up (explorer running)": "Haz doble clic en dc01 en Machines, envía Ctrl+Alt+Del desde el menú de la ventana e inicia sesión como Administrator; el escritorio debe estar abierto (explorer en marcha)",
+ "PowerShell on dc01 was asked what the machine is": "Se preguntó a PowerShell en dc01 qué es la máquina",
+ "Run Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion in a PowerShell window on dc01 (the ISE keeps no history file)": "Ejecuta Get-ComputerInfo | Select-Object CsName, OsName, WindowsVersion en una ventana de PowerShell en dc01 (el ISE no guarda fichero de historial)",
+ "dc01's gateway was tested from inside dc01": "Se probó la puerta de enlace de dc01 desde dentro de dc01",
+ "In PowerShell on dc01: Test-NetConnection 10.10.10.1 (or ping 10.10.10.1); PingSucceeded True means the lab router answers": "En PowerShell en dc01: Test-NetConnection 10.10.10.1 (o ping 10.10.10.1); PingSucceeded True significa que el router del laboratorio responde"
+}

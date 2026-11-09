@@ -1,0 +1,16 @@
+{
+ "System requirements": "متطلبات النظام",
+ "Start here": "ابدأ هنا",
+ "requirements": "المتطلبات",
+ "ram": "ram",
+ "memory": "الذاكرة",
+ "disk": "القرص",
+ "cpu": "المعالج",
+ "cores": "الأنوية",
+ "windows 10": "windows 10",
+ "windows 11": "windows 11",
+ "hardware": "الأجهزة",
+ "pc": "الكمبيوتر",
+ "What this PC needs to run a lab, and how many machines fit.": "ما يحتاجه هذا الكمبيوتر لتشغيل مختبر، وكم جهازًا يتسع.",
+ "- A 64-bit PC with virtualization turned on in its firmware (Intel VT-x or AMD-V).\n- **8 GB of memory** at least. 16 GB runs every lesson; 24 GB runs the biggest labs as they are defined.\n- About **40 GB of free disk** for a Windows Server base and a Windows client base (about 25 GB with the Server base alone). Each machine you boot adds 2 to 6 GB.\n- Windows 10 or 11, any edition, Home included. winlab uses the Windows Hypervisor Platform, an optional feature on all of them.\n- 4 processor cores or more for a lab with several machines.\n\n| Memory | What runs |\n|---|---|\n| 8 GB | every one- and two-machine lesson, and on a quiet PC the whole ad-ds-basics lab |\n| 16 GB | every lesson, and the enterprise-multisite lab trimmed for that run |\n| 24 GB | enterprise-multisite and every-role as defined |\n\nSetup checks all of this for you. From a command prompt, `winlab doctor` prints the same checks with more detail.": "- كمبيوتر 64 بت مع تفعيل المحاكاة الافتراضية في البرنامج الثابت (Intel VT-x أو AMD-V).\n- **8 GB من الذاكرة** على الأقل. 16 GB تشغّل كل الدروس؛ و24 GB تشغّل أكبر المختبرات كما هي معرّفة.\n- نحو **40 GB من مساحة القرص الفارغة** لقاعدة Windows Server وقاعدة عميل Windows (نحو 25 GB مع قاعدة Server وحدها). كل جهاز تُقلعه يضيف من 2 إلى 6 GB.\n- Windows 10 أو 11، أي إصدار، بما في ذلك Home. يستخدم winlab ميزة Windows Hypervisor Platform، وهي ميزة اختيارية فيها جميعًا.\n- 4 أنوية معالج أو أكثر لمختبر فيه عدة أجهزة.\n\n| الذاكرة | ما الذي يعمل |\n|---|---|\n| 8 GB | كل دروس الجهاز الواحد والجهازين، وعلى كمبيوتر هادئ مختبر ad-ds-basics كاملًا |\n| 16 GB | كل الدروس، ومختبر enterprise-multisite مقلّصًا لذلك التشغيل |\n| 24 GB | enterprise-multisite وevery-role كما هما معرّفان |\n\nيتحقق الإعداد من كل ذلك نيابة عنك. ومن موجه الأوامر، يطبع `winlab doctor` عمليات التحقق نفسها بتفاصيل أكثر."
+}

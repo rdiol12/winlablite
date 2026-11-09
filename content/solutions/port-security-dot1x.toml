@@ -1,0 +1,97 @@
+[solution]
+exercise = "port-security-dot1x"
+notes = "Port security with the visitor's laptop goes on fs01's port (Fa0/2), so the err-disabled port the check wants does not take pc01's own port away from 802.1X (fs01 must be running for its address to stick). The NPS network policy is made with netsh; its PEAP method and certificate are the step nps.msc does by hand, and this solution's netsh line is the least sure part: compare with the lesson if NPS does not grant (event 6272). The RADIUS shared key is the lab secret."
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface fa0/2
+switchport port-security
+switchport port-security mac-address sticky
+switchport port-security maximum 1
+switchport port-security violation shutdown
+end
+'''
+wait = 60
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-psec-visitor node=fs01 nic=0 op=plug
+'''
+wait = 10
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Install-WindowsFeature NPAS -IncludeManagementTools
+netsh nps add registeredserver
+if (-not (Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -eq 'CN=dc01.corp.lab' })) {
+    New-SelfSignedCertificate -DnsName dc01.corp.lab -CertStoreLocation Cert:\LocalMachine\My | Out-Null
+}
+New-NpsRadiusClient -Name corp-switch -Address 10.10.10.1 -SharedSecret '{{winlab:lab-secret}}'
+
+# The network policy: Domain Computers and Domain Users, NAS Port Type Ethernet, PEAP. The PEAP method and
+# its certificate are set as nps.msc does: on the policy's Constraints, Authentication Methods.
+$sids = @((Get-ADGroup 'Domain Computers').SID.Value, (Get-ADGroup 'Domain Users').SID.Value) -join ' '
+netsh nps add np name="Wired 802.1X" state=ENABLE processingorder=1 policysource=0 conditionid=0x1fb5 conditiondata="$sids" conditionid=0x3d conditiondata="15" profileid=0x100f profiledata=TRUE profileid=0x1009 profiledata=0x5
+Restart-Service IAS
+'''
+timeout = 900
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+aaa new-model
+aaa authentication dot1x default group radius
+radius server NPS
+address ipv4 10.10.10.10 auth-port 1812 acct-port 1813
+key {{winlab:lab-secret}}
+exit
+dot1x system-auth-control
+interface fa0/3
+authentication port-control auto
+dot1x pae authenticator
+end
+copy running-config startup-config
+startup-config
+'''
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+sc.exe config dot3svc start= auto
+net start dot3svc
+$xml = @'
+<?xml version="1.0"?>
+<LANProfile xmlns="http://www.microsoft.com/networking/LAN/profile/v1">
+  <MSM>
+    <security>
+      <OneXEnforced>false</OneXEnforced>
+      <OneXEnabled>true</OneXEnabled>
+      <OneX xmlns="http://www.microsoft.com/networking/OneX/v1">
+        <authMode>machineOrUser</authMode>
+        <EAPConfig><EapHostConfig xmlns="http://www.microsoft.com/provisioning/EapHostConfig"><EapMethod><Type xmlns="http://www.microsoft.com/provisioning/EapCommon">25</Type><VendorId xmlns="http://www.microsoft.com/provisioning/EapCommon">0</VendorId><VendorType xmlns="http://www.microsoft.com/provisioning/EapCommon">0</VendorType><AuthorId xmlns="http://www.microsoft.com/provisioning/EapCommon">0</AuthorId></EapMethod><Config xmlns="http://www.microsoft.com/provisioning/EapHostConfig"><Eap xmlns="http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1"><Type>25</Type><EapType xmlns="http://www.microsoft.com/provisioning/MsPeapConnectionPropertiesV1"><ServerValidation><DisableUserPromptForServerValidation>false</DisableUserPromptForServerValidation><ServerNames></ServerNames></ServerValidation><FastReconnect>true</FastReconnect><InnerEapOptional>false</InnerEapOptional><Eap xmlns="http://www.microsoft.com/provisioning/BaseEapConnectionPropertiesV1"><Type>26</Type><EapType xmlns="http://www.microsoft.com/provisioning/MsChapV2ConnectionPropertiesV1"><UseWinLogonCredentials>true</UseWinLogonCredentials></EapType></Eap><EnableQuarantineChecks>false</EnableQuarantineChecks><RequireCryptoBinding>false</RequireCryptoBinding><PeapExtensions><PerformServerValidation xmlns="http://www.microsoft.com/provisioning/MsPeapConnectionPropertiesV2">false</PerformServerValidation><AcceptServerName xmlns="http://www.microsoft.com/provisioning/MsPeapConnectionPropertiesV2">false</AcceptServerName></PeapExtensions></EapType></Eap></Config></EapHostConfig></EAPConfig>
+      </OneX>
+    </security>
+  </MSM>
+</LANProfile>
+'@
+$f = "$env:TEMP\wired-peap.xml"
+Set-Content -Path $f -Value $xml -Encoding UTF8
+$if = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).Name
+netsh lan add profile filename="$f" interface="$if"
+netsh lan reconnect interface="$if"
+Start-Sleep -Seconds 20
+netsh lan show interfaces
+'''
+wait = 10

@@ -1,0 +1,20 @@
+{
+ "Files in and out of a lab": "الملفات داخل المختبر وخارجه",
+ "Using winlab": "استخدام winlab",
+ "file": "ملف",
+ "copy": "نسخ",
+ "drag": "سحب",
+ "drop": "إفلات",
+ "usb": "usb",
+ "stick": "ذاكرة USB",
+ "dvd": "dvd",
+ "disc": "قرص",
+ "transfer": "نقل",
+ "isolated": "معزول",
+ "isolation": "عزل",
+ "internet": "إنترنت",
+ "shared folder": "مجلد مشترك",
+ "sealed": "مغلق",
+ "The lab is sealed off from this PC. These are the ways a file crosses.": "المختبر معزول تمامًا عن هذا الحاسوب. هذه هي الطرق التي يعبر بها الملف.",
+ "The machines are cabled only to each other. They cannot reach this PC, your home network or the internet, so nothing you do in the lab can touch them. That is also why Windows Update and Microsoft sign-in do not work inside.\n\n**Into a machine**\n\n- Drop a file on a machine's window, or use Clipboard, Send a file. It lands on the machine's Public desktop in a folder called From this PC (up to 64 MB).\n- Plug in a USB stick from the machine's Settings or the media shelf. **Plug folder** copies a folder of yours onto a new stick; your folder itself is never shared.\n- Put a disc in the DVD drive: any image from Images, or a folder burned to a disc on the media shelf.\n- From a command prompt: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**Out of a machine**\n\n- `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` copies a file back over the same channel.": "الأجهزة موصولة بالكبلات ببعضها فقط. لا تستطيع الوصول إلى هذا الحاسوب أو شبكتك المنزلية أو الإنترنت، لذا لا يمكن لأي شيء تفعله في المختبر أن يمسّها. وهذا أيضًا سبب عدم عمل Windows Update وتسجيل الدخول إلى Microsoft في الداخل.\n\n**إلى جهاز**\n\n- أفلِت ملفًا على نافذة جهاز، أو استخدم الحافظة، أرسل ملفًا. يصل إلى سطح مكتب Public في الجهاز داخل مجلد باسم From this PC (حتى 64 MB).\n- صِل ذاكرة USB من الإعدادات الخاصة بالجهاز أو من رف الوسائط. **صِل مجلدًا** ينسخ مجلدًا خاصًا بك إلى ذاكرة جديدة؛ ولا يُشارك مجلدك نفسه أبدًا.\n- ضع قرصًا في محرك DVD: أي صورة من الصور، أو مجلدًا منسوخًا على قرص في رف الوسائط.\n- من موجّه الأوامر: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**من جهاز**\n\n- ينسخ `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` ملفًا عائدًا عبر القناة نفسها."
+}

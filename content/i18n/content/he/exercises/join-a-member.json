@@ -1,0 +1,12 @@
+{
+ "Join a member server to the domain": "צרף שרת חבר לדומיין",
+ "fs01 is a standalone server. Point its DNS at the domain controller and join it\nto corp.lab. The DNS step is the one everyone forgets: a member that cannot\nresolve the domain's SRV records cannot find a DC to join.": "fs01 הוא שרת עצמאי. הפנה את ה-DNS שלו אל בקר התחום וצרף אותו\nל-corp.lab. שלב ה-DNS הוא זה שכולם שוכחים: חבר שאינו יכול\nלפענח את רשומות ה-SRV של הדומיין אינו יכול למצוא DC כדי להצטרף.",
+ "On fs01, set the preferred DNS server to dc01 (10.10.10.10)": "ב-fs01, הגדר את שרת ה-DNS המועדף ל-dc01 (10.10.10.10)",
+ "Join fs01 to the corp.lab domain": "צרף את fs01 לדומיין corp.lab",
+ "Reboot and confirm membership": "הפעל מחדש ואמת את החברות",
+ "DNS points at the DC": "ה-DNS מפנה אל ה-DC",
+ "Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10": "Set-DnsClientServerAddress -InterfaceIndex <n> -ServerAddresses 10.10.10.10",
+ "joined to corp.lab": "מצורף ל-corp.lab",
+ "Add-Computer -DomainName corp.lab -Credential (Get-Credential) -Restart": "Add-Computer -DomainName corp.lab -Credential (Get-Credential) -Restart",
+ "secure channel to the domain is healthy": "הערוץ המאובטח לדומיין תקין"
+}

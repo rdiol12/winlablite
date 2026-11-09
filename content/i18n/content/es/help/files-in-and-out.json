@@ -1,0 +1,20 @@
+{
+ "Files in and out of a lab": "Archivos dentro y fuera de un laboratorio",
+ "Using winlab": "Usar winlab",
+ "file": "archivo",
+ "copy": "copiar",
+ "drag": "arrastrar",
+ "drop": "soltar",
+ "usb": "usb",
+ "stick": "memoria",
+ "dvd": "dvd",
+ "disc": "disco",
+ "transfer": "transferencia",
+ "isolated": "aislado",
+ "isolation": "aislamiento",
+ "internet": "internet",
+ "shared folder": "carpeta compartida",
+ "sealed": "sellado",
+ "The lab is sealed off from this PC. These are the ways a file crosses.": "El laboratorio está aislado de este PC. Estas son las formas en que un archivo puede cruzar.",
+ "The machines are cabled only to each other. They cannot reach this PC, your home network or the internet, so nothing you do in the lab can touch them. That is also why Windows Update and Microsoft sign-in do not work inside.\n\n**Into a machine**\n\n- Drop a file on a machine's window, or use Clipboard, Send a file. It lands on the machine's Public desktop in a folder called From this PC (up to 64 MB).\n- Plug in a USB stick from the machine's Settings or the media shelf. **Plug folder** copies a folder of yours onto a new stick; your folder itself is never shared.\n- Put a disc in the DVD drive: any image from Images, or a folder burned to a disc on the media shelf.\n- From a command prompt: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**Out of a machine**\n\n- `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` copies a file back over the same channel.": "Las máquinas solo están cableadas entre sí. No pueden llegar a este PC, a tu red doméstica ni a Internet, así que nada de lo que hagas en el laboratorio puede afectarlos. También es la razón por la que Windows Update y el inicio de sesión de Microsoft no funcionan dentro.\n\n**Hacia una máquina**\n\n- Suelta un archivo en la ventana de una máquina, o usa Portapapeles, Enviar un archivo. Llega al escritorio Public de la máquina en una carpeta llamada From this PC (hasta 64 MB).\n- Conecta una memoria USB desde la Configuración de la máquina o desde la estantería de medios. **Conectar carpeta** copia una carpeta tuya en una memoria nueva; tu carpeta en sí nunca se comparte.\n- Pon un disco en la unidad de DVD: cualquier imagen de Imágenes, o una carpeta grabada en un disco en la estantería de medios.\n- Desde un símbolo del sistema: `winlab cp --lab <lab> notes.txt <machine>:C:\\Temp\\notes.txt`\n\n**Desde una máquina**\n\n- `winlab cp --lab <lab> <machine>:C:\\Temp\\report.txt report.txt` copia un archivo de vuelta por el mismo canal."
+}

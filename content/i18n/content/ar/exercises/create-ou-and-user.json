@@ -1,0 +1,18 @@
+{
+ "Create an OU, a user and a global group": "أنشئ وحدة تنظيمية ومستخدمًا ومجموعة عامة",
+ "Everything in the flat default containers is a policy and delegation dead end:\nGPOs cannot link to CN=Users. Give the Sales department a proper home. Create\nan OU, put a user in it, and give the department a global security group, the\n\"G\" in AGDLP that permissions are later granted through.": "كل ما في الحاويات الافتراضية المسطحة طريق مسدود للنُهج والتفويض: لا يمكن ربط GPO بـ CN=Users. امنح قسم المبيعات مكانًا لائقًا. أنشئ وحدة تنظيمية، وضع فيها مستخدمًا، وامنح القسم مجموعة أمان عامة، وهي حرف \"G\" في AGDLP الذي تُمنح من خلاله الأذونات لاحقًا.",
+ "On dc01, create an organizational unit named Sales at the root of corp.lab": "على dc01، أنشئ وحدة تنظيمية باسم Sales في جذر corp.lab",
+ "Create an enabled user John Doe, logon name jdoe, inside OU=Sales": "أنشئ مستخدمًا مُمكّنًا John Doe، اسم تسجيل الدخول jdoe، داخل OU=Sales",
+ "Create a global security group G-Sales inside OU=Sales": "أنشئ مجموعة أمان عامة G-Sales داخل OU=Sales",
+ "Make jdoe a member of G-Sales": "اجعل jdoe عضوًا في G-Sales",
+ "OU=Sales exists at the domain root": "OU=Sales موجودة في جذر المجال",
+ "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'": "New-ADOrganizationalUnit -Name Sales -Path 'DC=corp,DC=lab'",
+ "jdoe lives in OU=Sales": "jdoe موجود في OU=Sales",
+ "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true": "New-ADUser -Name 'John Doe' -SamAccountName jdoe -Path 'OU=Sales,DC=corp,DC=lab' -AccountPassword (Read-Host -AsSecureString) -Enabled $true",
+ "jdoe is enabled": "jdoe مُمكّن",
+ "An account created without a password is disabled: Enable-ADAccount jdoe": "الحساب الذي يُنشأ دون كلمة مرور يكون معطّلًا: Enable-ADAccount jdoe",
+ "G-Sales is a global security group": "G-Sales مجموعة أمان عامة",
+ "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'": "New-ADGroup G-Sales -GroupScope Global -GroupCategory Security -Path 'OU=Sales,DC=corp,DC=lab'",
+ "jdoe is in G-Sales": "jdoe موجود في G-Sales",
+ "Add-ADGroupMember G-Sales -Members jdoe": "Add-ADGroupMember G-Sales -Members jdoe"
+}

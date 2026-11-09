@@ -48,6 +48,9 @@ class BootReport:
     accel: str
     display: str
     resumed: list[str] = field(default_factory=list)  # started from hibernation
+    # Machines whose QEMU exited right after it was started: id -> why (the
+    # last error lines of its qemu.log). The others started anyway.
+    failed: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -69,6 +72,23 @@ HIBERNATE = (
 )
 
 
+def exit_reason(log: Path, lines: int = 3, since: int = 0) -> str:
+    """The last error QEMU wrote to a machine's qemu.log (from byte `since`:
+    this start's own lines), for a machine that stopped by itself: '' when
+    there is none."""
+    try:
+        with open(log, "rb") as fh:
+            fh.seek(0, 2)
+            fh.seek(max(since, fh.tell() - 8192))
+            tail = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    errs = [l.strip() for l in tail if l.strip() and ("qemu" in l.lower() or "error" in l.lower()
+                                                      or "could not" in l.lower() or "failed" in l.lower())]
+    keep = list(dict.fromkeys(errs))[-lines:] or [l.strip() for l in tail if l.strip()][-1:]
+    return " / ".join(l[:300] for l in keep)
+
+
 def _noop(_line: str) -> None:
     pass
 
@@ -80,6 +100,63 @@ def _mmss(seconds: float) -> str:
 # The three guest-facing steps below are module functions so tests can stand
 # them in without a running machine.
 _sleep = time.sleep
+
+FABRIC_LISTEN_TIMEOUT = 60.0  # how long the router's switch may take to open its ports
+
+
+def _wait_fabric(qmp_port: int, proc, netdevs: list[str], timeout: float = FABRIC_LISTEN_TIMEOUT) -> str:
+    """Waits until the router's switch has every port open, as one waits
+    for a switch's port lights before plugging PCs in: its QEMU answers on
+    its monitor and lists each port's backend (each one is listening on its
+    loopback port by then). Returns "" when ready, else why not."""
+    from .qmp import Qmp, QmpError
+
+    deadline = time.monotonic() + timeout
+    missing, answered = list(netdevs), False
+    while time.monotonic() < deadline:
+        if proc is not None and proc.poll() is not None:
+            return "its QEMU exited before opening its ports"
+        try:
+            with Qmp(qmp_port, timeout=5) as mon:
+                text = str(mon.call("human-monitor-command", **{"command-line": "info network"}) or "")
+            missing, answered = [n for n in netdevs if f"{n}:" not in text], True
+            if not missing:
+                return ""
+        except QmpError:
+            pass
+        _sleep(0.2)
+    return (f"its switch did not open {len(missing)} of its {len(netdevs)} ports within {timeout:.0f} s"
+            if answered else f"its monitor did not answer within {timeout:.0f} s")
+
+
+FABRIC_BOOT_TIMEOUT = 300.0   # a restarted router's boot, before the machines' links come back
+
+
+def _wait_router_ready(serial_port: int, timeout: float) -> bool:
+    """True once the router has run its setup script (the line it logs at
+    the end of it, winlab/netplan.py render_fabric_setup)."""
+    from .guestctl import GuestChannel, GuestError
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with GuestChannel(serial_port, timeout=20).connect(retries=1) as ch:
+                res = ch.run("dmesg | grep -c 'winlab fabric ready' || true", shell="sh", timeout=20)
+                if (res.out or "").strip() not in ("", "0"):
+                    return True
+        except GuestError:
+            pass
+        _sleep(3.0)
+    return False
+
+
+def _log_tail(log: Path) -> str:
+    """The last thing QEMU wrote, which says why it stopped."""
+    try:
+        lines = [l.strip() for l in log.read_text(encoding="utf-8", errors="replace").splitlines() if l.strip()]
+    except OSError:
+        return ""
+    return lines[-1][:300] if lines else ""
 
 
 def _wait_agent(serial_port: int, timeout: float) -> bool:
@@ -261,8 +338,17 @@ class Orchestrator:
         # only thing that puts it back to the image it was made from.
         disk = self.provider.disk_path(node_id)
         fresh = not disk.exists()
+        from . import netos
+        ok, why = netos.can_run(node, self.provider.accel)
+        if not ok:
+            raise OrchestratorError(f"node '{node_id}': {why}")
         if not disk.exists():
-            if images.is_template(node.image):
+            if netos.is_disk_router(node):
+                # A vendor router: a thin clone of the vendor's own disk (winlab/netos.py).
+                if not netos.ready(node.image):
+                    raise OrchestratorError(f"node '{node_id}': {netos.missing_text(node.image)}")
+                images.clone(node.image, disk)
+            elif images.is_template(node.image):
                 images.clone(node.image, disk)
             elif images.is_hand_install(node):
                 try:
@@ -529,6 +615,96 @@ class Orchestrator:
                 f"eject it (winlab node {self.lab.name} set {node_id} --iso none) or add it"
             )
 
+    def _media_problem(self, node_id: str) -> str:
+        """What this machine still needs on this PC before it can start
+        (its base, installer or ISO), or ''. Read-only: it runs for every
+        machine before the first one starts, so a lab does not power the
+        router on and then stop at the third machine."""
+        if node_id == "fabric":
+            if images.disk_source("alpine") is None:
+                return ("the router and switches need their base (Alpine Linux), which is not on this PC "
+                        "yet: open Setup and press Get everything ready (or: winlab images prepare alpine)")
+            return ""
+        node = self.lab.nodes.get(node_id)
+        if node is None or self.provider.disk_path(node_id).exists():
+            return ""
+        try:
+            self._needs_install_iso(node_id)
+            self._check_attached_iso(node_id)
+        except OrchestratorError as exc:
+            return str(exc)
+        from . import netos
+        ok, why = netos.can_run(node, self.provider.accel)
+        if not ok:
+            return f"node '{node_id}': {why}"
+        if node.is_windows and node.kind != CUSTOM:
+            return ""
+        if netos.is_disk_router(node):
+            return "" if netos.ready(node.image) else f"node '{node_id}': {netos.missing_text(node.image)}"
+        if images.is_template(node.image):
+            return "" if images.disk_source(node.image) else (
+                f"node '{node_id}': its template '{node.image}' has no disk on this PC any more")
+        if images.is_hand_install(node):
+            if imaging.is_netboot(node):
+                return ""
+            try:
+                images.hand_media(node.image)
+            except images.ImageError as exc:
+                return f"node '{node_id}': {exc}"
+            return ""
+        if node.kind == CUSTOM:
+            try:
+                entry = images.custom_image(node.image)
+            except (images.ImageError, KeyError) as exc:
+                return f"node '{node_id}': {exc}"
+            return "" if entry.iso.exists() else (
+                f"node '{node_id}': the ISO for your image '{node.image}' is missing; add it again in "
+                f"Setup > Use any ISO (or: winlab images add {node.image} <path>)")
+        if node.kind == LINUX and appliances.is_appliance(node.image):
+            if appliances.ready(node.image):
+                return ""
+            app = appliances.get_or_raise(node.image)
+            return (f"node '{node_id}': the {app.short} image is not on this PC yet; fetch it in Setup "
+                    f"(or: winlab images fetch {node.image})")
+        image_id = "alpine" if node.kind == LINUX else node.image
+        if images.disk_source(image_id) is None:
+            return (f"node '{node_id}': the {image_id} base is not on this PC yet: open Setup and press "
+                    f"Get everything ready (or: winlab images prepare {image_id})")
+        return ""
+
+    def preflight(self, order: list[str], st) -> None:
+        """Every machine about to start has what it needs, or nothing starts."""
+        problems = []
+        if not paths.qemu_exe().exists():
+            problems.append("QEMU is not on this PC yet: open Setup and press Get everything ready "
+                            "(or: winlab bootstrap)")
+        for node_id in order:
+            ns = st.nodes.get(node_id)
+            if ns and ns.pid and state.pid_alive(ns.pid):
+                continue
+            try:
+                why = self._media_problem(node_id)
+            except Exception:  # noqa: BLE001 - the start itself says it, with its own words
+                why = ""
+            if why:
+                problems.append(why)
+        if problems:
+            raise OrchestratorError("nothing was started: " + "; ".join(problems))
+
+    @staticmethod
+    def _died_at_start(proc: subprocess.Popen, log: Path, wait: float = 1.5, since: int = 0) -> str:
+        """'' while QEMU is still running after `wait` seconds; else why it
+        stopped: the error lines it wrote last (a corrupt disk, a port taken,
+        a setting this QEMU does not have)."""
+        deadline = time.monotonic() + wait
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            time.sleep(0.1)
+        if proc.poll() is None:
+            return ""
+        return exit_reason(log, since=since) or f"QEMU stopped at once (exit code {proc.returncode})"
+
     def _launch(self, node_id: str, argv: list[str]) -> subprocess.Popen:
         log = self.provider.node_dir(node_id) / "qemu.log"
         log.parent.mkdir(parents=True, exist_ok=True)
@@ -546,6 +722,17 @@ class Orchestrator:
                                 creationflags=flags)
 
     def up(self, only: list[str] | None = None, emit=_noop) -> BootReport:
+        """Start the lab (or `only` those machines). One start of a lab runs at
+        a time: a second one (another Power on click, `winlab lab up` while
+        the desktop starts it) waits, then starts only what is still off."""
+        try:
+            with state.start_lock(self.lab.name, on_wait=lambda: emit(
+                    "waiting for the start already under way to finish")):
+                return self._up(only, emit)
+        except state.Busy as exc:
+            raise OrchestratorError(str(exc)) from exc
+
+    def _up(self, only: list[str] | None = None, emit=_noop) -> BootReport:
         self.workdir.mkdir(parents=True, exist_ok=True)
         st = state.load(self.lab.name) or state.new(
             self.lab.name, self.accel, self.display, self.lab.source_path
@@ -583,22 +770,52 @@ class Orchestrator:
         from . import labclock
         if labclock.wake(self.lab.name):
             emit("lab clock resumed")
+        if not _fabric_running(self.lab.name) and any(
+                n != "fabric" and ns.pid and state.pid_alive(ns.pid) for n, ns in st.nodes.items()):
+            # The router stopped (or crashed) under running machines: it comes
+            # back on the ports they keep dialling (winlab/providers/qemu.py).
+            from . import livenet
+            livenet.keep_ports(self.plan, livenet.last_ports(self.lab.name))
         runtimes = self.provider.build_all()
         order = ["fabric"] + [n.id for n in self.lab.node_list()]
         if only:
             order = [n for n in order if n in only or n == "fabric"]
 
+        self.preflight(order, st)
+
         started: list[str] = []
         skipped: list[str] = []
         resumed: list[str] = []
+        failed: dict[str, str] = {}
+        # A head office lost in a disaster drill has no building to start in
+        # (winlab/drsite.py): its machines stay off until it is rebuilt.
+        from . import drsite
+        gone = drsite.lost_nodes(self.lab)
 
         for idx, node_id in enumerate(order):
+            if node_id in gone:
+                emit(f"{node_id}: lost with the head office; it does not start until the site is rebuilt "
+                     f"(winlab dr {self.lab.name} rebuild)")
+                continue
             existing = st.nodes.get(node_id)
             if existing and existing.pid and state.pid_alive(existing.pid):
                 skipped.append(node_id)
                 continue
             if existing and existing.phase == SUSPENDED:
                 resumed.append(node_id)
+
+            # The power button: a PC with no power supply, no processor or no
+            # memory it can use does not start at all (winlab/pcbuild.py).
+            post = None
+            hwnode = self.lab.nodes.get(node_id)
+            if hwnode is not None and node_id not in resumed:
+                from . import pcbuild
+                if pcbuild.form_of(hwnode):
+                    post = pcbuild.post(self.lab.name, hwnode)
+                    if post["halt"]:
+                        pcbuild.record(self.lab.name, node_id, post)
+                        emit(f"{node_id}: {pcbuild.verdict(post)}")
+                        continue
 
             self._stage_disks(node_id)
             if node_id in self.lab.nodes:
@@ -622,6 +839,10 @@ class Orchestrator:
             restoring = saved.exists() and node_id in resumed and not iso
             if saved.exists() and not restoring:
                 saved.unlink(missing_ok=True)
+            qlog = self.provider.node_dir(node_id) / "qemu.log"
+            log_at = qlog.stat().st_size if qlog.exists() else 0
+            if restoring and "-S" in argv:
+                argv.remove("-S")   # woken from a save: no POST to wait at
             proc = self._launch(node_id, argv + (["-incoming", f"file:{saved}"] if restoring else []))
             if restoring:
                 if _wait_restored(rt.qmp_port, proc):
@@ -631,6 +852,14 @@ class Orchestrator:
                          f"changed?); starting it fresh, as after a power cut")
                     proc = self._launch(node_id, argv)
                 saved.unlink(missing_ok=True)
+            if post is not None:
+                from . import pcbuild
+                pcbuild.record(self.lab.name, node_id, post, pid=proc.pid)
+                if post.get("errors"):
+                    emit(f"{node_id}: POST: {post['errors'][0]}")
+                if post.get("heat"):
+                    # No cooler, a dead fan: it switches itself off after a while.
+                    pcbuild.arm_thermal(self.lab.name, node_id, proc.pid, rt.qmp_port, post["heat"])
             agent_port, helper_pid, console_port = rt.serial_port, 0, 0
             node = self.lab.nodes.get(node_id)
             if node is not None and appliances.console_driven(node.image):
@@ -652,18 +881,31 @@ class Orchestrator:
                 console_port=console_port,
                 term_port=rt.term_port,
                 com_port=rt.com_port,
+                wterm_port=rt.wterm_port,
             )
             state.save(st)
+            if node_id != "fabric":
+                # A machine whose QEMU stops at once (a damaged disk, a port
+                # taken, a setting this QEMU lacks) is not "started": say why.
+                why = self._died_at_start(proc, qlog, since=log_at)
+                if why:
+                    _kill_helper(st.nodes[node_id])
+                    st.nodes[node_id].pid = 0
+                    st.nodes[node_id].phase = "stopped"
+                    state.save(st)
+                    failed[node_id] = why
+                    emit(f"{node_id} did not start: {why}")
+                    continue
             started.append(node_id)
             emit(f"{'resumed' if node_id in resumed else 'started'} {node_id}"
                  + (" (installing)" if iso else ""))
 
             if node_id == "fabric":
-                # Give the fabric a moment to bind its listening sockets before
-                # the nodes dial in, or the first connects race and fail.
+                # The machines dial into the router's switch ports: wait until
+                # they are open, rather than guess how long that takes.
                 from . import livenet
                 livenet.record(self.plan, proc.pid)
-                _sleep(2.0)
+                self._fabric_listening(rt.qmp_port, proc, emit)
                 continue
             from . import devcli
             if any(not l.plugged or devcli.held_down(self.lab, l) for l in self.plan.ports_for(node_id)):
@@ -675,7 +917,7 @@ class Orchestrator:
             if later and not iso:
                 self._pace(node_id, agent_port, later, emit)
 
-        return BootReport(self.lab.name, started, skipped, self.accel, self.display, resumed)
+        return BootReport(self.lab.name, started, skipped, self.accel, self.display, resumed, failed)
 
     def _launch_console_agent(self, node_id: str, console_port: int) -> tuple[int, int]:
         """Starts the console agent for an appliance winlab drives over its
@@ -687,7 +929,8 @@ class Orchestrator:
         st = state.load(self.lab.name)
         for other in (st.nodes.values() if st else []):
             taken.update(x for x in (other.qmp_port, other.serial_port, other.vnc_port, other.console_port,
-                                     other.term_port, other.com_port) if x)
+                                     other.term_port, other.com_port,
+                                     other.wterm_port) if x)
         listen = _free_port(MGMT_BASE, taken)
         if openwrt.is_openwrt(node):
             fp, user, flavor = openwrt.fingerprint(node, self.lab, self.plan), openwrt.CONSOLE_USER, "openwrt"
@@ -730,6 +973,97 @@ class Orchestrator:
         if not st:
             return set()
         return {n for n, ns in st.nodes.items() if ns.pid and state.pid_alive(ns.pid)}
+
+    # ------------------------------------------------------- the router alone
+    def _fabric_listening(self, qmp_port: int, proc, emit) -> None:
+        """After the router starts: its switch ports are open, or a clear
+        error (a router that will not start is no network at all)."""
+        from .providers.qemu import fabric_netdev_id, redials
+        why = _wait_fabric(qmp_port, proc, [fabric_netdev_id(l) for l in self.plan.ports])
+        if not why:
+            return
+        log = self.provider.node_dir("fabric") / "qemu.log"
+        tail = _log_tail(log)
+        msg = (f"the lab's router did not come up: {why}" + (f" ({tail})" if tail else "")
+               + f"; its QEMU log is {log}")
+        if proc is not None and proc.poll() is None and redials():
+            # The machines' cards redial: they connect whenever it is ready.
+            emit(msg + "; the machines start anyway and plug in when it is ready")
+            return
+        raise OrchestratorError(msg)
+
+    def restart_fabric(self, emit=_noop) -> dict:
+        """Restarts the lab's router and its switches (one machine, the
+        fabric) while the lab's machines keep running, as when the switch
+        rack is power-cycled or the router reloads: every machine's link goes
+        down, the router boots with its startup configuration, and the links
+        come back by themselves. Also what brings a crashed router back.
+        Returns {"machines": [...], "relinked": n, "redial": bool}."""
+        from . import devcli, iosnv, livenet
+        from .providers.qemu import redials
+        st = state.load(self.lab.name)
+        if st is None:
+            raise OrchestratorError(f"{self.lab.name} is not running")
+        machines = sorted(n for n, ns in st.nodes.items()
+                          if n != "fabric" and ns.pid and state.pid_alive(ns.pid))
+        if not machines and not _fabric_running(self.lab.name):
+            raise OrchestratorError(f"{self.lab.name} is not running; `winlab lab up` starts it")
+        # The machines keep dialling the ports they were started with.
+        keep = livenet.last_ports(self.lab.name)
+        old = livenet.pinned_ports(self.lab.name)
+        fab = st.nodes.get("fabric")
+        if fab and fab.pid and state.pid_alive(fab.pid):
+            # The switch goes dark: every machine's link light goes out.
+            for nid in machines:
+                for link in self.plan.ports_for(nid):
+                    if old.get(link.label, {}).get("plugged", link.plugged):
+                        livenet.set_link(st.nodes[nid].qmp_port, link.nic_index, False, tries=2)
+            emit("router and switches going down; the machines' links are down")
+            _kill(fab.pid)
+            _wait_gone(fab.pid)
+            fab.pid, fab.phase = 0, "stopped"
+            state.save(st)
+        # It starts with what its NVRAM holds, as on any power-up (winlab/iosnv.py).
+        try:
+            if iosnv.power_on(self.lab):
+                from . import editor
+                editor.save(self.lab)
+                emit("router and switches start with their startup configuration")
+        except Exception as exc:  # noqa: BLE001 - a bad NVRAM file never stops the router starting
+            emit(f"router and switch configuration kept as it is: {exc}")
+        self.plan = compile_topology(self.lab, check_ports=False)
+        livenet.keep_ports(self.plan, keep)
+        self.provider = QemuProvider(self.plan, accel=self.accel, display=self.display)
+        rt = self.provider.build_fabric()
+        self._stage_disks("fabric")
+        proc = self._launch("fabric", self._attach_media("fabric", list(rt.argv)))
+        st = state.load(self.lab.name) or st
+        st.nodes["fabric"] = state.NodeState(
+            node_id="fabric", pid=proc.pid, qmp_port=rt.qmp_port, serial_port=rt.serial_port,
+            vnc_port=rt.vnc_port, disk=str(rt.disk or ""), phase="booting", com_port=rt.com_port)
+        state.save(st)
+        livenet.record(self.plan, proc.pid)
+        self._fabric_listening(rt.qmp_port, proc, emit)
+        emit("router started; waiting for it to finish booting…")
+        if not _wait_router_ready(rt.serial_port, FABRIC_BOOT_TIMEOUT):
+            emit(f"the router did not say it was ready within {FABRIC_BOOT_TIMEOUT / 60:.0f} min; "
+                 f"plugging the machines back in anyway")
+        # The cables come back as they were: a port shut down, an empty
+        # port or a switch that is off keeps its machine's link down.
+        relinked = 0
+        for nid in machines:
+            ns = st.nodes.get(nid)
+            for link in self.plan.ports_for(nid):
+                up = link.plugged and not devcli.held_down(self.lab, link)
+                if livenet.set_link(ns.qmp_port, link.nic_index, up, tries=3) and up:
+                    relinked += 1
+        redial = redials()
+        if machines and not redial:
+            emit("this PC's QEMU cannot redial a cable (QEMU 8.0 or later can): restart the machines "
+                 "to plug them back into the router")
+        elif machines:
+            emit(f"{relinked} machine link{'s' if relinked != 1 else ''} back up")
+        return {"machines": machines, "relinked": relinked, "redial": redial}
 
     def budget(self, only: list[str] | None = None,
                avail_mb: int | None = None) -> membudget.Budget:

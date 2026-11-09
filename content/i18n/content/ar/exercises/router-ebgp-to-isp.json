@@ -1,0 +1,21 @@
+{
+ "The lab router peers with the ISP: eBGP Established, the Internet reachable from the office and the workshop": "موجّه المختبر يتبادل المسارات مع مزوّد الإنترنت: eBGP في حالة Established، والإنترنت قابل للوصول من المكتب والورشة",
+ "The company (AS 65000, the lab router) gets its Internet link from an ISP\n(AS 65100, rtr-isp, which you also run). Bring up eBGP between them over the\nhandoff link, announce the office and workshop networks, learn the Internet's,\nand give the workshop's router a default route through OSPF. Both PCs then\nfetch the web server on the Internet with their own addresses.": "تحصل الشركة (AS 65000، موجّه المختبر) على رابط الإنترنت من مزوّد إنترنت (AS 65100، rtr-isp، الذي تديره أنت أيضاً). شغّل eBGP بينهما عبر رابط التسليم، وأعلن شبكتي المكتب والورشة، وتعلّم شبكة الإنترنت، وامنح موجّه الورشة مساراً افتراضياً عبر OSPF. بعدها يجلب الجهازان خادم الويب على الإنترنت بعنوانيهما الخاصين.",
+ "rtr-isp: FRRouting installed, forwarding on, router bgp 65100 with neighbor 198.51.100.1 remote-as 65000 and network 203.0.113.0/24": "rtr-isp: FRRouting مثبّت، وإعادة التوجيه مفعّلة، و router bgp 65100 مع neighbor 198.51.100.1 remote-as 65000 و network 203.0.113.0/24",
+ "On the router's console: router bgp 65000, neighbor 198.51.100.2 remote-as 65100": "على وحدة تحكم الموجّه: router bgp 65000, neighbor 198.51.100.2 remote-as 65100",
+ "The lab router announces 10.80.0.0/24 and 10.81.0.0/24 with network ... mask ...": "يعلن موجّه المختبر 10.80.0.0/24 و 10.81.0.0/24 باستخدام network ... mask ...",
+ "router ospf 1 on the console: default-information originate always": "router ospf 1 على وحدة التحكم: default-information originate always",
+ "pc-office and pc-edge fetch http://203.0.113.80/": "يجلب pc-office و pc-edge العنوان http://203.0.113.80/",
+ "the lab router is AS 65000 and its session to the ISP is Established": "موجّه المختبر هو AS 65000 وجلسته مع مزوّد الإنترنت في حالة Established",
+ "show ip bgp summary on the console. Active: is rtr-isp's bgpd running with neighbor 198.51.100.1 remote-as 65000? Idle with a NOTIFICATION: an AS number is wrong on one side.": "show ip bgp summary على وحدة التحكم. Active: هل يعمل bgpd في rtr-isp مع neighbor 198.51.100.1 remote-as 65000؟ Idle مع NOTIFICATION: رقم AS خاطئ على أحد الجانبين.",
+ "the lab router learned the Internet's network from BGP": "تعلّم موجّه المختبر شبكة الإنترنت من BGP",
+ "network 203.0.113.0/24 under rtr-isp's address-family ipv4 unicast, and no bgp ebgp-requires-policy there (or a route-map out): show bgp summary on rtr-isp says (Policy) otherwise": "network 203.0.113.0/24 تحت address-family ipv4 unicast في rtr-isp، و no bgp ebgp-requires-policy هناك (أو route-map out): وإلا فإن show bgp summary على rtr-isp يُظهر (Policy)",
+ "the ISP learned exactly the office and workshop networks": "تعلّم مزوّد الإنترنت شبكتي المكتب والورشة بالضبط",
+ "router bgp 65000, address-family ipv4, network 10.80.0.0 mask 255.255.255.0 and network 10.81.0.0 mask 255.255.255.0 on the console; show ip bgp there lists what it announces": "router bgp 65000, address-family ipv4, network 10.80.0.0 mask 255.255.255.0 و network 10.81.0.0 mask 255.255.255.0 على وحدة التحكم؛ ويعرض show ip bgp هناك ما يعلنه",
+ "rtr-edge has a default route from OSPF": "لدى rtr-edge مسار افتراضي من OSPF",
+ "router ospf 1, default-information originate always on the console; rtr-edge's show ip route then has O>* 0.0.0.0/0 via 10.80.0.2": "router ospf 1, default-information originate always على وحدة التحكم؛ بعدها يحتوي show ip route في rtr-edge على O>* 0.0.0.0/0 via 10.80.0.2",
+ "pc-office fetches the web server with its own address": "يجلب pc-office خادم الويب بعنوانه الخاص",
+ "traceroute -n 203.0.113.80 from pc-office shows how far it gets; the way back needs rtr-isp to know 10.80.0.0/24, and rtr-isp to forward": "يعرض traceroute -n 203.0.113.80 من pc-office إلى أين يصل؛ ويتطلب طريق العودة أن يعرف rtr-isp الشبكة 10.80.0.0/24، وأن يعيد rtr-isp التوجيه",
+ "pc-edge fetches the web server with its own address": "يجلب pc-edge خادم الويب بعنوانه الخاص",
+ "pc-edge's gateway is rtr-edge: it needs the default from OSPF to send it to the lab router, and rtr-isp needs 10.81.0.0/24 from BGP for the reply": "بوابة pc-edge هي rtr-edge: يحتاج إلى المسار الافتراضي من OSPF لإرساله إلى موجّه المختبر، ويحتاج rtr-isp إلى 10.81.0.0/24 من BGP من أجل الرد"
+}

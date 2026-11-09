@@ -1,0 +1,64 @@
+[solution]
+exercise = "first-rules-on-your-firewall"
+notes = """
+NOT fully unattended. fw01 starts with an empty disk and the OPNsense
+installer, and has no winlab agent, so the install is done at its screen as
+the lesson says: log in as installer, Install (UFS) on ada0, set the root
+password to the lab password (winlab lab password firewall-by-hand),
+reboot; console menu 1) WAN em0, LAN em1; then from pc01's browser the
+wizard: hostname fw01, domain corp.lab, DNS empty, WAN on DHCP with Block
+bogon networks unticked, LAN 192.168.1.1/24. The steps wait up to two hours
+for pc01 to lease from the firewall, then do the rest from pc01: the
+Internet test and the LAN block rule, saved through the firewall's own API
+with pc01's signed-in web session (the same rule model the Rules page
+writes, ahead of LAN's default allow) and applied.
+"""
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+$until = (Get-Date).AddHours(2)
+do {
+  ipconfig /renew | Out-Null
+  $gw = @(Get-NetIPConfiguration | Where-Object { $_.IPv4DefaultGateway } | ForEach-Object { $_.IPv4DefaultGateway.NextHop })[0]
+  $ok = $gw -match '^192\.168\.1\.' -and (Test-NetConnection 198.51.100.10 -Port 80 -InformationLevel Quiet -WarningAction SilentlyContinue)
+  if (-not $ok) { Start-Sleep 60 }
+} until ($ok -or (Get-Date) -gt $until)
+ipconfig
+(Invoke-WebRequest http://198.51.100.10/ -UseBasicParsing -TimeoutSec 15).Content
+'''
+timeout = 7500
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Add-Type @'
+using System.Net; using System.Security.Cryptography.X509Certificates;
+public class WlTrustAll : ICertificatePolicy { public bool CheckValidationResult(ServicePoint s, X509Certificate c, WebRequest r, int p) { return true; } }
+'@
+[Net.ServicePointManager]::CertificatePolicy = New-Object WlTrustAll
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$base = 'https://192.168.1.1'
+$page = Invoke-WebRequest "$base/" -UseBasicParsing -SessionVariable s
+if ($page.Content -notmatch '<input type="hidden" name="([^"]+)" value="([^"]+)"') { throw 'no sign-in form on fw01' }
+$form = @{ $Matches[1] = $Matches[2]; usernamefld = 'root'; login = '1' }
+$form['passwordfld'] = '{{winlab:lab-secret}}'
+Invoke-WebRequest "$base/" -Method Post -Body $form -WebSession $s -UseBasicParsing | Out-Null
+$p = Invoke-WebRequest "$base/ui/firewall/filter" -WebSession $s -UseBasicParsing
+if ($p.Content -notmatch 'X-CSRFToken["'']?\s*[:,]\s*["'']([^"'']+)') { throw 'not signed in to fw01 (root and the lab password)' }
+$h = @{ 'X-CSRFToken' = $Matches[1] }
+$rule = @{ rule = @{
+  enabled = '1'; action = 'block'; quick = '1'; interface = 'lan'; direction = 'in'; ipprotocol = 'inet'
+  protocol = 'TCP'; source_net = 'lan'; destination_net = 'any'; destination_port = '8080'; log = '1'
+  sequence = '1'; description = 'no 8080 from the office' } } | ConvertTo-Json -Depth 4
+$have = Invoke-RestMethod "$base/api/firewall/filter/search_rule" -Method Post -WebSession $s -Headers $h -ContentType 'application/json' -Body '{"searchPhrase":"no 8080 from the office"}'
+if (-not @($have.rows).Count) {
+  Invoke-RestMethod "$base/api/firewall/filter/add_rule" -Method Post -WebSession $s -Headers $h -ContentType 'application/json' -Body $rule
+}
+Invoke-RestMethod "$base/api/firewall/filter/apply" -Method Post -WebSession $s -Headers $h -ContentType 'application/json' -Body '{}'
+Start-Sleep 5
+Test-NetConnection 198.51.100.10 -Port 8080 -InformationLevel Quiet -WarningAction SilentlyContinue
+Test-NetConnection 198.51.100.10 -Port 80 -InformationLevel Quiet -WarningAction SilentlyContinue
+'''

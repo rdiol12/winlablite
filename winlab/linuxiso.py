@@ -150,6 +150,57 @@ DISTROS: dict[str, Distro] = {d.id: d for d in (
         license="MIT for Alpine's own work, GPL and other free licences for the packages",
         page="https://alpinelinux.org/downloads/", size_gb=0.3, memory_mb=512,
         offline="setup-alpine installs a sys-mode disk from the packages on the disc", repo=True),
+    # Proxmox: a Debian-based virtualization platform and its backup server,
+    # both AGPL-3.0, both published for anyone to download at Proxmox's own
+    # ISO folder with one SHA256SUMS file. Without a subscription they run
+    # in full (the web UI only says so once per sign-in); the lab has no
+    # internet, so their package repositories simply stay unreachable.
+    Distro(
+        id="proxmox-ve9", title="Proxmox Virtual Environment 9 (installer ISO)", short="Proxmox VE 9",
+        publisher="Proxmox Server Solutions", folder="https://enterprise.proxmox.com/iso/", sums="SHA256SUMS",
+        pattern=r"proxmox-ve_9\.\d+-\d+\.iso",
+        labels=(r"^PVE$",),
+        license=("AGPL-3.0 for Proxmox's own software, Debian's free licences for the base system; "
+                 "Proxmox publishes the ISO for anyone to download and the software runs in full without a "
+                 "subscription. \"Proxmox\" is Proxmox Server Solutions GmbH's trademark"),
+        page="https://www.proxmox.com/en/downloads/proxmox-virtual-environment", size_gb=1.6,
+        memory_mb=4096,
+        offline=("the graphical installer needs no network: it writes the whole system from the disc, asks "
+                 "for a fixed address, and the web UI answers on https port 8006 afterwards; only the package "
+                 "repositories stay out of reach"),
+        virt=("it is a KVM host out of the box: QEMU/KVM, LXC, the web UI on port 8006, vzdump backups and "
+              "a Proxmox Backup Server client")),
+    Distro(
+        id="proxmox-bs4", title="Proxmox Backup Server 4 (installer ISO)", short="Proxmox Backup Server 4",
+        publisher="Proxmox Server Solutions", folder="https://enterprise.proxmox.com/iso/", sums="SHA256SUMS",
+        pattern=r"proxmox-backup-server_4\.\d+-\d+\.iso",
+        labels=(r"^PBS$",),
+        license=("AGPL-3.0 for Proxmox's own software, Debian's free licences for the base system; "
+                 "Proxmox publishes the ISO for anyone to download and the software runs in full without a "
+                 "subscription. \"Proxmox\" is Proxmox Server Solutions GmbH's trademark"),
+        page="https://www.proxmox.com/en/downloads/proxmox-backup-server", size_gb=1.3,
+        memory_mb=2048,
+        offline=("the graphical installer needs no network: it writes the whole system from the disc, asks "
+                 "for a fixed address, and the web UI answers on https port 8007 afterwards; only the package "
+                 "repositories stay out of reach")),
+    # Ubuntu Desktop: Linux as a PC's operating system, for the desktop
+    # support lessons (CompTIA A+ Core 2's Linux items: Settings, Files,
+    # software, users, the terminal). The same checksum file as the server
+    # disc; the desktop installer installs the whole desktop from the disc,
+    # and the disc's own small package pool (dists/noble, pool/main) is an
+    # apt source with no network.
+    Distro(
+        id="ubuntu24-desktop", title="Ubuntu Desktop 24.04 LTS (installer DVD)", short="Ubuntu Desktop 24.04",
+        publisher="Canonical", folder="https://releases.ubuntu.com/24.04/", sums="SHA256SUMS",
+        pattern=r"ubuntu-24\.04(?:\.\d+)*-desktop-amd64\.iso",
+        labels=(r"^Ubuntu 24\.04",),
+        license=("free software under each package's own licence (Ubuntu's licence policy); Canonical "
+                 "publishes the ISO for anyone to download. \"Ubuntu\" is Canonical's trademark"),
+        page="https://ubuntu.com/download/desktop", size_gb=6.2, memory_mb=4096,
+        offline=("the installer installs the desktop from the disc (Default or Extended selection) and skips "
+                 "updates and third-party drivers; the disc's small package pool is an apt source after "
+                 "sudo apt-cdrom add, and the App Center's snaps need the internet the lab does not have"),
+        repo=True),
 )}
 
 
@@ -263,6 +314,8 @@ def detect(path: str | Path) -> str:
     info, tree = disc.get(".disk/info", ""), disc.get(".treeinfo", "")
     if re.match(r"Ubuntu-Server 24\.04", info):
         return "ubuntu24"
+    if re.match(r"Ubuntu 24\.04", info):
+        return "ubuntu24-desktop"
     if re.match(r"Debian GNU/Linux 13\.", info):
         return "debian13"
     rhel = re.search(r"(?m)^version\s*=\s*(9|10)\b", tree)

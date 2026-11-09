@@ -15,6 +15,7 @@ disks, network cards) change with the machine off, as on a real PC.
 
 from __future__ import annotations
 
+import json
 import ipaddress
 import re
 import threading
@@ -24,10 +25,12 @@ from pathlib import Path
 from . import appliance, devcli, editor, hardware, images, livenet, media, mediashelf, naming, netplan, paths, state, wan, wifi
 from . import linuxiso
 from . import adminui
-from . import bsdfw
+from . import android, bsdfw
+from . import netos
 from .model import CUSTOM, LINUX, WINDOWS_CLIENT, WINDOWS_SERVER, Nic
 from . import imaging
 from . import firmware, nestedvirt
+from . import pcparts
 
 # What the device shelf offers. `make` is how the machine is made:
 # "hand" boots the Setup DVD on an empty disk, "ready" clones a prepared
@@ -44,11 +47,23 @@ SHELF = [
      "images": ["win11", "win10"], "default": "win11",
      "text": "a Windows laptop with a wireless card: it joins the Wi-Fi of the access points in range"},
     {"id": "linux", "title": "Linux server", "kind": LINUX, "prefix": "lx",
-     "images": ["ubuntu", "ubuntu24", "rocky9", "rhel9", "rhel10", "debian13", "alpine-std"], "default": "ubuntu",
-     "text": "Linux you install yourself from the distribution's DVD, or Ubuntu Server ready-made"},
+     "images": ["ubuntu", "ubuntu24", "rocky9", "rhel9", "rhel10", "debian13", "alpine-std", "proxmox-ve9",
+                "proxmox-bs4"], "default": "ubuntu",
+     "text": "Linux you install yourself from the distribution's DVD (Proxmox VE and Proxmox Backup Server "
+             "too), or Ubuntu Server ready-made"},
     {"id": "firewall", "title": "Firewall", "kind": LINUX, "prefix": "fw",
      "images": ["opnsense-dvd", "pfsense-ce", "opnsense"], "default": "opnsense-dvd",
      "text": "OPNsense or pfSense CE you install yourself from the project's installer, or OPNsense ready-made; two ports or more"},
+    {"id": "vrouter", "title": "Vendor router", "kind": CUSTOM, "prefix": "vr",
+     "images": list(netos.ROUTERS), "default": "chr",
+     "text": "a router maker's own router OS in a VM: MikroTik RouterOS (CHR), VyOS, Juniper vJunos or vSRX, "
+             "Arista vEOS-lab; its real web UI and CLI, cabled into switch ports like the real box"},
+    # Shown only once a firewall maker's image is on this PC (_shelf_state):
+    # nobody gets one from winlab, so an empty entry would only tempt.
+    {"id": "othervendor", "title": "Other vendors", "kind": CUSTOM, "prefix": "vfw",
+     "images": list(netos.FIREWALLS), "default": netos.FIREWALLS[0], "imported_only": True,
+     "text": "a firewall maker's own OS from the image you imported: Fortinet FortiGate-VM or Palo Alto "
+             "Networks PA-VM; its real CLI and web UI, cabled into switch ports like the real box"},
     {"id": "iso", "title": "Your own disc", "kind": CUSTOM, "prefix": "box",
      "images": [], "default": "",
      "text": "any operating system from an ISO you add (another Linux, an older Windows)"},
@@ -78,6 +93,10 @@ SHELF = [
      "images": ["debian12"], "default": "debian12",
      "text": "the IT department's own tools on Debian 12: an asset inventory (GLPI), a wiki (DokuWiki) and a "
              "password vault (Vaultwarden), each installed by you from its pack and used from a lab PC's browser"},
+    {"id": "netops", "title": "Network operations server", "kind": LINUX, "prefix": "nms",
+     "images": ["debian12"], "default": "debian12",
+     "text": "the network team's tools on Debian 12: SNMP monitoring (LibreNMS), configuration backup (Oxidized) "
+             "and uptime checks (Uptime Kuma), each installed by you from its pack and used from a lab PC's browser"},
     {"id": "adminpc", "title": "Admin workstation", "kind": LINUX, "prefix": "admin",
      "images": ["alpine"], "default": "alpine",
      "text": "a small Linux desktop with Firefox ESR: a browser on the lab network to open the devices' own pages"},
@@ -85,6 +104,9 @@ SHELF = [
      "images": [], "default": "", "text": "a Wi-Fi access point (OpenWrt): cable it to a switch, set it up in its own web pages, laptops in range join its network"},
     {"id": "switch", "title": "Switch", "kind": "switch", "prefix": "sw",
      "images": [], "default": "", "text": "a VLAN-aware switch; cable it to the router to route it"},
+    {"id": "router", "title": "Router", "kind": "router", "prefix": "r",
+     "images": [], "default": "", "text": "another router (ISR 4321) with its own console: a branch, core or "
+                                           "edge router; cable it to switches and route between them"},
 ]
 SHELF_BY_ID = {s["id"]: s for s in SHELF}
 
@@ -122,6 +144,8 @@ def _how(node) -> str:
         return "netboot"
     if images.is_hand_install(node):
         return "hand"
+    if netos.is_disk_router(node):
+        return "appliance"  # the vendor's own disk image (winlab/netos.py)
     if node.kind == CUSTOM:
         return "iso"
     if node.kind == LINUX:
@@ -135,10 +159,16 @@ def _shelf_of(node) -> str:
         return dev
     if (node.kind == LINUX and node.image == "opnsense") or bsdfw.is_hand_firewall(node):
         return "firewall"
+    if netos.is_vendor_firewall(node):
+        return "othervendor"
+    if netos.is_router(node):
+        return "vrouter"
     if node.kind == LINUX or linuxiso.is_hand_linux(node):
         return "linux"
     if node.kind == CUSTOM and node.image not in images.HAND_INSTALL:
         return "iso"
+    if android.is_hand_android(node):
+        return "pc"  # a phone or tablet is a user's device: the PC's place (winlab/android.py)
     if node.vars.get("form") == "laptop":
         return "laptop"
     if node.kind == WINDOWS_CLIENT or (node.kind == CUSTOM and images.CATALOG[node.image].kind == WINDOWS_CLIENT):
@@ -151,9 +181,12 @@ def _os_title(node) -> str:
     if dev:
         return {"printer": "network printer", "nas": "network storage", "phone": "IP phone", "camera": "IP camera",
                 "pbx": "phone system", "ntp": "NTP server", "san": "storage array (iSCSI)",
-                "adminpc": "Linux desktop (Firefox ESR)", "doctools": "Debian 12 (admin tools server)"}[dev]
+                "adminpc": "Linux desktop (Firefox ESR)", "doctools": "Debian 12 (admin tools server)",
+                "netops": "Debian 12 (network ops)"}[dev]
     if imaging.is_netboot(node):
         return "no operating system"
+    if netos.is_router(node):
+        return netos.os_title(node)
     if node.kind == CUSTOM and node.image in images.HAND_INSTALL:
         return images.CATALOG[node.image].short
     if node.kind == CUSTOM:
@@ -203,6 +236,7 @@ def view(dash) -> dict:
     run state (live addresses come from live())."""
     lab, plan = dash.lab, dash.plan
     from . import nms  # links that went up or down since the last look: logged, to syslog and SNMP
+    from . import mail  # hand_packs: the packs a machine's lab gives it
     nms.tick(dash)
     running = _running(lab.name)
     st = state.load(lab.name)
@@ -240,16 +274,20 @@ def view(dash) -> dict:
             "installed": disk.exists(),
             "iso": str(node.vars.get("iso") or ""),
             "distro": linuxiso.boot_hint(node.image) if linuxiso.is_hand_linux(node) else
-                      bsdfw.boot_hint(node.image) if bsdfw.is_hand_firewall(node) else "",
+                      bsdfw.boot_hint(node.image) if bsdfw.is_hand_firewall(node) else
+                      netos.boot_hint(node.image) if netos.is_router(node) else
+                      android.boot_hint(node.image) if android.is_hand_android(node) else "",
             "media": shelf["machines"].get(node.id),
             "running": node.id in running, "phase": ns.phase if ns else "stopped",
             "ports": ports, "pos": layout.get(node.id),
             "agent": node.is_windows,
             "device": appliance.device_of(node),
+            "hand_packs": mail.hand_packs(node),  # what its lab hands it to install (the tools server's window)
             **_time_of(lab, node),
             "wireless": wifi.wireless(node),
             "pxe": imaging.pxe_view(lab, plan, node),
             "vtx": nestedvirt.view(lab, node, nestedvirt.accel_of(dash)),  # Hyper-V inside (nestedvirt.py)
+            "hw": pcparts.board(lab, node),  # the inside of its case, part by part (pcparts.py)
             "fw": firmware.view(lab, node, nestedvirt.accel_of(dash)),  # boot mode, Secure Boot (firmware.py)
             **(_wifi_of(lab, layout, node) if wifi.wireless(node) else {}),
             **adminui.node_view(lab, node),  # its own management pages (winlab/adminui.py)
@@ -258,6 +296,8 @@ def view(dash) -> dict:
     rports = devcli.cabled_ports(lab)
     switches = []
     for nid, net in sorted(lab.networks.items()):
+        if net.link:
+            continue  # a cable between two routers, drawn as the cable ("links")
         seg = plan.segment_of(nid)
         snet = seg.network  # the network it is part of, over a trunk to another switch
         used = len(by_switch.get(nid, []))
@@ -284,7 +324,10 @@ def view(dash) -> dict:
                    "name": devcli.hostname(lab, devcli.ROUTER),
                    "ports": [{"name": devcli.short_if(n), "network": nid,
                               "up": bool(nid) and not devcli.router_shut(lab, n)}
-                             for n, nid in devcli.router_ports(lab)]},
+                             for n, nid in devcli.router_ports(lab)],
+                   "vswitch": __import__("winlab.vswitch", fromlist=["describe"]).describe(lab)},
+        "routers": _routers_view(lab, layout, running),
+        "links": __import__("winlab.routers", fromlist=["links"]).links(lab),
         "machines": machines, "switches": switches,
         "aps": _aps_view(lab, layout, slots_after={nid: len(p) for nid, p in by_switch.items()}, running=running),
         "wan_presets": [{"id": k, "title": t, "text": l.text(), "delay_ms": l.delay_ms, "jitter_ms": l.jitter_ms,
@@ -292,6 +335,7 @@ def view(dash) -> dict:
         "shelf": _shelf_state(),
         "max_ports": MAX_PORTS,
         "faults": _faults_view(lab, plan),
+        "poe": _poe_view(dash),
         "stp": _stp_view(lab),
         "nms": nms.view(lab),
         "psec": _psec_view(lab, plan),
@@ -300,8 +344,71 @@ def view(dash) -> dict:
                         "wireshark": _wireshark_ready(), "toolkit": _toolkit_ready(),
                         "containers": _containers_ready(lab),
                         "db_clients": _db_ready(), "dsc_modules": _dsc_modules(lab), "ids_rules": _ids_ready(), "vpn_client": _vpn_ready(lab),
-                        "docs": _docs_shelf(lab), "secops": _secops_shelf(lab)},
+                        "softphone": _softphone_ready(lab),
+                        "docs": _docs_shelf(lab), "secops": _secops_shelf(lab), "bareos": _bareos_shelf(lab)},
     })
+
+
+def _other_router_cable(dash, action: str, params: dict) -> dict:
+    """A cable between one of the other routers (winlab/routers.py) and a
+    switch: into one of the switch's gigabit ports, a trunk carrying the
+    switch's VLANs, as a router's uplink to a switch is."""
+    from . import routers
+    lab = dash.lab
+    rid = routers.rid_of(str(params.get("node", "")))
+    if routers.key(rid) not in lab.devices:
+        raise WorkbenchError(f"no router {rid!r} on the bench")
+    v = routers.view(lab, rid)
+    net = params.get("network", "")
+    home = lab.networks[net].home if net in lab.networks else net
+    if home not in lab.networks:
+        raise WorkbenchError(f"no switch {home!r} on the canvas")
+    try:
+        if action == "wb-unplug":
+            devcli.unplug_router(v, home)
+            _save(dash)
+            return {"ok": True, "message": f"{home} is off router {rid}{_sync(dash)}"}
+        want = str(params.get("port") or "")
+        if want:
+            want = devcli.parse_if(want, devcli.ROUTER_IFS)
+        port = devcli.plug_router(v, home, want)
+    except devcli.CliError as exc:
+        raise WorkbenchError(str(exc).lstrip("% ")) from None
+    _save(dash)
+    short = devcli.short_if(port)
+    if devcli.router_shut(v, port):
+        return {"ok": True, "message": f"{home} cabled to router {rid}'s {short}: the port is shut down and "
+                                       f"set up on its console{_sync(dash)}"}
+    return {"ok": True, "message": f"{home} cabled to router {rid}'s {short}: the port is set up on "
+                                   f"its console{_sync(dash)}"}
+
+
+def _router_power(dash, device: str, on: bool) -> dict:
+    """One of the other routers' power switch: off, its interfaces and
+    processes go (the lab router, the switches and the other routers run
+    on); on, it starts with its startup configuration (winlab/iosnv.py)."""
+    from . import iosnv, routers
+    lab = dash.lab
+    rid = routers.rid_of(device) or device
+    own = lab.devices.get(routers.key(rid))
+    if own is None or not rid or rid == "router":
+        raise WorkbenchError(f"no router {rid!r} that has a power switch of its own")
+    if on == (own.get("power") != "off"):
+        return {"ok": True, "message": f"router {rid} is already on" if on else f"router {rid} is already off"}
+    if on:
+        own.pop("power", None)
+        data = iosnv.load(lab.name) or {}
+        snap = (data.get("devices") or {}).get(routers.key(rid))
+        if snap is not None or lab.workbench:
+            iosnv.revert(routers.view(lab, rid), "router", None if snap is None or snap.get("erased") else snap)
+    else:
+        own["power"] = "off"
+    dash.__dict__.get("dev_consoles", {}).pop(routers.key(rid), None)
+    _save(dash)
+    if on:
+        return {"ok": True, "message": f"router {rid} powered on: it starts with its startup configuration"
+                                       f"{_sync(dash)}"}
+    return {"ok": True, "message": f"router {rid} powered off{_sync(dash)}"}
 
 
 def _switch_power(dash, sw: str, on: bool) -> dict:
@@ -313,7 +420,7 @@ def _switch_power(dash, sw: str, on: bool) -> dict:
         raise WorkbenchError(f"no switch {sw!r} on the canvas")
     own = devcli.settings(lab, f"sw:{sw}")
     if on == (own.get("power") != "off"):
-        return {"ok": True, "message": f"{sw} is already {'on' if on else 'off'}"}
+        return {"ok": True, "message": f"{sw} is already on" if on else f"{sw} is already off"}
     note = ""
     if on:
         own.pop("power", None)
@@ -322,6 +429,10 @@ def _switch_power(dash, sw: str, on: bool) -> dict:
         snap = (data.get("devices") or {}).get(f"sw:{sw}")
         if snap is not None or lab.workbench:
             iosnv.revert(lab, f"sw:{sw}", None if snap is None or snap.get("erased") else snap)
+        from . import iosboot  # its image, and the Break window opens
+        iosboot.power_on(lab, [f"sw:{sw}"])
+        from . import poe  # a switch that starts powers its PoE ports in port order
+        poe.restarted(lab.name, sw)
         dash.__dict__.get("dev_consoles", {}).pop(f"sw:{sw}", None)
     else:
         own["power"] = "off"
@@ -332,7 +443,25 @@ def _switch_power(dash, sw: str, on: bool) -> dict:
         if net is not None and net.home == sw:
             con._set_link(link, on and not devcli.held_down(dash.lab, link))
     note = _sync(dash)
-    return {"ok": True, "message": f"{sw} powered {'on: it starts with its startup configuration' if on else 'off: its ports are dark'}{note}"}
+    if on:
+        return {"ok": True, "message": f"{sw} powered on: it starts with its startup configuration{note}"}
+    return {"ok": True, "message": f"{sw} powered off: its ports are dark{note}"}
+
+
+def _routers_view(lab, layout: dict, running) -> list[dict]:
+    """The other routers on the canvas (winlab/routers.py)."""
+    from . import routers
+    out = []
+    for i, rid in enumerate(routers.extra(lab)):
+        v = routers.view(lab, rid)
+        out.append({"id": routers.key(rid), "rid": rid, "name": devcli.hostname(v, devcli.ROUTER),
+                    "pos": layout.get(routers.key(rid)) or [640 + 160 * i, 60],
+                    "running": "fabric" in running and routers.powered(lab, rid),
+                    "off": not routers.powered(lab, rid),
+                    "ports": [{"name": devcli.short_if(n), "network": nid,
+                               "up": bool(nid) and not devcli.router_shut(v, n)}
+                              for n, nid in devcli.router_ports(v)]})
+    return out
 
 
 def _port_speed(lab, link) -> dict:
@@ -348,6 +477,13 @@ def _secops_shelf(lab):
     (None elsewhere): Greenbone, software, the Wazuh agent, the SCT."""
     from . import secops
     return secops.shelf_view(lab)
+
+
+def _bareos_shelf(lab):
+    """The Bareos client stick and the head office's disaster button, for
+    the disaster-recovery lab (None elsewhere)."""
+    from . import bareos
+    return bareos.shelf_view(lab)
 
 
 def _containers_ready(lab) -> dict:
@@ -371,6 +507,11 @@ def _toolkit_ready() -> bool:
 def _wireshark_ready() -> bool:
     from . import wireshark
     return wireshark.ready()
+
+
+def _softphone_ready(lab) -> bool | None:
+    from . import softphone  # the softphone stick (winlab/softphone.py); None hides the button
+    return softphone.shelf_ready(lab)
 
 
 def _vpn_ready(lab) -> bool | None:
@@ -424,6 +565,13 @@ def _power_of(lab, plan, running, by_switch, out: dict) -> dict:
     return out
 
 
+def _poe_view(dash) -> dict:
+    from . import poe  # the switches' models, PoE budgets, dark devices (winlab/poe.py)
+    if poe.any_poe(dash.lab) and "fabric" in _running(dash.lab.name):
+        poe.settle_dash(dash)  # a cable moved or the switch restarted: who has power now
+    return poe.view(dash.lab, dash.plan)
+
+
 def _stp_view(lab) -> dict:
     from . import stp  # the switches' spanning tree, port roles, a storm (winlab/stp.py)
     return stp.view(lab)
@@ -455,8 +603,10 @@ def _wan_of(lab, sw: str) -> dict | None:
 def _wifi_of(lab, layout, node) -> dict:
     ap_id = wifi.joined(lab, node)
     ap = wifi.aps(lab).get(ap_id)
-    return {"wifi": {"ap": ap_id, "ssid": ap["ssid"] if ap else "",
-                     "bars": wifi.bars(layout, ap, node.id) if ap else 0},
+    ssid = wifi.joined_ssid(lab, node) if ap else ""
+    w = wifi._wlan_of(ap, ssid) if ap else None
+    return {"wifi": {"ap": ap_id, "ssid": ssid,
+                     "bars": wifi.bars(layout, ap, node.id, w["channel"] if w else None) if ap else 0},
             "heard": wifi.heard(lab, layout, node), "profiles": sorted(wifi.profiles(node))}
 
 
@@ -475,7 +625,7 @@ def _aps_view(lab, layout, slots_after: dict[str, int], running=frozenset()) -> 
                     "vlans": [{"id": v.id, "vlan": v.vlan_no, "cidr": v.cidr}
                               for v in devcli.vlans_of(lab, net.home)] if net else [],
                     "clients": wifi.clients(lab, ap["id"]), "noisy": noisy.get(ap["id"], []),
-                    "range": wifi.RANGE_5GHZ if ap["channel"] >= 36 else wifi.RANGE,
+                    "range": round(wifi._reach(ap)), "cell": round(wifi.cell(ap)),
                     # its OpenWrt VM (winlab/openwrt.py): there while the cable is in
                     "vm": {"present": ap["id"] in lab.nodes, "running": ap["id"] in running,
                            "phase": (st.nodes[ap["id"]].phase if st and ap["id"] in st.nodes else "stopped")}})
@@ -492,7 +642,12 @@ def _shelf_state() -> list[dict]:
             e = images.CATALOG.get(i)
             if e is None:
                 continue
-            if e.kind in (linuxiso.KIND, bsdfw.KIND):  # an installer: installed by hand (linuxiso.py, bsdfw.py)
+            if e.kind == netos.KIND:  # a vendor's router OS: its disk image, or VyOS's ISO (netos.py)
+                v = netos.VENDORS[i]
+                imgs.append({"id": i, "title": e.short, "ready": netos.ready(i), "dvd": netos.ready(i),
+                             "fetch": v.fetch, "nested": v.nested, "web": v.web[0] if v.web else "",
+                             "hand": v.form == netos.INSTALLER, "memory_mb": v.memory_mb})
+            elif e.kind in (linuxiso.KIND, bsdfw.KIND):  # an installer: installed by hand (linuxiso.py, bsdfw.py)
                 imgs.append({"id": i, "title": e.short, "ready": False, "hand": True,
                              "dvd": images.installer_path(i).exists()})
             elif i == "alpine":  # the router's own Alpine, which the devices run too
@@ -508,6 +663,10 @@ def _shelf_state() -> list[dict]:
         if s["id"] == "iso":
             imgs = [{"id": c.id, "title": c.title, "ready": c.iso.exists(), "dvd": True}
                     for c in images.custom_images().values()]
+        if s.get("imported_only"):
+            imgs = [i for i in imgs if i["ready"]]
+            if not imgs:
+                continue  # Other vendors: on the shelf only once an image is imported
         out.append({**{k: s[k] for k in ("id", "title", "text", "default")}, "images": imgs})
     return out
 
@@ -603,15 +762,33 @@ def _act(dash, action: str, params: dict) -> dict:
         pos = _xy(params)
         if shelf["id"] == "ap":
             try:
-                ap_id = wifi.add_ap(lab, pos, (params.get("id") or "").strip().lower())
+                vendor = str(params.get("vendor") or "openwrt")
+                ap_id = wifi.add_ap(lab, pos, (params.get("id") or "").strip().lower(), vendor=vendor)
             except wifi.WifiError as exc:
                 raise WorkbenchError(str(exc)) from None
             _save(dash)
+            how = ("its own pages (LuCI) from a browser on a lab PC" if vendor == "openwrt" else
+                   "winlab's UniFi-style controller (apt-get install unifi from the unifi stick on a lab Ubuntu server), which adopts it"
+                   if vendor == "unifi" else "the Catalyst 9800-style controller it joins (add one from the same shelf)"
+                   if vendor == "lap" else f"its {wifi.VENDORS[vendor]} web pages or CLI (SSH) from a lab PC")
             return {"ok": True, "id": wifi.PREFIX + ap_id,
-                    "message": f"{ap_id} added: cable it to a switch to power it, then set it up in its own pages (LuCI) from a browser on a lab PC"}
+                    "message": f"{ap_id} added: cable it to a switch to power it, then set it up in {how}"}
+        if shelf["id"] == "router":
+            from . import routers
+            try:
+                rid = routers.add(lab, (params.get("id") or "").strip().lower())
+            except routers.RouterError as exc:
+                raise WorkbenchError(str(exc)) from None
+            if pos:
+                lab.layout[routers.key(rid)] = pos
+            _save(dash)
+            return {"ok": True, "id": routers.key(rid),
+                    "message": f"router {rid} added: its ports come shut down; cable it to a switch and "
+                               f"set it up on its console"}
         if shelf["id"] == "switch":
             nid = (params.get("id") or "").strip().lower() or _free_id(lab.networks, "sw")
             cidr = params.get("cidr") or editor.next_free_subnet(lab, base="192.168.0.0/16")
+            editor.check_new_switch(lab, nid, str(cidr))
             net = editor.add_network(lab, nid, cidr=cidr)
             net.routed = False
             if pos:
@@ -645,6 +822,14 @@ def _act(dash, action: str, params: dict) -> dict:
             if bsdfw.is_image(image):
                 images.hand_media(image)  # OPNsense fetched, pfSense CE imported, in Setup
                 kind = CUSTOM
+        elif shelf["id"] in ("vrouter", "othervendor"):
+            if image not in shelf["images"]:
+                what = "Vendor router" if shelf["id"] == "vrouter" else "machine from Other vendors"
+                raise WorkbenchError(f"a {what} runs one of {', '.join(shelf['images'])}")
+            try:
+                netos.check_media(image)  # say now, not at power-on, that the image is missing
+            except netos.NetOsError as exc:
+                raise WorkbenchError(str(exc)) from None
         elif shelf["id"] == "iso" and not image:
             raise WorkbenchError("add your ISO first (Your own disc > Add an ISO)")
         taken = set(lab.nodes)
@@ -673,6 +858,12 @@ def _act(dash, action: str, params: dict) -> dict:
             bsdfw.prepare_node(node)  # the memory its installer wants, a firewall-sized disk
         if linuxiso.is_hand_linux(node):
             node.memory_mb = linuxiso.DISTROS[image].memory_mb  # what its installer needs
+        if netos.is_router(node):
+            netos.prepare_node(node, lab.workbench)  # the vendor's memory and processors, its ports
+        kit = shelf["id"] == "pc" and str(params.get("kit", "")).lower() in ("1", "true", "yes", "on")
+        if kit:
+            from . import pcbuild  # an empty case: the student builds the PC in its Hardware tab
+            pcbuild.make_kit(node)
         if pos:
             lab.layout[node.id] = pos
         _save(dash)
@@ -685,6 +876,18 @@ def _act(dash, action: str, params: dict) -> dict:
             what = (f"boots the {images.CATALOG[image].short} installer on an empty disk: cable WAN and LAN "
                     f"(em0 is port 1), power it on and install it on its screen, then assign the interfaces "
                     f"and finish the setup from a lab PC's browser")
+        if netos.is_router(node):
+            v = netos.VENDORS[image]
+            what = (f"runs {v.short}, the vendor's own OS: cable its ports "
+                    f"({', '.join(netos.port_names(image, len(node.nics)))}) to switches and power it on; "
+                    f"sign in on its Terminal window as {v.login}")
+            if v.form == netos.INSTALLER:
+                what += "; it boots the live system: install image puts it on its disk"
+            accel = getattr(dash, "accel", "") or ""
+            if v.nested and accel:
+                ok, why = netos.can_run(node, accel)
+                if not ok:
+                    what += f". It will not start on this PC: {why}"
         if shelf["id"] == "server" and params.get("edition"):
             from .servercore import EDITIONS, CORE
             core = EDITIONS.get(str(params["edition"]).lower()) == CORE
@@ -715,10 +918,18 @@ def _act(dash, action: str, params: dict) -> dict:
             node.vars["packs"] = list(doctools.PACKS)
             what += ("; it is a plain Debian 12 server: plug in the glpi, dokuwiki and vaultwarden package sticks "
                      "from its Settings (winlab docs fetch first) and install each one yourself")
+        if shelf["id"] == "netops":
+            from . import netops  # its three packs: Setup offers them, its Settings plugs them in
+            node.vars["packs"] = list(netops.PACKS)
+            what += ("; it is a plain Debian 12 server: plug in the librenms, oxidized and uptime-kuma package "
+                     "sticks from its Settings (winlab netops fetch first) and install each one yourself")
         if shelf["id"] == "laptop" and not images.is_hand_install(node):
             what = "join the Wi-Fi of an access point in range from its panel, and power it on"
         elif shelf["id"] == "laptop":
             what += "; it joins the Wi-Fi of an access point in range from its panel"
+        if kit:
+            what = ("an empty case: open its Hardware tab, fit the board, processor, cooler, memory, power "
+                    "supply, fans and system drive, plug the cables in, then power it on")
         return {"ok": True, "id": node.id, "message": f"{node.id} added: {what}"}
 
     if action in ("wb-tray", "wb-job", "wb-tray-clear", "wb-printer", "wb-line"):
@@ -731,7 +942,41 @@ def _act(dash, action: str, params: dict) -> dict:
         editor.set_layout(lab, positions)
         said = wifi.settle(lab, _auto_layout(lab))
         _save(dash)
+        # The real air's positions follow the canvas too (winlab/vwifi.py):
+        # the router's vwifi-server measures range and loss from them.
+        from . import vwifi
+        moved = {m.id for m in vwifi.members(lab)} | {wifi.PREFIX + m.id for m in vwifi.members(lab)}
+        if vwifi.real_air(lab) and moved & set(positions):
+            vwifi.push(lab, _auto_layout(lab))
         return {"ok": True, "message": "; ".join(said) + (_sync(dash) if said else ""), "wifi": bool(said)}
+
+    if action == "wb-rlink":
+        from . import routers
+        try:
+            ports = []
+            for side in ("a", "b"):
+                dev = str(params.get(side, ""))
+                want = str(params.get(side + "port") or "")
+                ports.append(devcli.parse_if(want, devcli.ROUTER_IFS) if want else "")
+            nid = routers.connect(lab, str(params.get("a", "")), ports[0], str(params.get("b", "")), ports[1])
+        except (routers.RouterError, devcli.CliError) as exc:
+            raise WorkbenchError(str(exc).lstrip("% ")) from None
+        _save(dash)
+        ends = routers.link_ends(dash.lab, nid)
+        said = " to ".join(f"{devcli.hostname(routers.view(dash.lab, routers.rid_of(d)), 'router')} "
+                           f"{devcli.short_if(p)}" for d, p in ends)
+        return {"ok": True, "id": nid, "message": f"a cable from {said}: give each end an address on its "
+                                                  f"console{_sync(dash)}"}
+
+    if action == "wb-unplug" and str(params.get("network", "")) in lab.networks \
+            and lab.networks[str(params["network"])].link:
+        from . import routers
+        routers.disconnect(lab, str(params["network"]))
+        _save(dash)
+        return {"ok": True, "message": f"the cable between the routers is out{_sync(dash)}"}
+
+    if action in ("wb-cable", "wb-unplug") and str(params.get("node", "")).startswith("router:"):
+        return _other_router_cable(dash, action, params)
 
     if action in ("wb-cable", "wb-unplug") and params.get("node") not in ("switch", "router") \
             and not str(params.get("node", "")).startswith(wifi.PREFIX):
@@ -741,6 +986,14 @@ def _act(dash, action: str, params: dict) -> dict:
     if action in ("wb-fault", "wb-drill"):
         from . import physfaults
         return physfaults.act(dash, action, params)
+
+    if action == "wb-cabletest":  # the technician's cable tester and toner (winlab/cabletest.py)
+        from . import cabletest
+        return cabletest.act(dash, params)
+
+    if action == "wb-poe":  # the switch's model and its PoE budget (winlab/poe.py)
+        from . import poe
+        return poe.act(dash, params)
 
     if action == "wb-cable":
         net = params.get("network", "")
@@ -776,8 +1029,11 @@ def _act(dash, action: str, params: dict) -> dict:
             if lab.networks[home].routed:
                 return {"ok": True, "message": f"{home} cabled to the router's {short}: "
                                                f"{lab.networks[home].router_ip} is its gateway{_sync(dash)}"}
-            return {"ok": True, "message": f"{home}'s uplink cabled to the router's {short}: the port is "
-                                           f"{'shut down and ' if devcli.router_shut(lab, port) else ''}has "
+            if devcli.router_shut(lab, port):
+                return {"ok": True, "message": f"{home}'s uplink cabled to the router's {short}: the port is "
+                                               f"shut down and has no address yet; set it up on the router's "
+                                               f"console{_sync(dash)}"}
+            return {"ok": True, "message": f"{home}'s uplink cabled to the router's {short}: the port has "
                                            f"no address yet; set it up on the router's console{_sync(dash)}"}
         idx = int(params.get("nic", 0) or 0)
         if node in lab.nodes and idx in wifi.wireless(lab.nodes[node]):
@@ -871,6 +1127,18 @@ def _act(dash, action: str, params: dict) -> dict:
         _save(dash)
         return {"ok": True, "message": f"{net.id} updated{_sync(dash)}"}
 
+    if action == "wb-rm" and str(params.get("id", "")).startswith("router:"):
+        from . import routers
+        rid = routers.rid_of(params["id"])
+        if routers.key(rid) not in lab.devices:
+            raise WorkbenchError(f"no router {rid!r} on the bench")
+        if devcli.cabled_ports(routers.view(lab, rid)):
+            raise WorkbenchError(f"router {rid} still has cables in it; unplug them first")
+        routers.remove(lab, rid)
+        dash.__dict__.get("dev_consoles", {}).pop(routers.key(rid), None)
+        _save(dash)
+        return {"ok": True, "message": f"router {rid} removed{_sync(dash)}"}
+
     if action == "wb-rm":
         what = params.get("id", "")
         running = _running(lab.name)
@@ -916,11 +1184,18 @@ def _act(dash, action: str, params: dict) -> dict:
         lab.layout.pop(node, None)
         lab.devices.pop("san:" + node, None)  # a storage array's saved configuration (winlab/san.py)
         _save(dash)
-        return {"ok": True, "message": f"{node} removed (its disk stays until you delete the lab "
-                                       f"folder; a machine added with the same name starts afresh)"}
+        from . import mylabs
+        parked = mylabs.park_machine(lab.name, node)
+        return {"ok": True, "message": f"{node} removed" + (
+            " (its disks are put aside: Undo brings it back as it was, and a new machine with the same "
+            "name starts afresh)" if parked else "")}
 
     if action == "wb-parts":
         return _parts(dash, params)
+
+    if action == "wb-hw":  # the machine's hardware view: parts dragged in and out (winlab/pcparts.py)
+        from . import pcparts
+        return pcparts.act(dash, params)
 
     if action == "wb-ap":
         return _ap(dash, params)
@@ -975,6 +1250,9 @@ def _act(dash, action: str, params: dict) -> dict:
     if action.startswith("wb-wireshark-"):  # the Wireshark stick onto the shelf (winlab/wireshark.py)
         from . import wireshark
         return wireshark.act(dash, action, params)
+    if action.startswith("wb-softphone-"):  # the softphone stick onto the shelf (winlab/softphone.py)
+        from . import softphone
+        return softphone.act(dash, action, params)
     if action.startswith("wb-ra-"):  # the VPN client stick onto the shelf (winlab/remoteaccess.py)
         from . import remoteaccess
         return remoteaccess.act(dash, action, params)
@@ -990,6 +1268,12 @@ def _act(dash, action: str, params: dict) -> dict:
     if action.startswith("wb-ids-"):  # the Suricata rules stick onto the shelf (winlab/ids.py)
         from . import ids
         return ids.act(dash, action, params)
+    if action.startswith("wb-bareos-"):  # the Bareos client stick onto the shelf (winlab/bareos.py)
+        from . import bareos
+        return bareos.act(dash, action, params)
+    if action.startswith("wb-dr-"):  # the head office lost, rebuilt (winlab/drsite.py)
+        from . import drsite
+        return drsite.act(dash, action, params)
     if action.startswith("wb-secops-"):  # Greenbone, software, Wazuh agent, SCT sticks (winlab/secops.py)
         from . import secops
         return secops.act(dash, action, params)
@@ -1002,6 +1286,9 @@ def _act(dash, action: str, params: dict) -> dict:
 
     if action == "wb-cli":
         return cli(dash, params.get("device", ""), params.get("line"), params.get("complete"))
+
+    if action == "wb-rtpower":
+        return _router_power(dash, str(params.get("id", "")), params.get("on") in (True, "1", "true", "on"))
 
     if action == "wb-swpower":
         return _switch_power(dash, str(params.get("network", "")), params.get("on") in (True, "1", "true", "on"))
@@ -1139,7 +1426,11 @@ def _ap_read(dash, params: dict, reader=None) -> dict:
         wireless, network = str(params.get("wireless") or ""), str(params.get("network") or "")
     else:
         try:
-            wireless, network = (reader or wifi.read_ap)(lab.name, ap_id)
+            if reader is None:
+                rows = wifi.client_rows(lab, _auto_layout(lab), ap_id)
+                wireless, network = wifi.read_ap(lab.name, ap_id, json.dumps(rows))
+            else:
+                wireless, network = reader(lab.name, ap_id)
         except openwrt.OpenWrtError as exc:
             return {"ok": False, "message": str(exc), "changed": False}
     said = wifi.apply_wireless(lab, ap_id, wireless, network, when=time.strftime("%H:%M:%S"))
@@ -1194,7 +1485,11 @@ def _ap_reset(dash, params: dict) -> dict:
         raise WorkbenchError("no such access point")
     factory = str(params.get("hold") or "") in ("1", "true")
     script = "(sleep 1; reboot) >/dev/null 2>&1 &"
-    if factory:
+    vendor = wifi.aps(lab)[ap_id]["vendor"]
+    if factory and vendor != "openwrt":
+        # the vendor's own factory state (winlab/apos), then a restart
+        script = f"(cd {openwrt.APOS_DIR} && python3 -m apos factory) >/dev/null 2>&1; sync; " + script
+    elif factory:
         script = (f"cat > /etc/config/wireless <<'WINLAB_EOF'\n{openwrt.uci_wireless()}WINLAB_EOF\n"
                   "passwd -d root >/dev/null 2>&1; sync; " + script)
     try:
@@ -1410,7 +1705,11 @@ def packets(dash, reader: Live) -> dict:
 
 def console(dash, device: str) -> devcli.Console:
     """The device's console session, kept while the desktop runs."""
-    if device != devcli.ROUTER and devcli.switch_id(device) not in devcli.switches(dash.lab):
+    from . import routers
+    if routers.rid_of(device):
+        if routers.key(routers.rid_of(device)) not in dash.lab.devices:
+            raise WorkbenchError(f"no device {device!r} with a console")
+    elif device != devcli.ROUTER and devcli.switch_id(device) not in devcli.switches(dash.lab):
         raise WorkbenchError(f"no device {device!r} with a console")
     consoles = dash.__dict__.setdefault("dev_consoles", {})
     con = consoles.get(device)

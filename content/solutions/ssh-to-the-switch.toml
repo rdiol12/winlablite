@@ -1,0 +1,46 @@
+[solution]
+exercise = "ssh-to-the-switch"
+notes = "admin's secret is the lab secret. pc01's OpenSSH gets the password from SSH_ASKPASS (no terminal), and the switch's host key goes into C:\\Users\\Public\\.ssh\\known_hosts (ssh-keyscan, compared with show ip ssh by a person)."
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface vlan 1
+ip address 10.10.10.2 255.255.255.0
+no shutdown
+exit
+ip default-gateway 10.10.10.1
+hostname CORP-SW1
+ip domain-name corp.lab
+crypto key generate rsa modulus 2048
+ip ssh version 2
+username admin privilege 15 secret {{winlab:lab-secret}}
+line vty 0 4
+login local
+transport input ssh
+end
+copy running-config startup-config
+startup-config
+show ip ssh
+'''
+wait = 5
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+$sw = '10.10.10.2'
+New-Item -ItemType Directory -Force C:\Users\Public\.ssh | Out-Null
+$kh = 'C:\Users\Public\.ssh\known_hosts'
+ssh-keyscan -t rsa $sw 2>$null | Add-Content -Path $kh
+$ask = "$env:TEMP\wl-askpass.cmd"
+Set-Content -Path $ask -Value "@echo {{winlab:lab-secret}}" -Encoding ASCII
+$env:SSH_ASKPASS = $ask
+$env:SSH_ASKPASS_REQUIRE = 'force'
+$env:DISPLAY = 'localhost:0'
+"show running-config | include hostname`nexit`n" | ssh -tt -o UserKnownHostsFile=$kh -o StrictHostKeyChecking=accept-new admin@$sw
+Remove-Item $ask -Force
+'''

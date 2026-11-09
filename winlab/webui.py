@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import sys
 import re
 import threading
 import time
@@ -22,7 +23,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__, appwindow, diagram, edition, hardware, hostprobe, images, media, naming, netplan, paths, state, viewer, wsbridge
+from . import __version__, appwindow, drawio, edition, hardware, hostprobe, images, media, naming, netplan, paths, state, viewer, wsbridge
+from . import trialparts as _trialparts
 from .providers.qemu import hardware_of
 from .model import Lab
 from .schema import LabError
@@ -30,6 +32,18 @@ from .schema import load as load_lab
 
 LAST_LAB = paths.VAR / "last-lab"
 FALLBACK_LAB = "ad-ds-basics"
+
+
+EDIT_WAIT = 60.0  # seconds a change waits for the one before it
+
+
+def _file_stamp(p) -> tuple:
+    """What changes when a file is written: its size and modification time."""
+    try:
+        st = Path(p).stat()
+    except (OSError, TypeError):
+        return ()
+    return (st.st_mtime_ns, st.st_size)
 
 
 def lab_names() -> list[str]:
@@ -91,7 +105,7 @@ def page_bytes() -> bytes:
            + json.dumps(list(edition.CORE_HIDDEN_WINDOWS)) + ";</script>")
     return page.replace(b"<head>", b"<head>" + tag.encode(), 1)
 
-DOCS = {"README": "README.md", "CURRICULUM": "CURRICULUM.md", "LICENSING": "LICENSING.md"}
+DOCS = {"README": "README.md", "CURRICULUM": "CURRICULUM.md", "LICENSING": "LICENSING.md", "EULA": "EULA.txt"}
 
 _MIME = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
          ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8",
@@ -102,7 +116,10 @@ _MIME = {".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; char
 # Long jobs by name: a label for the tray and the Setup window, and how long
 # they usually take, so the bar can estimate when the job itself cannot report.
 JOB_INFO = {
-    "bootstrap": ("Fetch the QEMU runtime", 300),
+    "bootstrap": (("Set up QEMU from this PC's packages" if sys.platform.startswith("linux")
+                   else "Fetch the QEMU runtime"), 300),
+    "install-qemu": ("Install QEMU with the package manager", 300),
+    "kvm-access": ("Give this user access to KVM", 60),
     "prepare-fabric": ("Prepare the network fabric base", 600),
     "viewer": ("Fetch the console viewer", 60),
     "virtio-fetch": ("Fetch the virtio drivers", 600),
@@ -115,15 +132,22 @@ JOB_INFO = {
     "wireshark-fetch": ("Fetch Wireshark", 240),
     "toolkit-fetch": ("Fetch the admin toolkit", 120),
     "toolkit-sysinternals-fetch": ("Fetch the Sysinternals Suite", 90),
+    "toolkit-windbg-fetch": ("Fetch WinDbg", 240),
     "webmin-fetch": ("Fetch Webmin", 180),
+    "termshark-fetch": ("Fetch Termshark", 60),
     "ctrimages-fetch": ("Fetch the container images", 300),
     "k3s-fetch": ("Fetch k3s", 300),
     "dockerwin-fetch": ("Fetch Docker for Windows", 90),
+    "kubeadm-fetch": ("Fetch Kubernetes for kubeadm", 900),
+    "helm-fetch": ("Fetch Helm", 60),
     "dbclients-fetch": ("Fetch the database clients", 420),
     "idsrules-fetch": ("Fetch the ET Open rules", 120),
+    "azure-fetch": ("Fetch the lab's Azure (floci-az, restic, rest-server, the Azure CLI, AzCopy, Bicep)", 420),
+    "aws-fetch": ("Fetch the lab's AWS (moto, the AWS CLI)", 300),
     "wireguard-fetch": ("Fetch WireGuard for Windows", 60),
     "dscmodules-fetch": ("Fetch the DSC modules", 120),
     "glpiagent-fetch": ("Fetch the GLPI Agent", 60),
+    "softphone-fetch": ("Fetch MicroSIP, the softphone", 60),
     "secops-fetch": ("Fetch security operations media", 900),
     "drop": ("Copy a file into a machine", 60),
     "roles": ("Apply roles", 900),
@@ -137,8 +161,11 @@ JOB_INFO = {
     "iso-import": ("Import the Windows ISO", 240),
     "linuxiso-fetch": ("Fetch a Linux installer DVD", 900),
     "fwiso-fetch": ("Fetch a firewall installer", 600),
+    "netos-fetch": ("Fetch a vendor router image", 600),
+    "netos-import": ("Import a vendor router image", 600),
     "mecm-prepare": ("Build the Configuration Manager disc", 1800),
     "inherited-handover": ("Hand over the company", 5400),
+    "aidc-handover": ("Hand over the data center", 3600),
     "enable-whp": ("Turn on Windows Hypervisor Platform", 120),
 }
 # A job reports its own overall percent with this prefix (Jobs records it and
@@ -158,9 +185,11 @@ def _wireshark_summary() -> dict:
 # The Setup steps Get everything ready runs by itself, in Setup's order: all
 # of them download from a publisher or build from what is already on this PC.
 AUTO_JOBS = ("bootstrap", "prepare", "virtio-fetch", "appliance-fetch", "pack-fetch", "exporter-fetch",
-            "wac-fetch", "linuxiso-fetch", "fwiso-fetch", "mailclient-fetch", "ctrimages-fetch", "k3s-fetch",
-            "dockerwin-fetch", "dbclients-fetch", "dscmodules-fetch", "idsrules-fetch", "wireguard-fetch",
-            "wireshark-fetch", "webmin-fetch", "glpiagent-fetch", "secops-fetch")
+            "wac-fetch", "linuxiso-fetch", "fwiso-fetch", "netos-fetch", "mailclient-fetch", "ctrimages-fetch", "k3s-fetch",
+            "dockerwin-fetch", "kubeadm-fetch", "helm-fetch", "dbclients-fetch", "dscmodules-fetch", "idsrules-fetch",
+            "azure-fetch", "aws-fetch", "wireguard-fetch",
+            "wireshark-fetch", "webmin-fetch", "glpiagent-fetch", "secops-fetch", "termshark-fetch",
+            "softphone-fetch")
 for _img in images.WINDOWS_IMAGES:
     JOB_INFO[f"prepare-{_img}"] = (f"Prepare the {images.CATALOG[_img].short} base",
                                    1800 if _img.endswith("-core") else 2700)
@@ -186,7 +215,8 @@ class Jobs:
         q: queue.Queue = queue.Queue()
         label, typical = JOB_INFO.get(name, (name.replace("-", " "), 600))
         rec = {"id": job_id, "name": name, "label": label, "typical": typical,
-               "started": time.time(), "finished": 0.0, "ok": None, "percent": None, "last": ""}
+               "started": time.time(), "finished": 0.0, "ok": None, "percent": None, "last": "",
+               "params": {}}
         with self._lock:
             self._queues[job_id] = q
             self._records[job_id] = rec
@@ -212,11 +242,17 @@ class Jobs:
                         rec["percent"] = min(100, int(float(m.group(1))))
 
         def run() -> None:
+            # This job's downloads report to its own bar and print whole,
+            # named lines, so parallel fetches don't overwrite each other.
+            from .bootstrap import set_progress_sink
+            set_progress_sink(emit)
             try:
                 target(emit)
                 rec["ok"] = True
                 q.put("__done__:0")
             except Exception as exc:  # noqa: BLE001 surface any failure to the UI
+                from . import applog
+                applog.write(f"job {rec.get('name', '')}", str(exc), exc)
                 rec["ok"] = False
                 rec["last"] = f"error: {exc}"[:160]
                 q.put(f"error: {exc}")
@@ -226,6 +262,32 @@ class Jobs:
 
         threading.Thread(target=run, daemon=True).start()
         return job_id
+
+    @staticmethod
+    def what(params: dict | None) -> dict:
+        """What a job works on (its image, pack or kind), so the same fetch
+        pressed twice, or pressed and then reached by Get everything ready,
+        is known to be one job."""
+        return {k: str(params[k]) for k in ("image", "pack", "kind") if params and params.get(k)}
+
+    def tag(self, job_id: str, params: dict | None) -> None:
+        with self._lock:
+            rec = self._records.get(job_id)
+            if rec is not None:
+                rec["params"] = self.what(params)
+
+    def find_running(self, name: str, params: dict | None = None) -> dict | None:
+        """The running job of that name working on the same thing, or None."""
+        want = self.what(params)
+        with self._lock:
+            for rec in self._records.values():
+                if rec["name"] == name and not rec["finished"] and rec["params"] == want:
+                    return rec
+        return None
+
+    def record(self, job_id: str) -> dict | None:
+        with self._lock:
+            return self._records.get(job_id)
 
     def _prune(self) -> None:
         cut = time.time() - KEEP_DONE
@@ -283,6 +345,11 @@ def _glpiagent_summary() -> dict:
     return doctools.summary()["agent"]
 
 
+def _softphone_summary() -> dict:
+    from . import softphone  # MicroSIP: the softphone stick for the lab's Windows PCs
+    return softphone.summary()
+
+
 def _vpnclient_summary() -> dict:
     from . import remoteaccess  # WireGuard for Windows: the VPN client stick
     return remoteaccess.summary()
@@ -298,6 +365,16 @@ def _secops_summary() -> dict:
     return secops.summary()
 
 
+def _azure_summary() -> dict:
+    from . import azure  # the lab's Azure on cloud01: floci-az, restic, rest-server
+    return azure.summary()
+
+
+def _aws_summary() -> dict:
+    from . import aws  # the lab's AWS: moto on cloud01, the AWS CLI on ops01
+    return aws.summary()
+
+
 def _idsrules_summary() -> dict:
     from . import ids  # ET Open for the Suricata sensor: the Suricata rules stick
     return ids.summary()
@@ -310,6 +387,10 @@ class Dashboard:
         self._accel = accel
         self.jobs = Jobs()
         self._lock = threading.Lock()
+        # One change at a time: the desktop answers requests on many threads,
+        # and two edits of the same lab at once lose one of them.
+        self._edit_lock = threading.RLock()
+        self._stamp = _file_stamp(lab.source_path)
         from .procstats import Meter
         self.meter = Meter()
         from .workbench import Live
@@ -320,6 +401,33 @@ class Dashboard:
         """Re-read the lab TOML after an edit so the GUI reflects changes."""
         self.lab = load_lab(self.lab.source_path or self.lab.name)
         self.plan = netplan.compile_topology(self.lab, check_ports=False)
+        self._stamp = _file_stamp(self.lab.source_path)
+
+    def refresh(self) -> bool:
+        """Read the lab file again if something else changed it since the
+        desktop last did (`winlab node add` in a terminal, a hand edit), so
+        the next change made here builds on it instead of writing over it.
+        True when it was read again."""
+        now = _file_stamp(self.lab.source_path)
+        if not now or now == self._stamp:
+            return False
+        try:
+            self.reload()
+        except LabError as exc:  # a half-typed hand edit: keep what we have, say so once
+            if getattr(self, "_bad_stamp", None) != now:
+                self._bad_stamp = now
+                from . import applog
+                applog.write("lab file", f"{self.lab.name}: not read again, it does not load: {exc}")
+            return False
+        return True
+
+    def refresh_if_idle(self) -> None:
+        """refresh() for the windows' polling, skipped while a change runs."""
+        if self._edit_lock.acquire(blocking=False):
+            try:
+                self.refresh()
+            finally:
+                self._edit_lock.release()
 
     @property
     def accel(self) -> str:
@@ -328,6 +436,13 @@ class Dashboard:
         return self._accel
 
     # --------------------------------------------------------------- state
+    def _post_screen(self, node, alive: bool, pid: int):
+        from . import pcbuild
+        try:
+            return pcbuild.screen(self.lab.name, node.id, alive, pid) if pcbuild.form_of(node) else None
+        except Exception:  # noqa: BLE001 - a bad record never breaks the desktop
+            return None
+
     def snapshot(self) -> dict:
         from . import debpacks, evaluation, vmctl
         from . import images as im
@@ -364,6 +479,7 @@ class Dashboard:
                 "serial": ns.serial_port if ns else 0,
                 "vnc": (ns.vnc_port if ns and alive else 0),
                 "term": bool(ns and alive and ns.term_port),
+                "wterm": bool(ns and alive and getattr(ns, "wterm_port", 0)),
                 "devices": devices,
                 "image": node.image if node else "alpine",
                 "os": self._os_name(node),
@@ -390,6 +506,8 @@ class Dashboard:
                 "description": node.description if node else "",
                 # The Settings dialog's own pages (winlab/vmctl.py).
                 "vm": vmctl.view(self.lab, node, alive, ns.pid if ns else 0, self._accel) if node else None,
+                # What its screen shows before Windows: POST, beeps, no signal (winlab/pcbuild.py).
+                "post": self._post_screen(node, alive, ns.pid if ns else 0) if node else None,
                 "usage": ({"cpu_pct": usage.cpu_pct, "rss_mb": usage.rss_mb}
                           if usage else None),
                 "eval": ({"days": clock.days_left, "rearms": clock.rearms_left,
@@ -404,6 +522,8 @@ class Dashboard:
             # The inherited company scenario and the locked server room
             # (winlab/inherited.py, winlab/serverroom.py).
             "inherited": self.lab.inherited,
+            # The AI data center scenario (winlab/aidc.py): pre-built too.
+            "aidc": self._is_aidc(),
             "room": self._room_view(),
             "lean": self.lab.lean,
             "running": sum(1 for n in nodes if n["running"]), "total": len(nodes),
@@ -427,6 +547,22 @@ class Dashboard:
         """The Inherited company window: the handover and its notes, the 30 days' lessons."""
         from . import inherited
         return inherited.view(self.lab)
+
+    def _is_aidc(self) -> bool:
+        from . import aidc
+        return aidc.is_aidc(self.lab)
+
+    def aidc(self) -> dict:
+        """The AI data center window: the handover, the machines, the notes, the drills."""
+        from . import aidc
+        return aidc.view(self.lab)
+
+    def stream_aidc_handover(self):
+        def run(emit):
+            from . import aidc, oncall
+            aidc.handover(self.lab, aidc.guest_runner(self.lab.name), aidc.role_builder(self.lab, self.plan),
+                          oncall.running_nodes(self.lab), emit=emit)
+        return run
 
     def stream_inherited_handover(self):
         def run(emit):
@@ -490,8 +626,11 @@ class Dashboard:
                 "containers": containers.summary(),
                 "dbclients": _dbclients_summary(),
                 "idsrules": _idsrules_summary(),
+                "azure": _azure_summary(),
+                "aws": _aws_summary(),
                 "vpnclient": _vpnclient_summary(),
                 "glpiagent": _glpiagent_summary(),
+                "softphone": _softphone_summary(),
                 "secops": _secops_summary(),
                 "virtio": {"ready": all(virtio.ready(i) for i in virtio.IMAGE_DIRS),
                            "version": vman.get("version", ""),
@@ -509,6 +648,7 @@ class Dashboard:
         properties sheet would. Live state (running, phase, screen) stays in
         /api/state; the map joins the two by machine id."""
         from . import images as im
+        from . import mapview
         plan, lab = self.plan, self.lab
         from . import sites as _sites
         # Sites keep their segments together on the map, the WAN between them.
@@ -667,7 +807,7 @@ class Dashboard:
         return {
             "lab": lab.name, "domain": lab.domain, "description": lab.description,
             "sandbox": lab.sandbox, "router": router, "switches": switches,
-            "machines": machines,
+            "machines": machines, "map_layout": mapview.positions(lab),
             "isolation": {"links": plan.fabric_link_count, "host_bridged": 0, "user_mode": 0,
                           "text": f"{plan.fabric_link_count} loopback cables, no path to this PC or the internet"},
         }
@@ -687,19 +827,20 @@ class Dashboard:
     def labs(self) -> list[dict]:
         """Every lab in the content pack, for the Start menu; the ones a
         licence unlocks are listed too, marked locked."""
-        from . import content
+        from . import content, mylabs
         out = []
         for name in lab_names():
             try:
                 lab = load_lab(name)
             except LabError as exc:
                 out.append({"name": name, "description": f"broken: {exc}", "machines": 0,
-                            "running": 0, "active": False})
+                            "running": 0, "active": False, "broken": True, "mine": not mylabs.shipped(name)})
                 continue
             st = state.load(name)
             running = sum(1 for ns in (st.nodes.values() if st else [])
                           if ns.pid and state.pid_alive(ns.pid))
             out.append({"name": name, "description": lab.description, "domain": lab.domain,
+                        "mine": not mylabs.shipped(name),
                         "sandbox": lab.sandbox, "workbench": lab.workbench,
                         "machines": len(lab.nodes), "running": running,
                         "suspended": len(st.suspended()) if st else 0,
@@ -723,6 +864,9 @@ class Dashboard:
         from . import imaging
         if imaging.is_netboot(node):
             return "No operating system (boots from the network)"
+        from . import netos
+        if netos.is_disk_router(node):
+            return f"{images.CATALOG[node.image].short} (the vendor's own OS)"
         if images.is_hand_install(node):
             return f"{images.CATALOG[node.image].short} (installed by hand)"
         if node.kind == "custom":
@@ -739,7 +883,41 @@ class Dashboard:
                 return j["id"]
         return ""
 
+    def same_job(self, name: str, params: dict) -> str:
+        """The job already doing this fetch: the same one pressed earlier, or
+        Get everything ready on that very step. '' when there is none."""
+        if name not in AUTO_JOBS:
+            return ""
+        rec = self.jobs.find_running(name, params)
+        if rec is not None:
+            return rec["id"]
+        plan = getattr(self, "ready", None) or {}
+        gr = self.running_job("get-ready")
+        if gr and plan.get("job") == [name, Jobs.what(params)]:
+            return gr
+        return ""
+
+    def _mark_running(self, steps: list[dict]) -> list[dict]:
+        """Each step a job is doing right now carries that job's percent, so
+        Setup shows it running instead of offering its button again."""
+        plan = getattr(self, "ready", None) or {}
+        gr = self.running_job("get-ready")
+        for st in steps:
+            if not st.get("job") or st.get("done"):
+                continue
+            rec = self.jobs.find_running(st["job"], st)
+            if rec is not None:
+                st["running"] = rec["percent"] or 0
+            elif gr and plan.get("job") == [st["job"], Jobs.what(st)]:
+                st["running"] = int(100 * plan.get("part", 0))
+        return steps
+
     def setup_state(self, quick: bool = False) -> dict:
+        out = self._setup_state(quick)
+        self._mark_running(out["steps"])
+        return out
+
+    def _setup_state(self, quick: bool = False) -> dict:
         """What's configured vs. what the first-run flow should prompt for.
         quick skips the host probe (PowerShell, the accelerator test) and only
         looks for the files each step leaves behind."""
@@ -793,10 +971,16 @@ class Dashboard:
         extra_steps += linuxiso.setup_steps(self.lab)
         from . import bsdfw  # the firewall installers this lab's firewalls boot
         extra_steps += bsdfw.setup_steps(self.lab)
+        from . import netos  # the vendor router images this lab's routers run
+        extra_steps += netos.setup_steps(self.lab)
+        from . import android  # the Android-x86 installer this lab's phones and tablets boot
+        extra_steps += android.setup_steps(self.lab)
         from . import mail  # packs installed by hand, Thunderbird for the PCs
         extra_steps += mail.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import webmin, wireshark  # the appliances' Webmin, Wireshark for the PCs
         extra_steps += webmin.setup_steps(self.lab, {s["id"] for s in extra_steps})
+        from . import termshark  # the capture probe's packet view
+        extra_steps += termshark.setup_steps(self.lab, {s["id"] for s in extra_steps})
         extra_steps += wireshark.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import containers  # images, k3s and Docker for Windows for the containers lab
         extra_steps += containers.setup_steps(self.lab, {s["id"] for s in extra_steps})
@@ -804,14 +988,22 @@ class Dashboard:
         extra_steps += databases.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import ids  # the ET Open rules for the Suricata sensor
         extra_steps += ids.setup_steps(self.lab, {s["id"] for s in extra_steps})
+        from . import azure  # floci-az, restic and rest-server for the azure-hybrid lab's cloud01
+        extra_steps += azure.setup_steps(self.lab, {s["id"] for s in extra_steps})
+        from . import aws  # moto and the AWS CLI for the aws-cloud lab
+        extra_steps += aws.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import remoteaccess  # WireGuard for Windows for the home worker's laptop
         extra_steps += remoteaccess.setup_steps(self.lab, {s["id"] for s in extra_steps})
+        from . import softphone  # MicroSIP for the PCs that answer the lab's phone system
+        extra_steps += softphone.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import automation  # the DSC modules for the automation lab's admin box
         extra_steps += automation.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import doctools  # the GLPI Agent for the it-docs lab's Windows machines
         extra_steps += doctools.setup_steps(self.lab, {s["id"] for s in extra_steps})
         from . import secops  # Greenbone, the software to deploy, the toolkit for the security-ops lab
         extra_steps += secops.setup_steps(self.lab, {s["id"] for s in extra_steps})
+        from . import itops  # the Windows exporter stick for the servers the student's Prometheus watches
+        extra_steps += itops.setup_steps(self.lab, {s["id"] for s in extra_steps})
         return {
             "qemu": r.qemu_present,
             "accel": r.accel,
@@ -821,10 +1013,13 @@ class Dashboard:
             "windows_installer": bool(ws["installer"]),
             "lab_running": running,
             "steps": [
-                {"id": "bootstrap", "label": "Fetch the QEMU runtime",
+                {"id": "bootstrap", "label": JOB_INFO["bootstrap"][0],
                  "done": r.qemu_present, "job": "bootstrap",
-                 "hint": "the portable QEMU build and the tools of the lab router, fetched "
-                         "onto this PC once (nothing is shipped inside winlab)"},
+                 "hint": ("QEMU, the UEFI firmware and swtpm from your distribution (installed with its "
+                          "package manager if missing; it asks for your password), and the viewers the "
+                          "desktop uses" if sys.platform.startswith("linux") else
+                          "the portable QEMU build and the tools of the lab router, fetched "
+                          "onto this PC once (nothing is shipped inside winlab)")},
                 {"id": "fabric", "label": "Prepare the network fabric base",
                  "done": bool(alp["base"]), "job": "prepare", "image": "fabric",
                  "blocked": not r.qemu_present,
@@ -849,6 +1044,7 @@ class Dashboard:
             "media": self._windows_media(wanted or [primary]),
             "linux_media": linuxiso.setup_rows(self.lab),
             "fw_media": bsdfw.setup_rows(self.lab),
+            "router_media": netos.setup_rows(self.lab),
             "get_ready_job": self.running_job("get-ready"),
         }
 
@@ -906,7 +1102,8 @@ class Dashboard:
                     continue
                 for r in roles.effective_roles(n):
                     rd = manifest.get(r)
-                    if rd and rd.pack and rd.pack not in packs:
+                    # a stick source (the aws pack) has its own fetch step, not a Debian pack's
+                    if rd and rd.pack and rd.pack in debpacks.PACKS and rd.pack not in packs:
                         packs.append(rd.pack)
             for pack_id in packs:
                 pk = debpacks.PACKS[pack_id]
@@ -1027,8 +1224,9 @@ class Dashboard:
             e = done.get("net:" + s.id) or {}
             opened = int(e.get("hints_open") or 0)
             cause = self._cause(True, s.id, opened)
-            out.append({"id": s.id, "title": cause or s.symptom, "cause": cause, "symptom": s.symptom,
-                        "category": s.category, "teaches": s.teaches if cause else "",
+            w = fl.words(s.id)
+            out.append({"id": s.id, "title": cause or w["symptom"], "cause": cause, "symptom": w["symptom"],
+                        "category": s.category, "teaches": w["teaches"] if cause else "",
                         "hints": len(s.hints), "hints_open": opened, "broken_on": str(e.get("broken_on") or "")})
         return out
 
@@ -1036,13 +1234,7 @@ class Dashboard:
         from . import guestfaults as gf
         from . import progress
         done = progress.load()["problems"]
-        params = {**gf.DEFAULTS, **self._fault_defaults()}
-
-        class _Fill(dict):
-            def __missing__(self, key):
-                return "{" + key + "}"
-
-        fill = lambda t: t.format_map(_Fill(params))  # noqa: E731
+        params = self._fault_defaults()
         # A card is titled by its symptom; the cause (title, what it teaches)
         # only once solved or the second hint is open.
         out = []
@@ -1050,12 +1242,14 @@ class Dashboard:
             e = done.get(s.id) or {}
             solved, opened = int(e.get("solved") or 0), int(e.get("hints_open") or 0)
             cause = self._cause(False, s.id, opened, bool(solved))
-            out.append({"id": s.id, "title": cause or fill(s.symptom)[:1].upper() + fill(s.symptom)[1:],
-                        "cause": cause, "os": s.os, "teaches": fill(s.teaches) if cause else "",
-                        "symptom": fill(s.symptom), "hints": len(s.hints), "verify": bool(s.verify),
+            w = gf.words(s.id, params)
+            out.append({"id": s.id, "title": cause or w["symptom"][:1].upper() + w["symptom"][1:],
+                        "cause": cause, "os": s.os, "teaches": w["teaches"] if cause else "",
+                        "symptom": w["symptom"], "hints": len(s.hints), "verify": bool(s.verify),
                         "images": list(s.images), "roles": list(s.roles), "solved": solved,
                         "hints_open": opened, "tries": int(e.get("tries") or 0),
-                        "broken_on": str(e.get("broken_on") or "")})
+                        "broken_on": str(e.get("broken_on") or ""),
+                        "break_error": str(e.get("break_error") or "")})
         return out
 
     def _fault_fits(self, scenario: str, node: str) -> str:
@@ -1067,12 +1261,13 @@ class Dashboard:
             return f"unknown scenario {scenario}"
         if n is None:
             return f"{node} is not a machine of this lab"
+        title = gf.words(scenario, self._fault_defaults())["title"]   # never a raw {placeholder}
         if not gf.applies_to(f, n.kind, n.image):
             where = ", ".join(f.images) if f.images else f.os
-            return f"'{f.title}' is a problem for {where} machines; {node} runs {self._os_name(n)}"
+            return f"'{title}' is a problem for {where} machines; {node} runs {self._os_name(n)}"
         from . import roles as rl
         if not gf.applies_to(f, n.kind, n.image, rl.effective_roles(n)):
-            return f"'{f.title}' needs a machine with the {' or '.join(f.roles)} role; {node} has none of them"
+            return f"'{title}' needs a machine with the {' or '.join(f.roles)} role; {node} has none of them"
         return ""
 
     # ------------------------------------------------------------- lessons
@@ -1174,6 +1369,7 @@ class Dashboard:
         from . import oncall
         shift = oncall.load()
         if shift and not shift.get("done"):
+            oncall.check_desk(shift, self._guest_runner())   # closed in the lab's osTicket
             oncall.expire(shift, self._guest_runner(), oncall._now())
         v = oncall.view(shift)
         v["candidates"] = len(oncall.candidates(self.lab, self._running()))
@@ -1206,6 +1402,34 @@ class Dashboard:
             r = oncall.end(shift, run)
             return {"ok": True, "message": f"shift over: {r['fixed']} of {r['tickets']} fixed, {r['score']} points"}
         return {"ok": False, "message": f"unknown action {action}"}
+
+    # ------------------------------------------------------------- break and fix
+    def breakfix(self) -> dict:
+        """The Troubleshooting window's Break and fix tab (winlab/breakfix.py)."""
+        from . import breakfix
+        run = breakfix.load()
+        return breakfix.view(run, self.lab, self._running() if not run or run.get("done") else None)
+
+    # ------------------------------------------------------------- job interview
+    def interview(self) -> dict:
+        """The Troubleshooting window's Job interview tab (winlab/interview.py).
+        Each poll hands in a round whose clock ran out and picks up the
+        practical's result once break and fix has finished it."""
+        from . import interview
+        run = interview.load()
+        if run:
+            interview.expire(run)
+            interview.practical_sync(run)
+        idle = not run or run.get("done") or interview.current(run) == "practical"
+        return interview.view(run, self.lab, self._running() if idle else None)
+    # ------------------------------------------------------------- security incident drills
+    def incidents(self) -> dict:
+        """The Troubleshooting window's Security incidents tab (winlab/incidents.py):
+        while a drill runs, each look reads Wazuh and osTicket (at most every 20 s)."""
+        from . import incidents
+        run = incidents.load()
+        running = self._running()
+        return incidents.view(run, self.lab, running, self._guest_runner() if run and not run.get("done") else None)
 
     # ------------------------------------------------------------- the helpdesk queue
     def helpdesk(self) -> dict:
@@ -1312,8 +1536,10 @@ class Dashboard:
             modules.append({"id": m["id"], "title": m["title"], "blurb": m["blurb"],
                             "lessons": rows,
                             "done": sum(1 for r in rows if r["status"] == "done")})
+        from . import review, tracks
         return {"modules": modules, "summary": progress.summary(allx, data),
-                "lab": self.lab.name}
+                "paths": tracks.paths_status(data, allx), "lab": self.lab.name,
+                "review": review.status(prog=data, sizes={l.id: len(l.quiz) for l in allx})}
 
     def firewall_view(self) -> dict:
         """The zone firewall as the router sheet shows it: every segment's
@@ -1441,12 +1667,16 @@ class Dashboard:
             f = gf.SCENARIOS[lesson.problem]
             pe = probs.get(f.id) or {}
             opened = int(pe.get("hints_open") or 0)
-            cause = self._cause(False, f.id, opened, out["status"] == progress.STATUS_DONE)
-            out["problem_detail"] = {"id": f.id, "title": cause, "symptom": f.symptom,
-                                     "teaches": f.teaches if cause else "", "hints": len(f.hints),
+            # Filled from the lesson's own lab ({subzone} is dev.corp.lab in
+            # linux-in-the-domain), whichever lab the app was opened on.
+            lp = self._lesson_fault_params(lesson)
+            w = gf.words(f.id, lp)
+            cause = self._cause(False, f.id, opened, out["status"] == progress.STATUS_DONE, lp)
+            out["problem_detail"] = {"id": f.id, "title": cause, "symptom": w["symptom"],
+                                     "teaches": w["teaches"] if cause else "", "hints": len(f.hints),
                                      "hints_open": opened, "tries": int(pe.get("tries") or 0),
                                      "broken": pe.get("broken_on") == lesson.node,
-                                     "hint_text": [gf.hint(f.id, i, self._fault_defaults())
+                                     "hint_text": [gf.hint(f.id, i, lp)
                                                    for i in range(1, opened + 1)]}
         if lesson.fault:
             from . import faults as fl
@@ -1454,8 +1684,9 @@ class Dashboard:
             pe = probs.get("net:" + f.id) or {}
             opened = int(pe.get("hints_open") or 0)
             cause = self._cause(True, f.id, opened, out["status"] == progress.STATUS_DONE)
-            out["fault_detail"] = {"id": f.id, "title": cause, "symptom": f.symptom,
-                                   "teaches": f.teaches if cause else "",
+            fw = fl.words(f.id)
+            out["fault_detail"] = {"id": f.id, "title": cause, "symptom": fw["symptom"],
+                                   "teaches": fw["teaches"] if cause else "",
                                    "on": lesson.fault_on, "hints": len(f.hints), "hints_open": opened,
                                    "hint_text": [fl.hint(f.id, i) for i in range(1, opened + 1)],
                                    "broken": bool(entry.get("fault_broken")) and not entry.get("fault_restored")}
@@ -1509,19 +1740,34 @@ class Dashboard:
         return {"summary": progress.summary(ls.list_available(), data), "data": data}
 
     def viewer_state(self) -> dict:
-        from . import termview
+        from . import castplayer, chartview, elkview, mapview, pixiview, termview
         return {"ready": viewer.ready(), "version": viewer.VERSION,
                 "missing": len(viewer.missing()), "total": len(viewer.FILES),
                 "dir": str(viewer.viewer_dir()), "term_ready": termview.ready(),
-                "term_version": termview.VERSION}
+                "term_version": termview.VERSION, "map_ready": mapview.ready(),
+                "map_version": mapview.VERSION, "chart_ready": chartview.ready(),
+                "chart_version": chartview.VERSION, "cast_ready": castplayer.ready(),
+                "cast_version": castplayer.VERSION, "elk_ready": elkview.ready(),
+                "elk_version": elkview.VERSION, "elk_adapter_version": elkview.ADAPTER_VERSION,
+                "drawio_ready": drawio.ready(), "drawio_version": drawio.VERSION,
+                "pixi_ready": pixiview.ready(), "pixi_version": pixiview.VERSION}
 
     def doc(self, name: str) -> dict:
         fn = DOCS.get(name.upper())
         if not fn:
             raise LabError(f"no such document: {name}")
-        for base in (paths.ROOT, paths.APP_DIR, paths.BUNDLE):
-            if base and (base / fn).exists():
-                return {"name": name.upper(), "text": (base / fn).read_text(encoding="utf-8")}
+        names = [fn]
+        if fn == "EULA.txt":
+            # The licence terms in the student's language when there is a
+            # translation (EULA.es.txt ...); the English text governs.
+            from . import i18n
+            lang = i18n.current()
+            if lang and lang != "en":
+                names.insert(0, f"EULA.{lang}.txt")
+        for f in names:
+            for base in (paths.ROOT, paths.APP_DIR, paths.BUNDLE):
+                if base and (base / f).exists():
+                    return {"name": name.upper(), "text": (base / f).read_text(encoding="utf-8")}
         return {"name": name.upper(), "text": f"{fn} is not next to this winlab install."}
 
     def update_check(self) -> dict:
@@ -1577,16 +1823,37 @@ class Dashboard:
 
     # ------------------------------------------------------------- actions
     def act(self, action: str, params: dict) -> dict:
+        if not self._edit_lock.acquire(timeout=EDIT_WAIT):
+            return {"ok": False, "busy": True,
+                    "message": "winlab is still busy with the change before this one; try again in a moment"}
         try:
+            self.refresh()
             from . import history  # disks, media and machine edits outside the workbench
             if action in history.WATCHED:
                 return history.recorded(self, action, params, lambda: self._act(action, params))
             return self._act(action, params)
-        except (LabError, Exception) as exc:  # noqa: BLE001
+        except LabError as exc:
             return {"ok": False, "message": str(exc)}
+        except Exception as exc:  # noqa: BLE001
+            # Something broke half way: what is in memory may be half changed,
+            # so the next change must not save it. Read the file back.
+            from . import applog
+            applog.write(f"action {action}", str(exc), exc)
+            try:
+                self.reload()
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": False, "message": str(exc)}
+        finally:
+            self._edit_lock.release()
 
     def _act(self, action: str, params: dict) -> dict:
         node = params.get("node", "")
+        if action == "map-move":
+            # The Network map: where the student dragged its devices to.
+            from . import mapview
+            return mapview.move(self.lab, str(params.get("view", "")), params.get("positions"),
+                                reset=bool(params.get("reset")))
         if action in ("lab-up", "boot-node"):
             # The memory check answers right away; the boot itself is a job,
             # since a lab with start-order waits takes minutes to come up.
@@ -1681,6 +1948,11 @@ class Dashboard:
             if action == "room-set":
                 self.reload()
             return r
+        if action == "aidc-handover":  # the AI data center scenario's one pre-built step (winlab/aidc.py)
+            if not self._is_aidc():
+                return {"ok": False, "message": "only the AI data center scenario is handed over this way: this lab starts empty"}
+            jid = self.running_job("aidc-handover") or self.jobs.start("aidc-handover", self.stream_aidc_handover())
+            return {"ok": True, "job": jid, "message": "handing over the data center: each machine's role, then the keys, the nodes and the run"}
         if action == "inherited-handover":  # the inherited company scenario's one pre-built step (winlab/inherited.py)
             if not self.lab.inherited:
                 return {"ok": False, "message": "only the inherited company scenario is handed over: this lab starts empty"}
@@ -1692,6 +1964,10 @@ class Dashboard:
         if action.startswith("class-"):
             from . import classes
             return classes.act(self, action, params)
+        if action.startswith("rec-"):
+            # Terminal session recordings (winlab/recordings.py).
+            from . import recordings
+            return recordings.act(self, action, params)
         if action.startswith("perf-"):
             # Alert rules and the alerts list (winlab/perfmon.py).
             from . import perfmon
@@ -1754,6 +2030,21 @@ class Dashboard:
             return {"ok": True, "message": f"added {', '.join(n.id for n in created)}"}
         if action == "lab-names":
             return self._names(params)
+        if action in ("vswitch-list", "vswitch-set"):  # the Virtual Switch Manager (winlab/vswitch.py)
+            from . import vswitch
+            if action == "vswitch-set":
+                ports = params.get("host_ports")
+                if isinstance(ports, str):
+                    ports = [p for p in re.split(r"[\s,]+", ports) if p]
+                try:
+                    vswitch.set_kind(self.lab, str(params.get("network", "")), str(params.get("kind", "")), ports)
+                except vswitch.VSwitchError as exc:
+                    return {"ok": False, "message": str(exc)}
+                self.reload()
+            running = "fabric" in self._running()
+            return {"ok": True, "switches": vswitch.view(self.lab), "titles": vswitch.TITLES, "text": vswitch.TEXT,
+                    "message": ("Saved. The lab router picks it up at its next start." if action == "vswitch-set" else ""),
+                    "router_running": running}
         if action == "node-set":
             from . import editor
 
@@ -1915,6 +2206,10 @@ class Dashboard:
                     for role_name in pack.roles:
                         files.update(roles.role_stick_files(self.lab, n, role_name))
                     r = media.plug(self.lab.name, node, files, debpacks.STICK_LABEL)
+                    from . import editor, openwisp, unifi
+                    ctl = {unifi.PACK: unifi, openwisp.PACK: openwisp}.get(pack.id)
+                    if ctl is not None and ctl.mark(n):   # the controller's page beside the machine
+                        editor.save(self.lab); self.reload()
                 elif action == "media-drivers":
                     files = media.driver_files(n.image)
                     if len(files) <= 1:
@@ -1970,6 +2265,9 @@ class Dashboard:
             with contextlib.redirect_stdout(buf):
                 rc = run_exec(self.lab.name, node, params.get("cmd", ""), shell=shell)
             return {"ok": rc == 0, "message": buf.getvalue()[:4000] or f"rc={rc}"}
+        if action.startswith("building-"):  # the Building window: put the machines in their rooms
+            from . import building
+            return building.act(self, action, params)
         if action.startswith("campus-"):  # the Site window: a client job's buildings (winlab/campus.py)
             from . import campus
             return campus.act(self, action, params)
@@ -1981,6 +2279,33 @@ class Dashboard:
             return toolkit.act(self, action, params)
         if action.startswith("oncall-"):
             return self._oncall_act(action, params)
+        if action.startswith("breakfix-"):
+            from . import breakfix
+            return breakfix.act(self.lab, action, params, self._guest_runner(), self._running())
+        if action.startswith("interview-"):   # job interview mode (winlab/interview.py)
+            from . import interview
+            return interview.act(self.lab, action, params, self._guest_runner(), self._running())
+        if action.startswith("incident-"):
+            from . import incidents
+            return incidents.act(self.lab, action, params, self._guest_runner(), self._running())
+        if action == "itops-add":   # the IT ops server: osTicket and Alertmanager (winlab/itops.py)
+            from . import editor, itops
+            try:
+                node = itops.add(self.lab)
+                editor.save(self.lab)
+            except (itops.OpsError, editor.EditError) as exc:
+                return {"ok": False, "message": str(exc)}
+            self.reload()
+            return {"ok": True, "message": f"{node.id} added: the IT ops server (osTicket, Prometheus, "
+                                           f"Alertmanager); start it, then start taking calls"}
+        if action == "itops-stick":  # the Windows exporter for the servers (winlab/itops.py)
+            from . import itops
+            try:
+                r = itops.exporter_stick(self.lab)
+            except itops.OpsError as exc:
+                return {"ok": False, "message": str(exc)}
+            return {"ok": True, "message": f"{r['title']} is on the shelf: plug it into each Windows server",
+                    "stick": r["id"]}
         if action.startswith("helpdesk-"):
             from . import helpdesk
             return helpdesk.act(self.lab, action, params, self._guest_runner())
@@ -2054,6 +2379,13 @@ class Dashboard:
             e = progress.record_quiz(lesson.id, r["right"], r["total"])
             return {"ok": True, **r, "best": e["quiz_best"],
                     "message": f"{r['right']} of {r['total']} right"}
+        if action == "review-answer":
+            from . import review
+            picked = params.get("picked") or []
+            if not isinstance(picked, (list, dict)):
+                return {"ok": False, "message": "picked must be a list"}
+            r = review.answer(picked)
+            return {"ok": True, **r, "message": f"{r['right']} of {r['total']} right"}
         if action == "lesson-step":
             from . import lessons as ls
             from . import progress
@@ -2072,6 +2404,21 @@ class Dashboard:
             with contextlib.redirect_stdout(buf):
                 rc = run_exec(self.lab.name, v.node or node, v.cmd, shell=v.shell)
             return {"ok": rc == 0, "message": buf.getvalue()[:4000] or f"rc={rc}"}
+        if action in ("cert-share", "cert-withdraw"):
+            from . import certshare
+            try:
+                if action == "cert-share":
+                    c = certshare.share(str(params.get("track", "")), str(params.get("name", "")))
+                    return {"ok": True, "url": c.get("url", ""),
+                            "message": "shared: anyone with the link can check this certificate"}
+                certshare.withdraw(str(params.get("track", "")))
+                return {"ok": True, "message": "the verification link is withdrawn"}
+            except certshare.ShareError as exc:
+                return {"ok": False, "message": str(exc)}
+        if action == "student-name":
+            from . import progress
+            progress.set_student(str(params.get("name", "")))
+            return {"ok": True, "message": "name saved"}
         if action == "lesson-reset":
             from . import progress
             progress.reset(params.get("id", ""))
@@ -2158,9 +2505,18 @@ class Dashboard:
                 return {"ok": True, "path": readiness.pick_folder()}
             except (RuntimeError, OSError) as exc:
                 return {"ok": False, "message": str(exc)}
+        if action == "find-router-files":
+            from . import netos, readiness
+            return {"ok": True, "files": netos.find_downloads(),
+                    "searched": [str(d) for d in readiness.search_dirs()]}
         if action == "pick-iso":
             from . import readiness
             try:
+                if params.get("router"):  # a vendor router's disk image or ISO
+                    return {"ok": True, "path": readiness.pick_file(
+                        "Choose the router image you downloaded",
+                        "Router images (*.img;*.zip;*.qcow2;*.vmdk;*.vdi;*.vhdx;*.iso)|"
+                        "*.img;*.zip;*.qcow2;*.vmdk;*.vdi;*.vhdx;*.iso|All files (*.*)|*.*")}
                 return {"ok": True, "path": readiness.pick_file()}
             except (RuntimeError, OSError) as exc:
                 return {"ok": False, "message": str(exc)}
@@ -2267,6 +2623,23 @@ class Dashboard:
         from . import guestfaults as gf
         return gf.lab_params(self.lab)
 
+    def _lesson_fault_params(self, lesson) -> dict:
+        """Scenario parameters from the lesson's own lab, so its problem card
+        names that lab's machines and zones; this lab's when it cannot load."""
+        from . import guestfaults as gf
+        from . import naming
+        lab = self.lab
+        if lesson.lab and lesson.lab != self.lab.name:
+            try:
+                lab = naming.for_lab(lesson.lab).lab
+            except Exception:  # noqa: BLE001 - a lab file that no longer loads: this lab's names
+                pass
+        out = gf.lab_params(lab)
+        nd = lab.nodes.get(lesson.node) if lesson.node else None
+        if nd is not None:
+            out.setdefault("node", nd.hostname or nd.id)   # ladders that say "on {node}"
+        return out
+
     def _hint_ladder(self, network: bool, params: dict) -> dict:
         """The next hint of a problem's ladder, served in order by the server:
         each opens after one more failed try (progress.next_hint). With
@@ -2280,8 +2653,20 @@ class Dashboard:
             total = len((fl.SCENARIOS if network else gf.SCENARIOS)[sc].hints)
         except KeyError:
             return {"ok": False, "message": f"unknown scenario {sc}"}
-        fill = (lambda n: fl.hint(sc, n)) if network else (lambda n: gf.hint(sc, n, self._fault_defaults()))
+        fp = self._fault_defaults()
+        if not network and params.get("lesson"):
+            from . import lessons as ls
+            try:
+                fp = self._lesson_fault_params(ls.load(str(params["lesson"])))
+            except Exception:  # noqa: BLE001 - an unknown lesson id: this lab's names
+                pass
         e = progress.load()["problems"].get(key) or {}
+        if not network and "node" not in fp:
+            # Some ladders say "on {node}": the machine it was broken on.
+            bn = str(e.get("broken_on") or "")
+            nd = self.lab.nodes.get(bn)
+            fp = {**fp, "node": (nd.hostname or nd.id) if nd is not None else (bn or "the broken machine")}
+        fill = (lambda n: fl.hint(sc, n)) if network else (lambda n: gf.hint(sc, n, fp))
         opened = int(e.get("hints_open") or 0)
         if params.get("list") not in ("1", "true", True):
             # A network fault outside a lesson has nothing to verify: its
@@ -2299,7 +2684,8 @@ class Dashboard:
                 "total": total, "hints": [fill(i) for i in range(1, opened + 1)],
                 "cause": self._cause(network, sc, opened)}
 
-    def _cause(self, network: bool, sc: str, hints_open: int, solved: bool = False) -> str:
+    def _cause(self, network: bool, sc: str, hints_open: int, solved: bool = False,
+               params: dict | None = None) -> str:
         """The problem's real title (its cause): shown once it is fixed or the
         second hint is open; before that the card names only the symptom."""
         from . import faults as fl
@@ -2307,38 +2693,32 @@ class Dashboard:
         if not (solved or hints_open >= 2):
             return ""
         if network:
-            return fl.SCENARIOS[sc].title
-
-        class _Fill(dict):
-            def __missing__(self, key):
-                return "{" + key + "}"
-        return gf.SCENARIOS[sc].title.format_map(_Fill({**gf.DEFAULTS, **self._fault_defaults()}))
+            return fl.words(sc)["title"]
+        return gf.words(sc, self._fault_defaults() if params is None else params)["title"]
 
     def _guest_fault_verify(self, params: dict) -> dict:
         from . import guestfaults as gf
+        from . import problemengine as pe_
         from . import progress
-        from .guestctl import GuestChannel
         node = params.get("node", "")
-        sc = params["scenario"]
+        sc = params.get("scenario", "")
+        if sc not in gf.SCENARIOS:
+            return {"ok": False, "message": f"unknown scenario {sc}"}
         extra = {k: v for k, v in params.items() if k not in ("do", "node", "scenario")}
         p = self._fault_defaults(); p.update(extra)
         why = self._fault_fits(sc, node)
         if why:
             return {"ok": False, "message": why}
-        try:
-            cmd, shell, expect = gf.verify_command(sc, p)
-        except KeyError:
-            return {"ok": False, "message": f"unknown scenario {sc}"}
         st = state.load(self.lab.name)
         ns = st.nodes.get(node) if st else None
         if not ns or not state.pid_alive(ns.pid):
             return {"ok": False, "message": f"{node} is not running"}
-        ch = GuestChannel(ns.serial_port).connect(retries=8, delay=2)
-        try:
-            res = ch.run(cmd, shell=shell, timeout=120)
-        finally:
-            ch.close()
-        fixed = res.ok and gf.is_fixed(res.out, expect)
+        res = pe_.verify_fix(pe_.guest_runner(self.lab.name), self.lab.name, sc, node, p)
+        if res.status not in (pe_.FIXED, pe_.NOT_FIXED):
+            # The check never ran (the machine did not answer, a value is
+            # missing, another check is running): nothing is counted.
+            return {"ok": False, "fixed": False, "status": res.status, "message": res.message}
+        fixed = res.status == pe_.FIXED
         pe = progress.load()["problems"].get(sc) or {}
         hints = int(pe.get("hints_open") or 0)
         f = gf.SCENARIOS[sc]
@@ -2354,7 +2734,7 @@ class Dashboard:
             progress.problem_broken(sc, node, False)
             done = self._problem_lessons_done(sc, node)
             return {"ok": True, "fixed": True, "lessons_done": done, "cause": self._cause(False, sc, hints, True),
-                    "message": f"fixed: {f.symptom.rstrip('.')}: no longer on {node}. The cause was: "
+                    "message": f"fixed: {gf.words(sc, self._fault_defaults())['symptom'].rstrip('.')}: no longer on {node}. The cause was: "
                                f"{self._cause(False, sc, hints, True)}"
                                + (f". Lesson done: {', '.join(done)}" if done else "")}
         tries = int(progress.problem_try(sc).get("tries") or 0)
@@ -2378,9 +2758,12 @@ class Dashboard:
 
     def _guest_fault(self, params: dict) -> dict:
         from . import guestfaults as gf
-        from .guestctl import GuestChannel
+        from . import problemengine as pe_
+        from . import progress
         node = params.get("node", "")
-        sc = params["scenario"]
+        sc = params.get("scenario", "")
+        if sc not in gf.SCENARIOS:
+            return {"ok": False, "message": f"unknown scenario {sc}"}
         clear = params.get("clear") in ("1", "true", "on")
         extra = {k: v for k, v in params.items()
                  if k not in ("do", "node", "scenario", "clear")}
@@ -2388,7 +2771,6 @@ class Dashboard:
         why = self._fault_fits(sc, node)
         if why:
             return {"ok": False, "message": why}
-        cmd, shell = gf.build_command(sc, p, clear)
         st = state.load(self.lab.name)
         ns = st.nodes.get(node) if st else None
         if not ns or not state.pid_alive(ns.pid):
@@ -2398,31 +2780,49 @@ class Dashboard:
             # Broken from outside the machine (a checkpoint reverted): minutes of
             # work, so it runs beside the request; the verify runs inside as usual.
             if clear:
-                return {"ok": False, "message": gf.host_break(sc, self.lab.name, node, True)[1]}
-            threading.Thread(target=gf.host_break, args=(sc, self.lab.name, node), daemon=True).start()
-            from . import progress
+                msg = gf.host_break(sc, self.lab.name, node, True)[1]
+                self.reload()   # a break that wrote the lab file (winlab/netbasics.py): the consoles read it again
+                return {"ok": False, "message": msg}
+            if gf.host_break_is_quick(sc):
+                try:
+                    ok, msg = gf.host_break(sc, self.lab.name, node)
+                except Exception as exc:  # noqa: BLE001 - said, not a crashed request
+                    ok, msg = False, f"could not break {node}: {exc}"
+                self.reload()
+                if ok:
+                    progress.problem_broken(sc, node, True)
+                return {"ok": ok, "broken": ok,
+                        "message": msg if not ok else f"{msg} — symptom: {gf.words(sc, p)['symptom']}"}
             progress.problem_broken(sc, node, True)
-            return {"ok": True, "message": f"breaking {node} from outside it: it takes a few "
-                                           f"minutes and the machine restarts — symptom: {f.symptom}"}
-        ch = GuestChannel(ns.serial_port).connect(retries=8, delay=2)
-        try:
-            res = ch.run(cmd, shell=shell, timeout=120)
-        finally:
-            ch.close()
-        from . import progress
-        if res.ok and clear:
-            # Put back by winlab, not fixed by the student: the try is given
-            # up (it scores nothing) and the cause is told, as a debrief.
-            pe = progress.load()["problems"].get(sc) or {}
-            if pe.get("broken_on") == node:
-                progress.record_problem(sc, node, False, int(pe.get("hints_open") or 0))
+
+            def done(ok: bool, msg: str) -> None:
+                if not ok:   # the card must not claim a problem that never arrived
+                    progress.problem_broken(sc, node, False)
+                    progress.problem_break_failed(sc, node, msg)
+            pe_.host_break_in_background(self.lab.name, sc, node, on_done=done)
+            return {"ok": True, "broken": True,
+                    "message": f"breaking {node} from outside it: it takes a few "
+                               f"minutes and the machine restarts — symptom: {gf.words(sc, p)['symptom']}"}
+        run = pe_.guest_runner(self.lab.name)
+        pe = progress.load()["problems"].get(sc) or {}
+        if clear:
+            res = pe_.restore(run, self.lab.name, sc, node, p)
+            if res.ok:
+                # Put back by winlab, not fixed by the student: the try is given
+                # up (it scores nothing) and the cause is told, as a debrief.
+                if pe.get("broken_on") == node:
+                    progress.record_problem(sc, node, False, int(pe.get("hints_open") or 0))
+                progress.problem_broken(sc, node, False)
+                return {"ok": True, "broken": False, "status": res.status,
+                        "message": f"put {node} back as it was (given up, not solved): the cause was "
+                                   f"{self._cause(False, sc, 0, True)}"}
+            return {**res.as_dict(), "broken": True}
+        res = pe_.apply_break(run, self.lab.name, sc, node, p, known_broken=pe.get("broken_on") == node)
+        if res.broken and res.status != pe_.ALREADY_BROKEN:
+            progress.problem_broken(sc, node, True)
+        elif not res.broken and pe.get("broken_on") == node:
             progress.problem_broken(sc, node, False)
-            return {"ok": True, "message": f"put {node} back as it was (given up, not solved): the cause was "
-                                           f"{self._cause(False, sc, 0, True)}"}
-        if res.ok:
-            progress.problem_broken(sc, node, True)
-        msg = f"broke {node} — symptom: {f.symptom}" if res.ok else f"could not break {node}: {(res.err or res.out)[-200:]}"
-        return {"ok": res.ok, "message": msg}
+        return res.as_dict()
 
     def _fault(self, params: dict) -> dict:
         from . import faults as fl
@@ -2465,11 +2865,15 @@ class Dashboard:
         if clear:
             return {"ok": True, "message": f"put {seg.network.id} back as it was: the cause was "
                                            f"{fl.SCENARIOS[sc].title}"}
-        return {"ok": True, "message": f"broke the network on {seg.network.id} — symptom: {fl.SCENARIOS[sc].symptom}"}
+        return {"ok": True, "message": f"broke the network on {seg.network.id} — symptom: {fl.words(sc)['symptom']}"}
 
     # -------------------------------------------------- streamed long jobs
     def stream_bootstrap(self, emit) -> None:
         from . import bootstrap as bs
+        if bs.is_linux():
+            bs.bootstrap(progress=emit)
+            emit("runtime ready")
+            return
         emit("resolving packages…")
         db = bs.load_db()
         closure = bs.resolve(db, bs.ROOT_PACKAGES)
@@ -2501,17 +2905,24 @@ class Dashboard:
                    "wac-fetch": lambda st: self.stream_wac,
                    "linuxiso-fetch": lambda st: self.stream_appliance(st.get("image", "")),
                    "fwiso-fetch": lambda st: self.stream_appliance(st.get("image", "")),
+                   "netos-fetch": lambda st: self.stream_appliance(st.get("image", "")),
                    "mailclient-fetch": lambda st: self.stream_mailclient,
                    "wireshark-fetch": lambda st: self.stream_wireshark,
                    "webmin-fetch": lambda st: self.stream_webmin,
+                   "termshark-fetch": lambda st: self.stream_termshark,
                    "ctrimages-fetch": lambda st: self.stream_containers("images"),
                    "k3s-fetch": lambda st: self.stream_containers("k3s"),
                    "dockerwin-fetch": lambda st: self.stream_containers("docker-win"),
+                   "kubeadm-fetch": lambda st: self.stream_containers("kubeadm"),
+                   "helm-fetch": lambda st: self.stream_containers("helm"),
                    "dbclients-fetch": lambda st: self.stream_dbclients,
                    "idsrules-fetch": lambda st: self.stream_idsrules,
+                   "azure-fetch": lambda st: self.stream_azure,
+                   "aws-fetch": lambda st: self.stream_aws,
                    "wireguard-fetch": lambda st: self.stream_vpnclient,
                    "dscmodules-fetch": lambda st: self.stream_dscmodules,
                    "glpiagent-fetch": lambda st: self.stream_glpiagent,
+                   "softphone-fetch": lambda st: self.stream_softphone,
                    "secops-fetch": lambda st: self.stream_secops(st.get("kind", "software"))}
 
         def todo() -> list[dict]:
@@ -2556,6 +2967,7 @@ class Dashboard:
                 bar()
                 n, total = len(done) + 1, len(plan["steps"])
                 emit(f"[step {n} of {total}] {nxt['label']}")
+                plan["job"] = [nxt["job"], Jobs.what(nxt)]
 
                 def inner(line: str) -> None:
                     if line.startswith(PCT_LINE):
@@ -2571,7 +2983,12 @@ class Dashboard:
                     if part is not None:
                         plan["part"] = max(plan["part"], part)
                         bar()
-                runners[nxt["job"]](nxt)(inner)
+                own = self.jobs.find_running(nxt["job"], nxt)
+                if own is not None:
+                    self._follow(own, inner)
+                else:
+                    runners[nxt["job"]](nxt)(inner)
+                plan["job"] = None
                 done.append(nxt)
                 publish(None, [st for st in todo() if st["id"] not in tried])
                 bar()
@@ -2591,6 +3008,22 @@ class Dashboard:
             emit("still to do: " + "; ".join(st["label"] for st in left))
         else:
             emit(f"done: {n} step{'s' if n != 1 else ''}; everything is ready")
+
+    def _follow(self, rec: dict, inner, poll: float = 0.5) -> None:
+        """Get everything ready reaching a step whose fetch the user already
+        started: it waits for that job instead of fetching the same file a
+        second time, and shows its progress as the step's own."""
+        inner(f"already running on its own: {rec['label']}; following it")
+        last = None
+        while not rec["finished"]:
+            now = (rec["percent"], rec["last"])
+            if now != last:
+                last = now
+                inner(f"{rec['last'] or rec['label']} ({rec['percent'] or 0}%)")
+            time.sleep(poll)
+        if rec["ok"] is False:
+            raise RuntimeError(rec["last"].replace("error: ", "", 1) or f"{rec['label']} failed")
+        inner(f"{rec['label']}: done")
 
     def ready_screen(self) -> dict:
         """The setup screen's data: the run's plan, its bar and time left,
@@ -2619,8 +3052,21 @@ class Dashboard:
             from . import images as im
             src = Path(path.strip().strip('"'))
             emit(f"reading {src.name}…")
-            dest = im.import_media(image_id, src, progress=emit)
-            emit(f"imported {src.name} as {image_id} -> {dest}")
+            got, dest, note = im.import_any(src, wanted=image_id, progress=emit)
+            if note:
+                emit(f"note: {note}")
+            emit(f"imported {src.name} as {got} -> {dest}")
+        return run
+
+    def stream_netos_import(self, image_id: str, path: str):
+        """A vendor router image the user downloaded (winlab/netos.py): the
+        vendor read off its name when none is given."""
+        def run(emit):
+            from . import images as im
+            src = Path(path.strip().strip('"'))
+            emit(f"reading {src.name}…")
+            dest = im.import_media(image_id or "router", src, progress=emit)
+            emit(f"imported {src.name} -> {dest}")
         return run
 
     def stream_mecm_prepare(self, emit) -> None:
@@ -2632,6 +3078,18 @@ class Dashboard:
     def stream_enable_whp(self, emit) -> None:
         from . import readiness
         readiness.enable_hypervisor_platform(emit)
+
+    def stream_install_qemu(self, emit) -> None:
+        """Linux: QEMU, the firmware and swtpm from the distribution (polkit asks for the password)."""
+        from . import linuxhost
+        if not linuxhost.install_packages(say=emit):
+            raise RuntimeError("QEMU was not installed: " + linuxhost.install_hint())
+        emit("installed")
+
+    def stream_kvm_access(self, emit) -> None:
+        from . import linuxhost
+        if not linuxhost.grant_kvm(say=emit):
+            raise RuntimeError("this user was not added to the kvm group")
 
     def pc_checks(self) -> dict:
         from . import readiness
@@ -2666,10 +3124,13 @@ class Dashboard:
             debpacks.fetch(pack_id, progress=emit)
         return run
 
-    def stream_toolkit(self, sysinternals: bool):
+    def stream_toolkit(self, which):
         def run(emit) -> None:
             from . import toolkit
-            if sysinternals:
+            if which == "windbg":
+                emit("fetching WinDbg from Microsoft's download host (you accepted Microsoft's licence)…")
+                toolkit.fetch(("windbg",), accept_windbg=True, progress=emit)
+            elif which:
                 emit("fetching the Sysinternals Suite from download.sysinternals.com (you accepted Microsoft's licence)…")
                 toolkit.fetch(("sysinternals",), accept_sysinternals=True, progress=emit)
             else:
@@ -2682,6 +3143,11 @@ class Dashboard:
         emit(f"fetching Wireshark from wireshark.org ({wireshark.SIZE_TEXT}); Npcap is never fetched…")
         wireshark.fetch(progress=emit)
 
+    def stream_termshark(self, emit) -> None:
+        from . import termshark
+        emit(f"fetching Termshark {termshark.VERSION} from its GitHub release ({termshark.SIZE_TEXT})…")
+        termshark.fetch_onto_volume(progress=emit)
+
     def stream_webmin(self, emit) -> None:
         from . import webmin
         emit(f"fetching Webmin {webmin.VERSION} from its GitHub release ({webmin.SIZE_TEXT})…")
@@ -2692,7 +3158,9 @@ class Dashboard:
             from . import containers
             emit({"images": "pulling the container images from Docker Hub and Microsoft's registry…",
                   "k3s": "fetching k3s from its GitHub release…",
-                  "docker-win": "fetching Docker for Windows from download.docker.com…"}[kind])
+                  "docker-win": "fetching Docker for Windows from download.docker.com…",
+                  "kubeadm": "fetching Kubernetes for kubeadm from dl.k8s.io, registry.k8s.io and GitHub releases…",
+                  "helm": "fetching Helm from get.helm.sh…"}[kind])
             containers.fetch(kind, progress=emit)
         return run
 
@@ -2712,6 +3180,16 @@ class Dashboard:
         emit(f"fetching the ET Open rules from rules.emergingthreats.net ({ids.SIZE_TEXT})…")
         ids.fetch(progress=emit)
 
+    def stream_azure(self, emit) -> None:
+        from . import azure
+        emit(f"fetching floci-az from its registry, restic and rest-server from their releases ({azure.SIZE_TEXT})…")
+        azure.fetch(progress=emit)
+
+    def stream_aws(self, emit) -> None:
+        from . import aws
+        emit(f"fetching moto from its registry and the AWS CLI from Amazon's download host ({aws.SIZE_TEXT})…")
+        aws.fetch(progress=emit)
+
     def stream_secops(self, kind: str):
         def run(emit) -> None:
             from . import secops
@@ -2730,6 +3208,11 @@ class Dashboard:
         from . import doctools
         emit(f"fetching the GLPI Agent from its GitHub release ({doctools.AGENT_SIZE_TEXT})…")
         doctools.fetch_agent(progress=emit)
+
+    def stream_softphone(self, emit) -> None:
+        from . import softphone
+        emit(f"fetching MicroSIP from microsip.org ({softphone.SIZE_TEXT})…")
+        softphone.fetch(progress=emit)
 
     def stream_mailclient(self, emit) -> None:
         from . import mail
@@ -2757,6 +3240,21 @@ class Dashboard:
         viewer.fetch(progress=emit)
         emit(f"fetching xterm.js {termview.VERSION} from the npm registry…")
         termview.fetch(progress=emit)
+        from . import mapview
+        emit(f"fetching Cytoscape.js {mapview.VERSION} from the npm registry…")
+        mapview.fetch(progress=emit)
+        from . import castplayer, chartview, elkview
+        emit(f"fetching uPlot {chartview.VERSION} from the npm registry…")
+        chartview.fetch(progress=emit)
+        emit(f"fetching asciinema-player {castplayer.VERSION} from the npm registry…")
+        castplayer.fetch(progress=emit)
+        emit(f"fetching ELK {elkview.VERSION} (EPL-2.0, unmodified) and cytoscape-elk {elkview.ADAPTER_VERSION} from the npm registry…")
+        elkview.fetch(progress=emit)
+        emit(f"fetching the diagrams.net viewer {drawio.VERSION} (Apache-2.0) from diagrams.net's GitHub tag…")
+        drawio.fetch(progress=emit)
+        from . import pixiview
+        emit(f"fetching PixiJS {pixiview.VERSION} (MIT) from the npm registry…")
+        pixiview.fetch(progress=emit)
 
     def stream_template(self, params: dict):
         def run(emit):
@@ -2802,7 +3300,23 @@ class Dashboard:
         why = ups.blocked(self.lab, list(b.nodes))  # a power cut: no power at its plug
         if why:
             return {"ok": False, "message": why}
+        from . import poe  # a powered device its switch gives no PoE stays dark
+        dark = poe.blocked(self.lab, self.plan, list(b.nodes))
+        if dark and only and all(n in dark for n in b.nodes):
+            return {"ok": False, "message": "; ".join(f"{n} has no power: {why}" for n, why in dark.items())}
+        if dark:
+            b.nodes = [n for n in b.nodes if n not in dark]
+        from . import pcbuild  # the power button of a PC that cannot start (no supply, no memory...)
+        dead = pcbuild.blocked(self.lab, list(b.nodes))
+        if dead and only and all(n in dead for n in b.nodes):
+            return {"ok": False, "post": True,
+                    "message": "; ".join(f"{naming.display(self.lab, n)}: {why}" for n, why in dead.items())}
+        if dead:
+            b.nodes = [n for n in b.nodes if n not in dead]
+            dark = {**dark, **dead}
         notes = " ".join(line.strip() for line in membudget.explain(self.lab, b))
+        if dark:
+            notes = (notes + " " if notes else "") + "; ".join(f"{n} stays dark: {why}" for n, why in dark.items())
         if not b.nodes or all(n in orch.running() for n in b.nodes):
             return {"ok": True, "message": "already running"}
         jid = self.jobs.start("up", self.stream_up(orch, b))
@@ -2818,6 +3332,10 @@ class Dashboard:
                 emit(f"{', '.join(rep.resumed)}: resuming from hibernation")
             emit(f"up: {', '.join(rep.started) or 'nothing new'}")
             self._provider_side(rep.started, emit)
+            if rep.failed:
+                # The job ends red with the reason, not "up" over a machine that is off.
+                raise RuntimeError("; ".join(f"{naming.display(self.lab, n)} did not start: {why}"
+                                             for n, why in rep.failed.items()))
         return run
 
     def _provider_side(self, started: list[str], emit) -> None:
@@ -2945,7 +3463,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _json(self, obj, code=200) -> None:
-        self._send(code, json.dumps(obj).encode(), "application/json")
+        # A part the trial leaves out answers null (winlab/trialparts.py).
+        self._send(code, json.dumps(obj, default=_trialparts.as_json).encode(), "application/json")
 
     def _from_this_desktop(self, path: str) -> bool:
         """Only the desktop's own page may drive it. The server is on
@@ -2974,6 +3493,7 @@ class _Handler(BaseHTTPRequestHandler):
             if u.path == "/":
                 self._send(200, page_bytes(), "text/html; charset=utf-8")
             elif u.path == "/api/state":
+                self.dash.refresh_if_idle()
                 self._json(self.dash.snapshot())
                 from . import workday
                 workday.kick(self.dash.lab)  # the staff's working day moves on with the desktop's poll
@@ -2993,6 +3513,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(self.dash.segments())
             elif u.path == "/api/workbench":
                 from . import workbench
+                self.dash.refresh_if_idle()
                 self._json(workbench.view(self.dash))
             elif u.path == "/api/workbench/live":
                 from . import workbench
@@ -3030,12 +3551,25 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(self.dash.license())
             elif u.path == "/api/lessons":
                 self._json(self.dash.lessons())
+            elif u.path == "/api/review":
+                # spaced review: today's recall questions from finished lessons (winlab/review.py)
+                from . import review
+                self._json(review.todays_set())
             elif u.path == "/api/lesson":
                 self._json(self.dash.lesson(q.get("id", [""])[0]))
             elif u.path == "/api/answer":
                 self._json(self.dash.model_answer(q.get("id", [""])[0], q.get("node", [""])[0]))
             elif u.path == "/api/progress":
                 self._json(self.dash.progress())
+            elif u.path == "/api/dashboard":
+                # the Progress window (winlab/dashboard.py, winlab/tracks.py)
+                from . import certshare, dashboard
+                d = dashboard.collect()
+                for t in d["tracks"]:
+                    c = t["certificate"]
+                    if c.get("code"):
+                        c["linkedin"] = certshare.linkedin_url({**c, "title": t["title"], "completed": t["finished"]})
+                self._json(d)
             elif u.path == "/api/exam":
                 self._json(self.dash.exam(q.get("id", ["az-802"])[0]))
             elif u.path == "/api/exams":
@@ -3044,12 +3578,23 @@ class _Handler(BaseHTTPRequestHandler):
                 self._json(self.dash.practice())
             elif u.path == "/api/oncall":
                 self._json(self.dash.oncall())
+            elif u.path == "/api/breakfix":
+                self._json(self.dash.breakfix())
+            elif u.path == "/api/interview":
+                self._json(self.dash.interview())
+            elif u.path == "/api/incidents":
+                self._json(self.dash.incidents())
             elif u.path == "/api/inherited":
                 self._json(self.dash.inherited())
+            elif u.path == "/api/aidc":
+                self._json(self.dash.aidc())
             elif u.path == "/api/helpdesk":
                 self._json(self.dash.helpdesk())
             elif u.path == "/api/help":
                 self._json(self.dash.help_topics())
+            elif u.path == "/api/i18n":
+                from . import i18n
+                self._json(i18n.view((parse_qs(u.query).get("lang") or [None])[0]))
             elif u.path == "/api/scenario":
                 self._json(self.dash.scenario())
             elif u.path == "/api/alerts":
@@ -3099,10 +3644,32 @@ class _Handler(BaseHTTPRequestHandler):
             elif u.path.startswith("/xterm/"):
                 from . import termview
                 self._static(termview.term_dir(), u.path[len("/xterm/"):], termview.ready())
+            elif u.path.startswith("/cytoscape/"):
+                from . import mapview
+                self._static(mapview.map_dir(), u.path[len("/cytoscape/"):], mapview.ready())
+            elif u.path.startswith("/drawio/"):
+                self._static(drawio.viewer_dir(), u.path[len("/drawio/"):], drawio.ready())
+            elif u.path.startswith("/pixi/"):
+                from . import pixiview
+                self._static(pixiview.pixi_dir(), u.path[len("/pixi/"):], pixiview.ready())
+            elif u.path.startswith("/uplot/"):
+                from . import chartview
+                self._static(chartview.chart_dir(), u.path[len("/uplot/"):], chartview.ready())
+            elif u.path.startswith("/asciinema/"):
+                from . import castplayer
+                self._static(castplayer.player_dir(), u.path[len("/asciinema/"):], castplayer.ready())
+            elif u.path.startswith("/elk/"):
+                from . import elkview
+                self._static(elkview.elk_dir(), u.path[len("/elk/"):], elkview.ready())
+            elif u.path == "/api/recording":
+                # One terminal recording, as asciicast v2 for the player (winlab/recordings.py).
+                self._recording(q.get("name", [""])[0])
             elif u.path == "/ws/console":
                 self._console(q.get("node", [""])[0])
             elif u.path == "/ws/term":
                 self._console(q.get("node", [""])[0], term=True)
+            elif u.path == "/ws/winterm":
+                self._winterm(q)
             elif u.path == "/api/labs":
                 self._json(self.dash.labs())
             elif u.path == "/api/jobs":
@@ -3111,7 +3678,9 @@ class _Handler(BaseHTTPRequestHandler):
                 from . import certificate, progress
                 name = q.get("name", [""])[0].strip() or progress.student()
                 try:
-                    page = certificate.render(name, q.get("module", [""])[0])
+                    track = q.get("track", [""])[0]
+                    page = (certificate.issue(name, track)[0] if track
+                            else certificate.render(name, q.get("module", [""])[0]))
                 except certificate.NotYet as exc:
                     self._send(403, f"<!doctype html><meta charset=utf-8><title>winlab</title>"
                                f"<p style='font:15px system-ui;padding:40px'>Not yet: {exc}.</p>".encode(),
@@ -3120,6 +3689,42 @@ class _Handler(BaseHTTPRequestHandler):
                     if name:
                         progress.set_student(name)
                     self._send(200, page.encode("utf-8"), "text/html; charset=utf-8")
+            elif u.path == "/api/building":
+                # The Building window: the lab's place and where its machines stand (winlab/building.py).
+                from . import building
+                self._json(building.view(self.dash))
+            elif u.path == "/api/building-live":
+                # The building as a live picture of the lab (winlab/buildlive.py).
+                from . import buildlive
+                self._json(buildlive.view(self.dash))
+            elif u.path == "/api/building-screen":
+                # A running machine's real screen, small, for its desk's monitor.
+                from . import buildlive
+                try:
+                    body = buildlive.screen(self.dash.lab.name, q.get("node", [""])[0],
+                                            int(q.get("w", ["320"])[0] or 320))
+                except (buildlive.LiveError, ValueError) as exc:
+                    self._json({"ok": False, "message": str(exc)}, 404)
+                else:
+                    self._send(200, body, "image/png")
+            elif u.path == "/api/building-export":
+                # The floors for the wiki: diagrams.net, or a DokuWiki page.
+                from . import buildlive, buildsys
+                fmt = q.get("format", ["drawio"])[0]
+                body = (buildlive.dokuwiki(self.dash.lab) if fmt == "dokuwiki"
+                        else buildsys.floorplan_drawio(self.dash.lab)).encode("utf-8")
+                name = f"{self.dash.lab.name}-floors.{'txt' if fmt == 'dokuwiki' else 'drawio'}"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; charset=utf-8" if fmt == "dokuwiki"
+                                 else "application/xml")
+                self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif u.path == "/api/building-systems":
+                # The lab's own open source systems as the building sees them (winlab/buildsys.py).
+                from . import buildsys
+                self._json(buildsys.view(self.dash.lab))
             elif u.path == "/api/campus":
                 # The Site window: the job's site, its cabling and work order (winlab/campus.py).
                 from . import campus
@@ -3143,11 +3748,17 @@ class _Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     self.wfile.write(body)
             elif u.path == "/api/diagram":
-                # A standalone SVG document needs its namespace, or it shows as text.
-                svg = diagram.render(self.dash.plan)
-                if "xmlns=" not in svg.split(">", 1)[0]:
-                    svg = svg.replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" ', 1)
-                self._send(200, svg.encode(), "image/svg+xml")
+                # The network diagram, drawn by diagrams.net's viewer (winlab/drawio.py).
+                self._send(200, drawio.page(self.dash.plan).encode("utf-8"), "text/html; charset=utf-8")
+            elif u.path == "/api/diagram.drawio":
+                body = drawio.dumps(self.dash.plan).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/vnd.jgraph.mxfile")
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="{self.dash.lab.name}{drawio.EXT}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             elif u.path == "/api/netfile":
                 from . import netfile
                 body = netfile.dumps(self.dash.lab)
@@ -3159,11 +3770,25 @@ class _Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 self.wfile.write(body)
+            elif u.path == "/api/progress/export":
+                # The Progress window's Export: one file to take to another PC (winlab/progressfile.py).
+                from . import progressfile
+                b = progressfile.bundle()
+                body = progressfile.dumps(b)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Disposition", f'attachment; filename="{progressfile.file_name(b)}"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
             elif u.path == "/api/stream":
                 self._sse(q.get("job", [""])[0])
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001
+            from . import applog
+            applog.write(f"GET {u.path}", str(exc), exc)
             self._json({"error": str(exc), "trace": traceback.format_exc()[-800:]}, 500)
 
     def _switch_lab(self, name: str) -> dict:
@@ -3188,6 +3813,32 @@ class _Handler(BaseHTTPRequestHandler):
         remember_lab(name)
         return {"ok": True, "message": f"switched to {name}", "lab": name}
 
+    def _my_lab(self, what: str, name: str, new_name: str) -> dict:
+        """Delete or rename one of the user's own labs (winlab/mylabs.py).
+        The lab open on the desktop can be renamed (the desktop moves with
+        it), not deleted."""
+        from . import mylabs
+        dash = self.dash
+        with dash._edit_lock:
+            try:
+                if what == "lab-delete":
+                    if name == dash.lab.name:
+                        return {"ok": False, "message": f"{name} is open: open another lab from Start first, "
+                                                        f"then delete it"}
+                    mylabs.delete(name)
+                    return {"ok": True, "message": f"{name} deleted, with its machines' disks"}
+                dest = mylabs.rename(name, new_name)
+            except (mylabs.MyLabError, LabError, OSError) as exc:
+                return {"ok": False, "message": str(exc)}
+            if name == dash.lab.name:
+                lab = load_lab(dest.stem)
+                new = Dashboard(lab, accel=dash._accel or "")
+                new.jobs, new.meter = dash.jobs, dash.meter
+                type(self).dash = new
+                remember_lab(dest.stem)
+            return {"ok": True, "lab": dest.stem, "reload": name == dash.lab.name,
+                    "message": f"{name} is now called {dest.stem}"}
+
     def _open_netfile(self, q: dict, length: int) -> None:
         """A network file the user opened or dropped on the workbench: a new
         lab from it, and the desktop moves to it."""
@@ -3205,6 +3856,21 @@ class _Handler(BaseHTTPRequestHandler):
         out["message"] = (f"opened as {lab.name}: {len(lab.nodes)} machine{'s' if len(lab.nodes) != 1 else ''}, "
                           "built fresh on this PC when you power them on")
         self._json(out)
+
+    def _import_progress(self, length: int) -> None:
+        """A progress file from another PC, opened in the Progress window:
+        merged into this PC's progress (winlab/progressfile.py)."""
+        from . import progressfile
+        if length > progressfile.MAX_BYTES:
+            self.close_connection = True
+            self._json({"ok": False, "message": "that is not a progress file: it is far too big"}, 400)
+            return
+        try:
+            rep = progressfile.import_bytes(self.rfile.read(length))
+        except progressfile.ProgressFileError as exc:
+            self._json({"ok": False, "message": str(exc)})
+            return
+        self._json({"ok": True, **rep})
 
     def _drop(self, q: dict, length: int) -> None:
         """A file dropped on a machine's window: the raw bytes, then a job
@@ -3246,6 +3912,9 @@ class _Handler(BaseHTTPRequestHandler):
         if u.path == "/api/netfile":
             self._open_netfile(parse_qs(u.query), length)
             return
+        if u.path == "/api/progress/import":
+            self._import_progress(length)
+            return
         if u.path.startswith("/api/activity/"):
             from . import activity
             activity.http_post(self, u.path, length)
@@ -3261,10 +3930,19 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             if u.path == "/api/action" and body.get("do") == "switch-lab":
                 self._json(self._switch_lab(body.get("lab", "")))
+            elif u.path == "/api/action" and body.get("do") in ("lab-delete", "lab-rename"):
+                self._json(self._my_lab(body.get("do"), str(body.get("lab") or ""), str(body.get("name") or "")))
+            elif u.path == "/api/action" and body.get("do") == "language":
+                from . import i18n
+                self._json(i18n.choose(str(body.get("lang", ""))))
             elif u.path == "/api/action":
                 self._json(self.dash.act(body.get("do", ""), body))
             elif u.path == "/api/job":
                 name = body.get("job", "")
+                same = self.dash.same_job(name, body)
+                if same:
+                    self._json({"job": same})
+                    return
                 if name == "bootstrap":
                     jid = self.dash.jobs.start("bootstrap", self.dash.stream_bootstrap)
                 elif name == "prepare":
@@ -3305,6 +3983,12 @@ class _Handler(BaseHTTPRequestHandler):
                 elif name == "fwiso-fetch":
                     jid = self.dash.jobs.start(
                         "fwiso-fetch", self.dash.stream_appliance(body.get("image", "")))
+                elif name == "netos-fetch":
+                    jid = self.dash.jobs.start(
+                        "netos-fetch", self.dash.stream_appliance(body.get("image", "")))
+                elif name == "netos-import":
+                    jid = self.dash.jobs.start("netos-import", self.dash.stream_netos_import(
+                        body.get("image", ""), body.get("path", "")))
                 elif name == "pack-fetch":
                     jid = self.dash.jobs.start(
                         "pack-fetch", self.dash.stream_pack(body.get("pack", "sssd")))
@@ -3316,15 +4000,23 @@ class _Handler(BaseHTTPRequestHandler):
                     jid = self.dash.jobs.start("mailclient-fetch", self.dash.stream_mailclient)
                 elif name == "wireshark-fetch":
                     jid = self.dash.jobs.start("wireshark-fetch", self.dash.stream_wireshark)
-                elif name in ("toolkit-fetch", "toolkit-sysinternals-fetch"):
-                    jid = self.dash.jobs.start(name, self.dash.stream_toolkit(name != "toolkit-fetch"))
+                elif name in ("toolkit-fetch", "toolkit-sysinternals-fetch", "toolkit-windbg-fetch"):
+                    jid = self.dash.jobs.start(name, self.dash.stream_toolkit(
+                        "windbg" if name == "toolkit-windbg-fetch" else name != "toolkit-fetch"))
                 elif name == "webmin-fetch":
                     jid = self.dash.jobs.start("webmin-fetch", self.dash.stream_webmin)
-                elif name in ("ctrimages-fetch", "k3s-fetch", "dockerwin-fetch"):
-                    kind = {"ctrimages-fetch": "images", "k3s-fetch": "k3s", "dockerwin-fetch": "docker-win"}[name]
+                elif name == "termshark-fetch":
+                    jid = self.dash.jobs.start("termshark-fetch", self.dash.stream_termshark)
+                elif name in ("ctrimages-fetch", "k3s-fetch", "dockerwin-fetch", "kubeadm-fetch", "helm-fetch"):
+                    kind = {"ctrimages-fetch": "images", "k3s-fetch": "k3s", "dockerwin-fetch": "docker-win",
+                            "kubeadm-fetch": "kubeadm", "helm-fetch": "helm"}[name]
                     jid = self.dash.jobs.start(name, self.dash.stream_containers(kind))
                 elif name == "dbclients-fetch":
                     jid = self.dash.jobs.start("dbclients-fetch", self.dash.stream_dbclients)
+                elif name == "azure-fetch":
+                    jid = self.dash.jobs.start("azure-fetch", self.dash.stream_azure)
+                elif name == "aws-fetch":
+                    jid = self.dash.jobs.start("aws-fetch", self.dash.stream_aws)
                 elif name == "idsrules-fetch":
                     jid = self.dash.jobs.start("idsrules-fetch", self.dash.stream_idsrules)
                 elif name == "wireguard-fetch":
@@ -3333,6 +4025,8 @@ class _Handler(BaseHTTPRequestHandler):
                     jid = self.dash.jobs.start("dscmodules-fetch", self.dash.stream_dscmodules)
                 elif name == "glpiagent-fetch":
                     jid = self.dash.jobs.start("glpiagent-fetch", self.dash.stream_glpiagent)
+                elif name == "softphone-fetch":
+                    jid = self.dash.jobs.start("softphone-fetch", self.dash.stream_softphone)
                 elif name == "secops-fetch":
                     jid = self.dash.jobs.start("secops-fetch", self.dash.stream_secops(str(body.get("kind") or "software")))
                 elif name == "get-ready":
@@ -3350,12 +4044,20 @@ class _Handler(BaseHTTPRequestHandler):
                         "app-update", self.dash.stream_app_update)
                 elif name == "enable-whp":
                     jid = self.dash.jobs.start("enable-whp", self.dash.stream_enable_whp)
+                elif name == "install-qemu":
+                    jid = self.dash.running_job("install-qemu") or self.dash.jobs.start(
+                        "install-qemu", self.dash.stream_install_qemu)
+                elif name == "kvm-access":
+                    jid = self.dash.jobs.start("kvm-access", self.dash.stream_kvm_access)
                 else:
                     self._json({"error": "unknown job"}, 400); return
+                self.dash.jobs.tag(jid, body)
                 self._json({"job": jid})
             else:
                 self._json({"error": "not found"}, 404)
         except Exception as exc:  # noqa: BLE001
+            from . import applog
+            applog.write(f"POST {u.path}", str(exc), exc)
             self._json({"error": str(exc)}, 500)
 
     def _static(self, root: Path, rel: str, ready: bool) -> None:
@@ -3371,6 +4073,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         ctype = _MIME.get(target.suffix.lower(), "application/octet-stream")
         self._send(200, target.read_bytes(), ctype)
+
+    def _recording(self, name: str) -> None:
+        from . import recordings
+        try:
+            p = recordings.path_of(self.dash.lab.name, name)
+        except recordings.RecordingError as exc:
+            self._json({"error": str(exc)}, 404)
+            return
+        self._send(200, p.read_bytes(), "application/x-asciicast")
 
     def _console(self, node_id: str, term: bool = False) -> None:
         """Upgrades to a WebSocket and bridges it to the machine's VNC port,
@@ -3399,10 +4110,55 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.close_connection = True
         try:
+            tap = None
+            if term:  # a Terminal window's recording, when one is on (winlab/recordings.py)
+                from . import recordings
+                lab_name = self.dash.lab.name
+                tap = lambda data: recordings.tap(lab_name, node_id, data)  # noqa: E731
             wsbridge.bridge(self.connection, self.rfile.read1 if hasattr(self.rfile, "read1")
-                            else self.rfile.read, self._ws_write, "127.0.0.1", port)
+                            else self.rfile.read, self._ws_write, "127.0.0.1", port, tap=tap)
         except wsbridge.BridgeError:
             pass
+
+    def _winterm(self, q: dict) -> None:
+        """Upgrades to a WebSocket for one Command Prompt or PowerShell window
+        of a Windows machine, over its COM3 console host (winterm.py)."""
+        from . import serverroom, winterm
+        node_id = q.get("node", [""])[0]
+        ok, why = serverroom.allowed(self.dash.lab, node_id)
+        if not ok:
+            self._json({"error": why, "server_room": True}, 403)
+            return
+        node = self.dash.lab.nodes.get(node_id)
+        st = state.load(self.dash.lab.name)
+        ns = st.nodes.get(node_id) if st else None
+        if not winterm.fitted(node) or not ns or not state.pid_alive(ns.pid):
+            self._json({"error": f"{node_id or '(no node)'} is not a running Windows machine"}, 404)
+            return
+        shell = q.get("shell", ["cmd"])[0]
+        if shell not in winterm.SHELLS:
+            self._json({"error": f"no shell called {shell}"}, 400)
+            return
+
+        def num(key: str, default: int) -> int:
+            try:
+                return int(q.get(key, [default])[0])
+            except (TypeError, ValueError):
+                return default
+        code, reason, headers = wsbridge.handshake_response(self.headers)
+        self.send_response(code, reason)
+        for k, v in headers:
+            self.send_header(k, v)
+        if code != 101:
+            self.send_header("Content-Length", "0")
+        self.end_headers()
+        self.wfile.flush()
+        if code != 101:
+            return
+        self.close_connection = True
+        winterm.serve_ws(self.connection, self.rfile.read1 if hasattr(self.rfile, "read1") else self.rfile.read,
+                         self._ws_write, ns, shell, q.get("admin", ["0"])[0] == "1",
+                         num("cols", 120), num("rows", 30))
 
     def _ws_write(self, data: bytes) -> None:
         self.wfile.write(data)
@@ -3438,6 +4194,13 @@ def _licence_and_updates_at_start() -> None:
         pass
 
 
+def _clean_leftovers() -> None:
+    """Half files from a winlab closed mid-download or mid-import."""
+    from .bootstrap import clean_leftovers
+    for f in clean_leftovers():
+        print(f"removed a leftover half file: {f}", file=sys.stderr)
+
+
 def serve(target: str = "", port: int = 8780, accel: str = "", open_browser: bool = True) -> None:
     lab = load_lab(target or default_lab())
     url = f"http://127.0.0.1:{port}/"
@@ -3454,10 +4217,13 @@ def serve(target: str = "", port: int = 8780, accel: str = "", open_browser: boo
             appwindow.open_window(url, paths.VAR / "appwindow")
         return
     remember_lab(lab.name)
+    threading.Thread(target=_clean_leftovers, daemon=True).start()
     threading.Timer(1.5, dash.autostart_if_asked).start()
     threading.Thread(target=_licence_and_updates_at_start, daemon=True).start()
     from . import power  # management-port requests and magic packets, carried out on the machines
     power.watch_desktop(lambda: _Handler.dash)
+    from . import azure  # what the student made in the lab's Azure becomes lab equipment
+    azure.watch_desktop(lambda: _Handler.dash)
     from . import consolecable  # the console cables' serial lines, bridged to the devices' consoles
     consolecable.watch_desktop(lambda: _Handler.dash)
     from . import iosssh  # SSH sessions to the router and switches, from the router's ttyS2 to their consoles

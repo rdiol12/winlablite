@@ -1,0 +1,157 @@
+[solution]
+exercise = "router-zone-firewall"
+notes = """
+The Workbench's part (a users switch in the router's free port
+GigabitEthernet0/0/1, pc01's cable moved onto it) is done with
+`winlab workbench`, a command from the gapx-sol-net branch. The step on
+pc01 that signs in, updates its policies and opens \\\\fs01\\c$ runs as
+CORP\\Administrator in a one-off task, since the step itself runs as the
+machine.
+"""
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-add shelf=switch id=users x=650 y=520
+workbench ad-ds-basics wb-cable node=router network=users port=g0/0/1
+workbench ad-ds-basics wb-cable node=pc01 nic=0 network=users
+'''
+wait = 5
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+show ip interface brief
+configure terminal
+interface g0/0/1
+ip address 10.10.20.1 255.255.255.0
+no shutdown
+exit
+ip dhcp excluded-address 10.10.20.1 10.10.20.49
+ip dhcp pool USERS
+network 10.10.20.0 255.255.255.0
+default-router 10.10.20.1
+dns-server 10.10.10.10
+domain-name corp.lab
+end
+'''
+wait = 5
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+ipconfig /release | Out-Null
+ipconfig /renew | Out-Null
+Start-Sleep 10
+ipconfig /registerdns | Out-Null
+Get-NetIPConfiguration | Format-List IPv4Address, IPv4DefaultGateway, DNSServer
+Test-NetConnection fs01 -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
+'''
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+configure terminal
+zone security SERVERS
+description dc01 and fs01
+exit
+zone security USERS
+exit
+ip access-list extended DOMAIN-SVCS
+permit udp any host 10.10.10.10 eq domain
+permit tcp any host 10.10.10.10 eq domain
+permit tcp any host 10.10.10.10 eq 88
+permit udp any host 10.10.10.10 eq 88
+permit tcp any host 10.10.10.10 eq 389
+permit udp any host 10.10.10.10 eq 389
+permit tcp any host 10.10.10.10 eq 135
+permit tcp any host 10.10.10.10 range 49152 65535
+permit tcp any host 10.10.10.10 eq 3268
+permit tcp any host 10.10.10.10 eq 464
+permit udp any host 10.10.10.10 eq 464
+permit udp any host 10.10.10.10 eq ntp
+permit tcp any 10.10.10.0 0.0.0.255 eq 445
+exit
+class-map type inspect match-any DOMAIN
+match access-group name DOMAIN-SVCS
+exit
+class-map type inspect match-any PING
+match protocol icmp
+exit
+policy-map type inspect USERS-TO-SERVERS
+class type inspect DOMAIN
+inspect
+class type inspect PING
+inspect
+class class-default
+drop log
+exit
+exit
+zone-pair security U2S source USERS destination SERVERS
+service-policy type inspect USERS-TO-SERVERS
+exit
+interface g0/0/0
+zone-member security SERVERS
+interface g0/0/1
+zone-member security USERS
+end
+show zone security
+show zone-pair security
+'''
+wait = 5
+
+[[step]]
+node = "pc01"
+shell = "powershell"
+script = '''
+Test-NetConnection fs01 -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
+ping -n 2 dc01
+function Invoke-AsDomainUser([string]$Code, [int]$Minutes = 5) {
+  # The step runs as the machine; a user's own certificate needs the user's
+  # own session, so the commands run as CORP\Administrator in a one-off task.
+  $dir = 'C:\ProgramData\winlab-asuser'
+  New-Item $dir -ItemType Directory -Force | Out-Null
+  Set-Content "$dir\run.ps1" $Code -Encoding UTF8
+  Remove-Item "$dir\out.txt" -ErrorAction SilentlyContinue
+  $s = '{{winlab:lab-secret}}'
+  $a = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -ExecutionPolicy Bypass -Command & '$dir\run.ps1' *> '$dir\out.txt'"
+  Register-ScheduledTask -TaskName winlab-asuser -Action $a -User 'CORP\Administrator' -Password $s -RunLevel Highest -Force | Out-Null
+  Start-ScheduledTask -TaskName winlab-asuser
+  Start-Sleep 5
+  for ($i = 0; $i -lt $Minutes * 30 -and (Get-ScheduledTask -TaskName winlab-asuser).State -eq 'Running'; $i++) { Start-Sleep 2 }
+  Unregister-ScheduledTask -TaskName winlab-asuser -Confirm:$false
+  Get-Content "$dir\out.txt" -ErrorAction SilentlyContinue
+}
+Invoke-AsDomainUser @'
+gpupdate /force
+Get-ChildItem \\fs01\c$ | Select-Object -First 5 | Format-Table Name
+'@
+Test-NetConnection 10.10.10.10 -Port 80 -InformationLevel Quiet -WarningAction SilentlyContinue
+(Get-NetIPConfiguration | Where-Object IPv4DefaultGateway | Select-Object -First 1).IPv4DefaultGateway.NextHop
+'''
+timeout = 900
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Clear-DnsServerCache -Force
+Resolve-DnsName pc01 -ErrorAction SilentlyContinue
+Test-Connection pc01 -Count 2 -Quiet
+Test-NetConnection pc01 -Port 445 -InformationLevel Quiet -WarningAction SilentlyContinue
+'''
+
+[[step]]
+node = "router"
+shell = "console"
+script = '''
+enable
+show policy-map type inspect zone-pair sessions
+write memory
+'''

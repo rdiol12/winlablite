@@ -1,0 +1,17 @@
+{
+ "Name the switch, its banner and pc01's port from the console cable": "سمِّ المبدّل ولافتته ومنفذ pc01 من كابل وحدة التحكم",
+ "The corp switch has no address to manage it by; its console port is the way\nin. Cable pc01's USB-serial adapter to the console, open a terminal on COM2\nat 9600 8N1, and give the switch its name, a warning banner and a\ndescription on the port pc01 is plugged into. The checks open COM2 on pc01\nthemselves and read the switch's running configuration, so close your\nterminal before you press Check my work.": "ليس لمبدّل corp عنوان لإدارته؛ ومنفذ وحدة التحكم هو طريق الدخول. وصّل محوّل USB-serial الخاص بـ pc01 بوحدة التحكم، وافتح طرفية على COM2 بإعداد 9600 8N1، وأعطِ المبدّل اسمه ولافتة تحذير ووصفًا على المنفذ الموصول به pc01. تفتح عمليات التحقق COM2 على pc01 بنفسها وتقرأ الإعدادات الجارية للمبدّل، لذا أغلق طرفيتك قبل أن تضغط تحقق من عملي.",
+ "Plug the console cable between the corp switch and pc01, and restart pc01 so it finds COM2": "وصّل كابل وحدة التحكم بين مبدّل corp وpc01، وأعد تشغيل pc01 ليجد COM2",
+ "Open a terminal on COM2 at 9600 8N1 and reach the switch's privileged prompt": "افتح طرفية على COM2 بإعداد 9600 8N1 وصِل إلى موجّه الأوامر المميّز في المبدّل",
+ "Name the switch CORP-SW1": "سمِّ المبدّل CORP-SW1",
+ "Give it a message-of-the-day banner that warns off anyone without authorization": "أعطه لافتة رسالة اليوم تحذّر كل من ليس لديه تصريح",
+ "Describe port Fa0/1 as pc01, save the configuration and close the terminal": "صِف المنفذ Fa0/1 بأنه pc01، واحفظ الإعدادات وأغلق الطرفية",
+ "pc01 reaches the switch's console on COM2": "يصل pc01 إلى وحدة تحكم المبدّل على COM2",
+ "Windows only adds the adapter's port when it starts with the adapter plugged in; Device Manager, Ports (COM and LPT), shows it.": "لا يضيف Windows منفذ المحوّل إلا إذا بدأ والمحوّل موصول؛ ويُظهره Device Manager ضمن Ports (COM and LPT).",
+ "the switch is called CORP-SW1": "اسم المبدّل CORP-SW1",
+ "The name is a global configuration command; the prompt changes the moment it takes.": "الاسم أمر إعداد عام؛ ويتغير موجّه الأوامر لحظة تطبيقه.",
+ "a warning banner greets whoever connects": "لافتة تحذير تستقبل كل من يتصل",
+ "A message-of-the-day banner sits between two delimiter characters of your choice, typed in global configuration.": "تقع لافتة رسالة اليوم بين حرفي فاصل من اختيارك، وتُكتب في الإعداد العام.",
+ "Fa0/1 is described as pc01": "Fa0/1 موصوف بأنه pc01",
+ "A description belongs to the interface: enter the port's own configuration mode first.": "الوصف يخص الواجهة: ادخل أولًا إلى وضع إعداد المنفذ نفسه."
+}

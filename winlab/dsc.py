@@ -565,6 +565,9 @@ BUILDERS.update(_wsbackup.BUILDERS)
 # Windows Deployment Services: golden images over PXE (wds).
 from . import imaging as _imaging  # noqa: E402
 BUILDERS.update(_imaging.BUILDERS)
+# VM-level backup: a Hyper-V host and Veeam Backup & Replication (vmbackup).
+from . import vmbackup as _vmbackup  # noqa: E402
+BUILDERS.update(_vmbackup.BUILDERS)
 
 
 # ----------------------------------------------------------------- compile

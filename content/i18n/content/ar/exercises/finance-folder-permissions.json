@@ -1,0 +1,18 @@
+{
+ "A Finance folder only Finance can open, invisible to everyone else": "مجلد Finance لا يستطيع فتحه إلا فريق Finance، وغير مرئي لأي شخص آخر",
+ "Finance keeps its files inside the Company share. Only the finance team may\nread or change them, and other staff should not even see the folder. Do it\nwith a group on the folder's NTFS ACL and access-based enumeration on the\nshare, not with a second share.": "يحتفظ فريق Finance بملفاته داخل المشاركة Company. لا يُسمح إلا لفريق المالية\nبقراءتها أو تغييرها، ويجب ألا يرى باقي الموظفين المجلد أصلًا. نفّذ ذلك\nبمجموعة في قائمة ACL الخاصة بـ NTFS للمجلد والتعداد المستند إلى الوصول على\nالمشاركة، لا بمشاركة ثانية.",
+ "On dc01, create the global security group G-Finance": "على dc01، أنشئ مجموعة الأمان العمومية G-Finance",
+ "On fs01, create D:\\Shares\\Company\\Finance, disable inheritance and remove the inherited entries": "على fs01، أنشئ D:\\Shares\\Company\\Finance، وعطّل الوراثة وأزل الإدخالات الموروثة",
+ "Grant G-Finance Modify on the folder; keep Administrators and SYSTEM Full Control; no Users, Domain Users, Authenticated Users or Everyone": "امنح G-Finance إذن التعديل على المجلد؛ وأبقِ Administrators وSYSTEM بتحكم كامل؛ ولا Users ولا Domain Users ولا Authenticated Users ولا Everyone",
+ "Make sure access-based enumeration is on for the Company share": "تأكد من تفعيل التعداد المستند إلى الوصول للمشاركة Company",
+ "G-Finance exists": "G-Finance موجودة",
+ "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security": "New-ADGroup -Name G-Finance -GroupScope Global -GroupCategory Security",
+ "Finance does not inherit from Company": "لا يرث Finance من Company",
+ "icacls D:\\Shares\\Company\\Finance /inheritance:r removes inherited entries; the Security tab's Advanced > Disable inheritance does the same": "يزيل icacls D:\\Shares\\Company\\Finance /inheritance:r الإدخالات الموروثة؛ ويفعل Advanced > Disable inheritance في علامة التبويب Security الشيء نفسه",
+ "G-Finance has Modify": "لدى G-Finance إذن التعديل",
+ "icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'": "icacls D:\\Shares\\Company\\Finance /grant 'CORP\\G-Finance:(OI)(CI)M'",
+ "nobody else is let in": "لا يُسمح لأي أحد آخر بالدخول",
+ "icacls lists every entry; remove the broad ones with icacls <folder> /remove:g Users (and Authenticated Users, Everyone)": "يسرد icacls كل إدخال؛ أزل الإدخالات الواسعة باستخدام icacls <folder> /remove:g Users (وAuthenticated Users وEveryone)",
+ "access-based enumeration is on": "التعداد المستند إلى الوصول مفعّل",
+ "Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force": "Set-SmbShare -Name Company -FolderEnumerationMode AccessBased -Force"
+}

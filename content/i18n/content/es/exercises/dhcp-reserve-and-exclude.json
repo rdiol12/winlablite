@@ -1,0 +1,13 @@
+{
+ "A reservation for pc01 and a block kept back for printers": "Una reserva para pc01 y un bloque apartado para impresoras",
+ "pc01 runs a licence dongle server that other machines find by address, so it\nmust always get 10.10.10.60, still from DHCP so its gateway and DNS options\nstay managed in one place. The top of the scope is promised to network\nprinters that will be set by hand.": "pc01 ejecuta un servidor de mochilas de licencias que otras máquinas encuentran por su dirección, así que debe recibir siempre 10.10.10.60, pero desde DHCP, para que sus opciones de puerta de enlace y DNS se sigan gestionando en un solo lugar. La parte alta del ámbito está prometida a impresoras de red que se configurarán a mano.",
+ "Reserve 10.10.10.60 for pc01 (its MAC address is the client id)": "Reserva 10.10.10.60 para pc01 (su dirección MAC es el id. de cliente)",
+ "Exclude 10.10.10.140 to 10.10.10.150 from the 10.10.10.0 scope": "Excluye de 10.10.10.140 a 10.10.10.150 del ámbito 10.10.10.0",
+ "Renew on pc01 (ipconfig /renew) so it moves to its reserved address": "Renueva en pc01 (ipconfig /renew) para que pase a su dirección reservada",
+ "a reservation of 10.10.10.60 exists": "existe una reserva de 10.10.10.60",
+ "Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <pc01 MAC, from Get-DhcpServerv4Lease> -Name pc01": "Add-DhcpServerv4Reservation -ScopeId 10.10.10.0 -IPAddress 10.10.10.60 -ClientId <MAC de pc01, de Get-DhcpServerv4Lease> -Name pc01",
+ "printers' range is excluded": "el rango de las impresoras está excluido",
+ "Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (an exclusion must fall inside the scope's range)": "Add-DhcpServerv4ExclusionRange -ScopeId 10.10.10.0 -StartRange 10.10.10.140 -EndRange 10.10.10.150 (una exclusión debe estar dentro del rango del ámbito)",
+ "pc01 now holds 10.10.10.60": "pc01 tiene ahora 10.10.10.60",
+ "The reservation applies at the next lease: ipconfig /release, then ipconfig /renew on pc01. A wrong MAC (dashes, not colons) is the usual reason it does not.": "La reserva se aplica en la siguiente concesión: ipconfig /release y después ipconfig /renew en pc01. Una MAC incorrecta (guiones, no dos puntos) es el motivo habitual de que no funcione."
+}

@@ -1,0 +1,86 @@
+[solution]
+exercise = "onboard-new-starters"
+notes = "Everyone's first password is the lab password: typed into the staff list with winlab staff password --stdin, which reads it from the self-test. fs01's data disk and Company share are made first when no earlier lesson made them."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workday start --lab ad-ds-basics
+media ad-ds-basics dc01 plug new-starters
+'''
+wait = 20
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+$drive = (Get-Volume | Where-Object { $_.DriveType -eq 'Removable' -and $_.DriveLetter } | Select-Object -First 1).DriveLetter
+$csv = Import-Csv "$($drive):\New starters.csv"
+Copy-Item "$($drive):\New starters.csv" C:\Windows\Temp\new-starters.csv -Force
+if (-not (Get-ADOrganizationalUnit -Filter "Name -eq 'Staff'")) { New-ADOrganizationalUnit -Name Staff -Path 'DC=corp,DC=lab' }
+$csv.Department | Sort-Object -Unique | ForEach-Object {
+  $g = 'G-' + ($_ -replace ' ', '')
+  if (-not (Get-ADGroup -Filter "Name -eq '$g'")) { New-ADGroup -Name $g -GroupScope Global -GroupCategory Security -Path 'OU=Staff,DC=corp,DC=lab' }
+}
+$pw = ConvertTo-SecureString '{{winlab:lab-secret}}' -AsPlainText -Force
+foreach ($r in $csv) {
+  if (-not (Get-ADUser -Filter "SamAccountName -eq '$($r.SamAccountName)'")) {
+    New-ADUser -Name $r.DisplayName -GivenName $r.FirstName -Surname $r.LastName -SamAccountName $r.SamAccountName -UserPrincipalName $r.EmailAddress -EmailAddress $r.EmailAddress -Department $r.Department -Title $r.Title -OfficePhone $r.Extension -Path 'OU=Staff,DC=corp,DC=lab' -AccountPassword $pw -Enabled $true
+  }
+  Add-ADGroupMember -Identity ('G-' + ($r.Department -replace ' ', '')) -Members $r.SamAccountName
+}
+'''
+
+[[step]]
+node = "fs01"
+shell = "powershell"
+script = '''
+if (-not (Get-SmbShare -Name Company -ErrorAction SilentlyContinue)) {
+  $raw = Get-Disk | Where-Object PartitionStyle -eq 'RAW' | Select-Object -First 1
+  if ($raw) { $raw | Initialize-Disk -PartitionStyle GPT -PassThru | New-Partition -DriveLetter D -UseMaximumSize | Format-Volume -FileSystem NTFS -NewFileSystemLabel Data -Confirm:$false | Out-Null }
+  New-Item -ItemType Directory -Force D:\Shares\Company | Out-Null
+  New-SmbShare -Name Company -Path D:\Shares\Company -FullAccess 'CORP\Domain Admins' -ChangeAccess 'CORP\Domain Users' | Out-Null
+}
+$root = (Get-SmbShare -Name Company).Path
+'FrontDesk', 'Finance', 'Sales', 'HR', 'Operations' | ForEach-Object { $d = New-Item -ItemType Directory -Force (Join-Path $root $_); icacls $d.FullName /grant "CORP\G-$($_):(OI)(CI)M" | Out-Null }
+New-Item -ItemType Directory -Force D:\Shares\Home | Out-Null
+if (-not (Get-SmbShare -Name 'Home$' -ErrorAction SilentlyContinue)) {
+  New-SmbShare -Name 'Home$' -Path D:\Shares\Home -FullAccess 'CORP\Domain Admins' -ChangeAccess 'CORP\Domain Users' | Out-Null
+}
+# The accounts on HR's sheet (winlab staff list)
+$staff = 'nfischer', 'oquinn', 'mpark', 'hsilva', 'lzimmer', 'dabara', 'lxu', 'trossi', 'nvarga', 'cweber', 'akowalski'
+foreach ($a in $staff) {
+  $p = "D:\Shares\Home\$a"
+  New-Item -ItemType Directory -Force $p | Out-Null
+  icacls $p /inheritance:r /grant 'CORP\Domain Admins:(OI)(CI)F' 'SYSTEM:(OI)(CI)F' "CORP\$($a):(OI)(CI)M" | Out-Null
+}
+exit 0
+'''
+
+[[step]]
+node = "dc01"
+shell = "powershell"
+script = '''
+Get-ADUser -Filter "Department -like '*'" | ForEach-Object { Set-ADUser $_ -HomeDirectory "\\fs01\Home$\$($_.SamAccountName)" -HomeDrive H: }
+'''
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+staff password nfischer --lab ad-ds-basics --stdin
+staff password oquinn --lab ad-ds-basics --stdin
+staff password mpark --lab ad-ds-basics --stdin
+staff password hsilva --lab ad-ds-basics --stdin
+staff password lzimmer --lab ad-ds-basics --stdin
+staff password dabara --lab ad-ds-basics --stdin
+staff password lxu --lab ad-ds-basics --stdin
+staff password trossi --lab ad-ds-basics --stdin
+staff password nvarga --lab ad-ds-basics --stdin
+staff password cweber --lab ad-ds-basics --stdin
+staff password akowalski --lab ad-ds-basics --stdin
+clock --lab ad-ds-basics jump 09:00
+workday tick --lab ad-ds-basics
+'''
+wait = 300

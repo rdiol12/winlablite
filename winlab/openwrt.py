@@ -68,10 +68,17 @@ RADIUS_RELAY = "winlab_radius"  # the nft table that carries the router's EAP re
 ROLES = {
     "ap": ("kmod-mac80211-hwsim", "wpad-mbedtls", "rpcd-mod-iwinfo"),
     "ups": ("nut-server", "nut-upsmon", "nut-upsc", "nut-web-cgi", "nut-driver-dummy-ups", "luci-app-nut"),
+    # A vendor AP (winlab/apos): its CLI and web pages run on Python.
+    "apvendor": ("python3-light",),
+    # OpenWISP's agent for a plain OpenWrt AP: not installed, offered in
+    # /root/openwisp for the student to opkg install (winlab/openwisp.py).
+    "openwisp": ("openwisp-config",),
 }
+VENDOR_VAR = "apvendor"           # node var: the vendor an AP plays ("" = OpenWrt's own LuCI)
+APOS_DIR = "/usr/lib/winlab-ap"
 # LuCI's pages for them: without one the device still works (NUT's own CGI
 # pages; LuCI's wireless page needs rpcd-mod-iwinfo only for its scans).
-OPTIONAL = {"luci-app-nut", "rpcd-mod-iwinfo"}
+OPTIONAL = {"luci-app-nut", "rpcd-mod-iwinfo", "openwisp-config"}
 UPS_DEV = "/etc/winlab-ups.dev"   # the dummy-ups file winlab keeps current
 UPS_NAME = "ups"
 
@@ -266,14 +273,54 @@ def role_of(node) -> str:
     return str(node.vars.get(MARK) or "")
 
 
-def device_vm(node_id: str, role: str, network: str, ip: str, hostname: str = ""):
+def device_vm(node_id: str, role: str, network: str, ip: str, hostname: str = "", vendor: str = "",
+              air: bool = False):
     """The VM behind a device: OpenWrt with one port, cabled where the
     device is. Never written to the lab file (editor.emit skips it): it is
-    made again from the device each time the lab is loaded."""
+    made again from the device each time the lab is loaded. A vendor AP
+    runs Python as well, so it gets more memory. An AP on the real air
+    (winlab/vwifi.py) has a second card, never cabled on the canvas: its
+    radio's link to the router's vwifi-server."""
     from .model import LINUX, Nic, Node
-    return Node(id=node_id, image=IMAGE, kind=LINUX, cpus=1, memory_mb=128, hostname=hostname,
-                nics=[Nic(network=network, ip=ip or None)], boot_order=20,
-                vars={MARK: role}, description=f"OpenWrt {RELEASE}: the {'access point' if role == 'ap' else 'UPS network card'}")
+    v = {MARK: role}
+    if vendor:
+        v[VENDOR_VAR] = vendor
+    if air:
+        from .vwifi import AIR_VAR
+        v[AIR_VAR] = "1"
+    what = "access point" if role == "ap" else "UPS network card"
+    return Node(id=node_id, image=IMAGE, kind=LINUX, cpus=1, memory_mb=192 if vendor else 128, hostname=hostname,
+                nics=[Nic(network=network, ip=ip or None)] + ([Nic(network="")] if air else []), boot_order=20, vars=v,
+                description=f"OpenWrt {RELEASE}: the {what}" + (f" playing {vendor}" if vendor else ""))
+
+
+def vendor_of(node) -> str:
+    return str(node.vars.get(VENDOR_VAR) or "")
+
+
+def role_packages(node) -> list[str]:
+    """The package files the device's volume carries."""
+    roles = fetched_packages().get("roles", {})
+    out = list(roles.get(role_of(node), []))
+    if vendor_of(node):
+        out += [f for f in roles.get("apvendor", []) if f not in out]
+    return out
+
+
+def offered_packages(node) -> list[str]:
+    """Package files a plain OpenWrt AP carries but does not install: the
+    OpenWISP agent, for the student to install with opkg."""
+    if role_of(node) != "ap" or vendor_of(node):
+        return []
+    have = set(role_packages(node))
+    return [f for f in fetched_packages().get("roles", {}).get("openwisp", []) if f not in have]
+
+
+def apos_files() -> dict[str, bytes]:
+    """winlab/apos, as it is copied onto a vendor AP: {relative path: bytes}."""
+    root = Path(__file__).resolve().parent / "apos"
+    return {f"apos/{f.name}": f.read_bytes() for f in sorted(root.iterdir())
+            if f.suffix in (".py", ".json") and f.is_file()}
 
 
 def free_ip(lab, network: str, taken: set[str] = frozenset()) -> str:
@@ -331,13 +378,25 @@ def setup_script(node, lab, plan) -> str:
         lines += [f"uci add_list network.lan.dns='{d}'" for d in dns]
     lines += ["uci set dhcp.lan.ignore='1'", "uci commit", "/etc/init.d/network reload >/dev/null 2>&1",
               "/etc/init.d/dnsmasq restart >/dev/null 2>&1", "/etc/init.d/system reload >/dev/null 2>&1"]
-    if role == "ap":
+    vendor = vendor_of(node)
+    if role == "ap" and vendor:
+        lines += vendor_lines(node, vendor, lab.domain)
+    elif role == "ap":
         # One radio, as an access point has: OpenWrt's software radio, which
-        # LuCI configures like a real card; the air itself is winlab's.
-        lines += ["for f in /etc/modules.d/*hwsim*; do echo 'mac80211_hwsim radios=1' > $f; done",
-                  "if [ -n \"$FIRST\" ]; then",
-                  "  rmmod mac80211_hwsim 2>/dev/null; insmod mac80211_hwsim radios=1",
-                  "  sleep 2; rm -f /etc/config/wireless; wifi config", "fi"]
+        # LuCI configures like a real card. The air is winlab's simulation,
+        # or, in a lab with a Linux laptop on the real air, vwifi's: the
+        # radio's frames go to the router's vwifi-server (winlab/vwifi.py).
+        sim = ["for f in /etc/modules.d/*hwsim*; do echo 'mac80211_hwsim radios=1' > $f; done",
+               "if [ -n \"$FIRST\" ]; then",
+               "  rmmod mac80211_hwsim 2>/dev/null; insmod mac80211_hwsim radios=1",
+               "  sleep 2; rm -f /etc/config/wireless; wifi config", "fi"]
+        from . import vwifi
+        if vwifi.wants_air(node):
+            lines += vwifi.ap_lines(node, lab) + ["  " + x for x in sim] + ["fi"]
+        else:
+            lines += sim
+        # OpenWISP's agent, offered: opkg install /root/openwisp/*.ipk (winlab/openwisp.py)
+        lines += ["if [ -d $V/offer ]; then mkdir -p /root/openwisp; cp $V/offer/*.ipk /root/openwisp/ 2>/dev/null; fi"]
     elif role == "ups":
         lines += [f"[ -f {UPS_DEV} ] || printf 'ups.status: OL\\nbattery.charge: 100\\n' > {UPS_DEV}",
                   # The card's link to its UPS: the driver section, made once.
@@ -352,11 +411,61 @@ def setup_script(node, lab, plan) -> str:
     return "\n".join(lines)
 
 
+def vendor_lines(node, vendor: str, domain: str = "") -> list[str]:
+    """A vendor AP (winlab/apos): two software radios (2.4 and 5 GHz, as a
+    dual-band AP has), the apos program copied in, the vendor's CLI as the
+    login shell of the accounts an admin types at SSH, its web pages on
+    port 80 in place of LuCI, and the AP's identity. Its configuration is
+    the vendor's own (factory state the first time), never winlab's."""
+    from . import wifi
+    idn = {"vendor": vendor, "model": wifi.MODELS.get(vendor, "")}
+    if vendor in ("unifi", "lap") and domain:   # where a controller's DNS name is looked up, as a DHCP search domain does
+        idn["domain"] = domain
+    ident = json.dumps(idn)
+    # A UniFi AP and a Cisco lightweight AP have no web pages: their daemon
+    # finds the controller instead; the Cisco-style controller serves its
+    # pages and CAPWAP (UDP 5246) from one daemon.
+    daemon = {"unifi": "inform", "lap": "capwap", "wlc": "wlc"}.get(vendor, "web 80")
+    users = ["admin", "cisco", "Cisco", "super", "ubnt"]   # the names admins type at "ssh <name>@<AP>"
+    lines = [
+        "for f in /etc/modules.d/*hwsim*; do echo 'mac80211_hwsim radios=2' > $f; done",
+        "if [ \"$(ls /sys/class/ieee80211 2>/dev/null | wc -l)\" != 2 ]; then",
+        "  rmmod mac80211_hwsim 2>/dev/null; insmod mac80211_hwsim radios=2; sleep 2", "fi",
+        f"mkdir -p {APOS_DIR} /etc/winlab-ap", f"rm -rf {APOS_DIR}/apos; cp -r $V/apos {APOS_DIR}/",
+        # the identity: vendor and model from the canvas (apos reads the MAC itself)
+        f"cat > /etc/winlab-ap/ident.json <<'WINLAB_EOF'", ident, "WINLAB_EOF",
+        "cat > /usr/bin/winlab-apcli <<'WINLAB_EOF'", "#!/bin/sh", f"cd {APOS_DIR} && exec python3 -m apos cli", "WINLAB_EOF",
+        "chmod 755 /usr/bin/winlab-apcli", "grep -qx /usr/bin/winlab-apcli /etc/shells || echo /usr/bin/winlab-apcli >> /etc/shells",
+    ]
+    for i, u in enumerate(users):
+        uid = 1000 + i
+        lines += [f"grep -q '^{u}:' /etc/passwd || echo '{u}:x:{uid}:{uid}:{u}:/tmp:/usr/bin/winlab-apcli' >> /etc/passwd",
+                  f"grep -q '^{u}:' /etc/shadow || echo '{u}::0:0:99999:7:::' >> /etc/shadow"]
+    lines += [
+        # SSH answers the CLI's accounts (they have no SSH password: the CLI asks for its own sign-in)
+        "uci set dropbear.@dropbear[0].PasswordAuth='on'", "uci commit dropbear", "/etc/init.d/dropbear restart >/dev/null 2>&1",
+        # the vendor's web pages in place of LuCI
+        "/etc/init.d/uhttpd stop >/dev/null 2>&1; /etc/init.d/uhttpd disable >/dev/null 2>&1",
+        "cat > /etc/init.d/winlab-ap <<'WINLAB_EOF'", "#!/bin/sh /etc/rc.common", "START=99", "USE_PROCD=1",
+        "start_service() {", f"  (cd {APOS_DIR} && python3 -m apos boot)", "  procd_open_instance",
+        f"  procd_set_param command /bin/sh -c 'cd {APOS_DIR} && exec python3 -m apos {daemon}'",
+        "  procd_set_param respawn", "  procd_close_instance", "}", "WINLAB_EOF",
+        "chmod 755 /etc/init.d/winlab-ap", "/etc/init.d/winlab-ap enable",
+        f"[ -f /etc/winlab-ap/startup.json ] || (cd {APOS_DIR} && python3 -m apos factory)",
+        "/etc/init.d/winlab-ap restart >/dev/null 2>&1",
+    ]
+    return lines
+
+
 def fingerprint(node, lab, plan) -> str:
     """What the console agent compares with /etc/winlab.sha: the setup and
-    the packages it carries."""
-    pk = fetched_packages().get("roles", {}).get(role_of(node), [])
-    return hashlib.sha256((setup_script(node, lab, plan) + "\n".join(pk)).encode()).hexdigest()[:16]
+    the packages and program it carries."""
+    pk = role_packages(node) + offered_packages(node)
+    extra = b"".join(apos_files().values()) if vendor_of(node) else b""
+    from . import vwifi
+    if vwifi.wants_air(node):
+        pk.append(f"{vwifi.ASSET} {vwifi.ready()}")   # the AP's real-air radio, once the build is fetched
+    return hashlib.sha256((setup_script(node, lab, plan) + "\n".join(pk)).encode() + extra).hexdigest()[:16]
 
 
 def config_disk(node, lab, plan, dest: Path) -> Path:
@@ -371,10 +480,20 @@ def config_disk(node, lab, plan, dest: Path) -> Path:
             tar.addfile(info, io.BytesIO(data))
         add("setup.sh", setup_script(node, lab, plan).encode(), 0o755)
         add("winlab.sha", (fingerprint(node, lab, plan) + "\n").encode())
-        for fname in fetched_packages().get("roles", {}).get(role_of(node), []):
+        for fname in role_packages(node):
             f = pdir / fname
             if f.exists():
                 add("pkgs/" + fname, f.read_bytes())
+        for fname in offered_packages(node):
+            f = pdir / fname
+            if f.exists():
+                add("offer/" + fname, f.read_bytes())
+        if vendor_of(node):
+            for name, data in apos_files().items():
+                add(name, data)
+        from . import vwifi
+        if vwifi.wants_air(node) and vwifi.ready():   # the programs for its radio on the real air
+            add("vwifi.tar.gz", vwifi.asset_path().read_bytes())
     data = buf.getvalue()
     size = max(VOLUME_MB << 20, (len(data) + (1 << 20)) & ~((1 << 20) - 1))
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -444,7 +563,7 @@ def wireless_settings(text: str) -> dict:
     radios = {s["name"]: s for s in secs if s["type"] == "wifi-device"}
     ifaces = [s for s in secs if s["type"] == "wifi-iface" and s["options"].get("mode", "ap") == "ap"]
     out = {"radio": "off", "ssid": "OpenWrt", "security": "open", "key": "", "channel": 1,
-           "radius": "", "radius_port": 1812, "radius_key": ""}
+           "radius": "", "radius_port": 1812, "radius_key": "", "wlans": []}
     pick = None
     for i in ifaces:
         r = radios.get(i["options"].get("device", ""))
@@ -474,8 +593,52 @@ def wireless_settings(text: str) -> dict:
     band = ro.get("band", "2g")
     ch = ro.get("channel", "auto")
     out["channel"] = int(ch) if ch.isdigit() else (36 if band == "5g" else 1)
+    out["width"], out["txpower"] = radio_width(ro), radio_txpower(ro)
     out["iface"] = i["name"]
+    # Every network on the air (a vendor AP broadcasts several, on both
+    # radios): one entry per interface whose radio and itself are enabled.
+    out["wlans"] = []
+    for i in ifaces:
+        r = radios.get(i["options"].get("device", ""))
+        if r is None or r["options"].get("disabled", "0") == "1" or i["options"].get("disabled", "0") == "1":
+            continue
+        out["wlans"].append(_iface_air(i["options"], r["options"]))
     return out
+
+
+def _iface_air(o: dict, ro: dict) -> dict:
+    """One broadcasting interface in winlab's air terms."""
+    w = {"ssid": (o.get("ssid", "OpenWrt")[:32] or "OpenWrt"), "security": "open", "key": "",
+         "radius": "", "radius_port": 1812, "radius_key": "", "hidden": o.get("hidden", "0") == "1"}
+    enc = o.get("encryption", "none").lower()
+    if enc.startswith(("psk", "sae")):
+        w["security"], w["key"] = "wpa2", o.get("key", "")
+    elif enc.startswith("wpa"):
+        w["security"] = "wpa2-ent"
+        w["radius"] = o.get("auth_server", o.get("server", ""))
+        port = o.get("auth_port", o.get("port", "1812"))
+        w["radius_port"] = int(port) if port.isdigit() else 1812
+        w["radius_key"] = o.get("auth_secret", o.get("key", ""))
+    band = ro.get("band", "2g")
+    ch = ro.get("channel", "auto")
+    w["channel"] = int(ch) if ch.isdigit() else (36 if band == "5g" else 1)
+    w["width"], w["txpower"] = radio_width(ro), radio_txpower(ro)
+    return w
+
+
+def radio_width(ro: dict) -> int:
+    """The radio's channel width in MHz, from LuCI's Width (option htmode:
+    HT20, HT40, VHT80, HE160...; NOHT and nothing are 20)."""
+    m = re.search(r"(\d+)", str(ro.get("htmode", "")))
+    w = int(m.group(1)) if m else 20
+    return w if w in (20, 40, 80, 160) else 20
+
+
+def radio_txpower(ro: dict) -> int:
+    """LuCI's Maximum transmit power (option txpower, dBm); 0 when it is
+    left on the driver's default, which is the radio's full power."""
+    v = str(ro.get("txpower", "")).strip()
+    return int(v) if v.isdigit() else 0
 
 
 def lan_address(text: str) -> str:

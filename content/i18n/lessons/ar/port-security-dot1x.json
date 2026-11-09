@@ -1,0 +1,75 @@
+{
+ "title": "أمان المنفذ و802.1X: من يحق له الاتصال بمنفذ المبدّل",
+ "summary": "اقفل منفذ مكتب على الحاسوب الذي ينتمي إليه، وراقب حاسوبًا محمولًا لزائر يجعله err-disabled، ثم اجعل المنفذ يسأل NPS عمن يتصل.",
+ "why": "يقبل منفذ المبدّل الإطارات من أي شخص موصول به. كل من يجد مقبس جدار شاغرًا، أو يفصل حاسوبًا مكتبيًا ويوصل حاسوبًا محمولًا، يصبح على شبكتك بعنوان من خادم DHCP الخاص بك، بجوار وحدة التحكم بالمجال. أمران يغلقان هذا الباب، والشبكات الحقيقية تستخدم كليهما.\n\nأمان المنفذ هو قائمة المبدّل الخاصة: يسمح المنفذ بالعناوين التي يعرفها (مكتوبة يدويًا، أو متعلَّمة من الإطارات الأولى ومحفوظة: sticky)، حتى حد أقصى، وكل ما عداها مخالفة. Shutdown، الوضع الافتراضي، يجعل المنفذ err-disabled: ينطفئ ضوء الرابط، ويفقد الحاسوب الذي خلفه الشبكة أيضًا، ويبقى المنفذ متوقفًا حتى ينظر إليه أحد. يوقف هذا الحاسوب المحمول العابر، لكن نسخ العنوان سهل.\n\nيسأل 802.1X من هناك. وإلى أن يقول خادم RADIUS (NPS أو FreeRADIUS) نعم، لا يمرّر المنفذ إلا EAPOL، وهي الإطارات التي تحمل المحادثة. المبدّل هو الموثِّق: يتوسط بين الجهاز (الطالب، Wired AutoConfig في Windows) والخادم، الذي يتحقق من مستخدم أو حاسوب مقابل Active Directory ونُهجك.\n\nفي هذا المختبر كلاهما حقيقي على الموجّه، حيث كبل كل جهاز منفذ في الـ bridge الخاص به: أمان المنفذ هو عائلة bridge في nftables (تتعلم kernel العناوين في مجموعة بحجم الحد الأقصى وتعدّ ما تُسقطه)، و802.1X هو برنامج التشغيل السلكي في hostapd على المنفذ، يتحدث RADIUS مع الخادم الذي تبنيه. لا شيء على الخادم أو الحاسوب مُعدّ نيابة عنك.",
+ "concepts": [
+  "العناوين الآمنة: مكوَّنة (مكتوبة يدويًا)، وsticky (متعلَّمة ثم محفوظة في التكوين الجاري)، وديناميكية (متعلَّمة وتُنسى حين يتوقف الرابط)؛ والحد الأقصى 1 افتراضيًا",
+  "أوضاع المخالفة: shutdown (يجعل المنفذ err-disabled، وهو الافتراضي)، وrestrict (إسقاط وعدّ وتسجيل)، وprotect (إسقاط بصمت)",
+  "err-disabled: أوقف المبدّل المنفذ بنفسه؛ shutdown ثم no shutdown يعيده، أو errdisable recovery cause psecure-violation مع مؤقت",
+  "أدوار 802.1X: الطالب (الجهاز)، والموثِّق (منفذ المبدّل)، وخادم المصادقة (RADIUS: NPS أو FreeRADIUS)",
+  "يحمل EAPOL بروتوكول EAP بين الجهاز والمبدّل؛ ويغلّفه المبدّل في RADIUS نحو الخادم؛ وPEAP مع MS-CHAP v2 هو الأسلوب المعتاد في Windows ويحتاج شهادة على الخادم",
+  "عميل RADIUS هو المبدّل، ويعرفه الخادم بالعنوان الذي تأتي منه طلباته وبمفتاح مشترك؛ والمفتاح الخاطئ لا يتلقى أي جواب، ولا حتى رفضًا"
+ ],
+ "steps": [
+  "افتح طاولة الشبكة، وشغّل الموجّه وdc01 وpc01. افتح اللوحة الأمامية لمبدّل corp (بالنقر بزر الماوس الأيمن عليه) ودوّن رقم منفذ pc01 (Fa0/N). الأجهزة مرقّمة من اليسار إلى اليمين على اللوحة.",
+  "اقفل منفذ pc01 على pc01: افتح وحدة تحكم المبدّل، ثم enable، ثم configure terminal، ثم interface fa0/N (منفذ pc01)، ثم switchport port-security، ثم switchport port-security mac-address sticky. يظهر قفل صغير على ذلك المنفذ في اللوحة. اترك pc01 يعمل فترة (فهو يثرثر منذ الإقلاع)، ثم show port-security interface fa0/N وshow running-config: صار عنوان pc01 سطر sticky في التكوين.",
+  "كن الزائر: انقر بزر الماوس الأيمن على كبل pc01 واختر صِل حاسوبًا محمولاً لزائر عند هذا المكتب (حاسوب محمول على مبدّل مكتبي صغير يتشارك مقبس الجدار). خلال ثانية يحمرّ القفل ويُظهر pc01 Network cable unplugged. في وحدة التحكم: show interfaces status (err-disabled)، و show port-security (مخالفة محسوبة)، و show port-security interface fa0/N (آخر عنوان مصدر هو عنوان الحاسوب المحمول)، و show logging (PSECURE_VIOLATION مع عنوان الحاسوب المحمول).",
+  "أعِد المنفذ بالطريقة الصحيحة: اسحب حاسوب الزائر أولًا (قائمته على اللوحة)، ثم interface fa0/N، ثم shutdown، ثم no shutdown. جرّب مرة بالترتيب المعاكس: والحاسوب المحمول ما زال موصولًا، يعود المنفذ فورًا إلى err-disabled.",
+  "جرّب الأوضاع الألطف: switchport port-security violation restrict، وأوصل الحاسوب المحمول مجددًا. يستمر pc01 في العمل ويرتفع العدد في show port-security. أما protect فيُسقط بالصمت نفسه ولا يعدّ شيئًا. اسحب الحاسوب المحمول، ثم أعِد violation shutdown (no switchport port-security violation).",
+  "دع المنافذ تتعافى وحدها إن شئت: errdisable recovery cause psecure-violation وerrdisable recovery interval 60 في configure terminal؛ ويسرد show errdisable recovery المؤقت والمنافذ المنتظرة.",
+  "ابنِ خادم RADIUS على dc01: Install-WindowsFeature NPAS -IncludeManagementTools، ثم netsh nps add registeredserver (أو في nps.msc، Register server in Active Directory). يحتاج PEAP إلى شهادة على NPS: واحدة من CA الخاصة بك إن بنيت AD CS، أو للمختبر New-SelfSignedCertificate -DnsName dc01.corp.lab -CertStoreLocation Cert:\\LocalMachine\\My. يتعمق درس radius-with-nps أكثر في النُّهج.",
+  "عرّف NPS بالمبدّل. تخرج الطلبات من الموجّه بعنوانه على شبكة dc01 (يقول show radius server-group all على المبدّل أيّ عنوان، هنا 10.10.10.1): New-NpsRadiusClient -Name corp-switch -Address 10.10.10.1 -SharedSecret <مفتاح تختاره>. في nps.msc، Policies > Network Policies > New: الشرط NAS Port Type = Ethernet وWindows Groups = CORP\\Domain Computers (وDomain Users)، والوصول ممنوح، والمصادقة Microsoft: Protected EAP (PEAP) بشهادتك.",
+  "أو، على جهاز Linux بدلًا من NPS: أوصل ذاكرة حزمة freeradius (أولًا winlab packs fetch freeradius على هذا الحاسوب)، ثم apt install freeradius، وأضف المبدّل إلى /etc/freeradius/3.0/clients.conf بالمفتاح نفسه، ومستخدمًا إلى mods-config/files/authorize، وشغّل freeradius -X لمراقبة كل طلب.",
+  "وجّه المبدّل إليه: configure terminal، aaa new-model، aaa authentication dot1x default group radius، radius server NPS، address ipv4 10.10.10.10 auth-port 1812 acct-port 1813، key <المفتاح نفسه>، exit، dot1x system-auth-control. ثم على منفذ pc01: interface fa0/N، authentication port-control auto، dot1x pae authenticator. يصبح القفل كهرمانيًا: pc01 غير مخوَّل ولا يمرّر المنفذ إلا EAPOL.",
+  "اجعل pc01 طالبًا: على pc01، Services: Wired AutoConfig، بدء التشغيل Automatic، ثم Start (sc.exe config dot3svc start= auto، ثم net start dot3svc). في خصائص بطاقة الشبكة يظهر تبويب Authentication جديد: حدّد Enable IEEE 802.1X authentication، واختر Microsoft: Protected EAP (PEAP)، وتحت Additional settings اختر User or computer authentication. اثق بشهادة الخادم (أو، لهذا المختبر فقط، ألغِ تحديد Verify the server's identity).",
+  "راقبه يعمل: show authentication sessions على المبدّل (Auth، مع عنوان pc01)، و show authentication sessions interface fa0/N (اسم المستخدم الذي رآه NPS: host/pc01.corp.lab للحاسوب)، و show logging (DOT1X-5-SUCCESS). على dc01، في سجل Security الحدث 6272 (الوصول ممنوح). يخضرّ القفل. على pc01، netsh lan show interfaces.",
+  "شاهد مفتاحًا خاطئًا: على المبدّل، radius server NPS، key something-else. لا تنتهي مصادقة pc01 التالية أبدًا: يبقى show authentication sessions على Running، ويعدّ show radius server-group all مهلات منتهية ولا أجوبة، وفي سجل System على dc01 حدث NPS رقم 18 (الـ Message-Authenticator غير صالح). أعِد المفتاح الصحيح.",
+  "تدرّب: انقر على المبدّل، وتحت أمان المنفذ و802.1X اختر أخفِ جهازًا دخيلاً أو اكسر مفتاح RADIUS. اعثر على المشكلة باللوحة ووحدة التحكم، وأصلحها، ثم اضغط تحقق من إصلاحي."
+ ],
+ "pitfalls": [
+  "تفعيل أمان المنفذ والحاسوب مطفأ: أول عنوان يراه المنفذ هو الذي يحتفظ به. إن وصل حاسوب الزائر أولًا، فنفّذ clear port-security sticky interface fa0/N ودع الحاسوب يتكلم.",
+  "no switchport port-security على منفذ err-disabled لا يعيده: shutdown، ثم no shutdown.",
+  "عميل RADIUS مسجّل بعنوان إدارة المبدّل بينما تأتي طلباته من عنوان آخر لا يتطابق أبدًا: يسجّل NPS عميلًا مجهولًا ولا يجيب بشيء. استخدم العنوان الذي تأتي منه الطلبات.",
+  "المفتاح المشترك الخاطئ يبدو كخادم معطّل، لا كرفض: لا يستطيع الخادم التحقق من الطلب، فيُسقطه ولا يقول ذلك إلا في سجله.",
+  "يفشل PEAP بلا شهادة على NPS من جهة الخادم: الحدث 6273 بالسبب 'the client could not be authenticated' أو لا نهج مطابق؛ افحص أساليب المصادقة في النهج.",
+  "في هذا المختبر يعمل 802.1X على الموجّه، لذا تخرج طلبات RADIUS من المبدّل من عنوان الموجّه على شبكة الخادم، حتى بعد أن تعطي المبدّل عنوان إدارة خاصًا به (interface vlan 1، ip address). سجّل عنوان الموجّه هذا في NPS."
+ ],
+ "verify": [
+  "قواعد المنافذ على الموجّه: العناوين المسموح بها، وعدادات المخالفات، وما سمح به 802.1X",
+  "جلسات hostapd على المنافذ التي تشغّل 802.1X",
+  "NPS: المبدّل بصفته عميل RADIUS",
+  "pc01: Wired AutoConfig وحالة 802.1X فيه"
+ ],
+ "quiz": [
+  {
+   "q": "منفذ عليه switchport port-security بالقيم الافتراضية. يظهر عليه عنوان ثانٍ. ماذا يحدث؟",
+   "answer": "يصبح المنفذ err-disabled: shutdown هو وضع المخالفة الافتراضي والحد الأقصى 1",
+   "wrong": [
+    "يُسقط العنوان الثاني ويُعدّ",
+    "يُستبدل العنوان الأول بالثاني",
+    "لا شيء حتى يوافق مسؤول"
+   ],
+   "why": "الحد الأقصى 1، والمخالفة shutdown: يوقف المبدّل المنفذ بنفسه، وضوء الرابط مطفأ، حتى shutdown / no shutdown أو مؤقت تعافٍ."
+  },
+  {
+   "q": "في 802.1X، أي جهاز هو عميل RADIUS؟",
+   "answer": "المبدّل (الموثِّق)",
+   "wrong": [
+    "الحاسوب (الطالب)",
+    "وحدة التحكم بالمجال",
+    "خادم NPS"
+   ],
+   "why": "يتحدث الجهاز EAPOL مع المبدّل؛ والمبدّل هو ما يعرفه NPS، بعنوانه والمفتاح المشترك."
+  },
+  {
+   "q": "المفتاح المشترك على المبدّل لا يطابق مفتاح NPS. ماذا يرى الحاسوب؟",
+   "answer": "لا تنتهي المصادقة أبدًا: يُسقط NPS الطلبات التي لا يستطيع التحقق منها ولا يجيب بشيء",
+   "wrong": [
+    "Access-Reject فورًا",
+    "يُسمح له بالدخول بلا مصادقة",
+    "يصبح منفذ المبدّل err-disabled"
+   ],
+   "why": "من دون المفتاح الصحيح لا يستطيع NPS فحص Message-Authenticator، فيُسقط الطلب ويسجّل الحدث 18؛ ولا يرى المبدّل إلا مهلات منتهية."
+  }
+ ]
+}

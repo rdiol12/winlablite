@@ -1,0 +1,68 @@
+{
+ "title": "VRRP: una dirección de puerta de enlace, dos routers detrás",
+ "summary": "Da a la oficina una puerta de enlace virtual, 10.80.0.1, compartida por el router del laboratorio y rtr-edge con VRRP. Apunta el PC a ella, desactiva la interfaz del maestro y observa cómo el de reserva toma la dirección.",
+ "why": "Un PC tiene una sola puerta de enlace predeterminada. Si ese router muere, el PC queda aislado, aunque haya un segundo router en la misma LAN, porque el PC no cambiará su propia configuración. Un protocolo de redundancia del primer salto lo resuelve: dos routers comparten una tercera dirección virtual y una dirección MAC virtual, uno de ellos (el maestro) responde por ella, y el otro toma el relevo en pocos segundos cuando cesan los anuncios del maestro. El PC no se da cuenta.\n\nCisco tiene su propio protocolo para esto, HSRP (el comando standby), y el estándar abierto es VRRP (RFC 3768 para la versión 2, RFC 5798 para la versión 3), que los routers Cisco también hablan. En este laboratorio la segunda puerta de enlace es un router real: rtr-edge, Ubuntu con vrrpd de FRRouting, en la LAN de la oficina junto al router del laboratorio. Ambos hablan VRRP versión 2, la versión que usa el comando vrrp de IOS. HSRP, el propio de Cisco, tiene su propia lección después de esta (router-console-hsrp): ningún router de código abierto lo habla, así que allí ambas puertas de enlace ejecutan el emisor HSRP propio de winlab.\n\nCómo se ve por debajo: en ambos routers la dirección virtual vive en una pequeña interfaz propia (un macvlan con la MAC virtual 00:00:5e:00:01:01). vrrpd la mantiene activa en el maestro e inactiva en el de reserva. El router del laboratorio crea esa interfaz por ti a partir del comando de consola; en rtr-edge la creas a mano, como dice la documentación de FRRouting.",
+ "concepts": [
+  "Router virtual: un número de grupo (de 1 a 255), una dirección IP virtual y la MAC virtual 00:00:5e:00:01:<group> con la que solo responde el maestro",
+  "Maestro y reserva: la prioridad más alta (de 1 a 254, 100 de forma predeterminada) es el maestro; el maestro envía un anuncio cada segundo (vrrp <group> timers advertise)",
+  "Preferencia (preemption): activada de forma predeterminada en VRRP; un router de mayor prioridad que vuelve toma el relevo de nuevo (no vrrp <group> preempt lo impide)",
+  "La conmutación por error tarda unos tres intervalos de anuncio: el de reserva espera ese tiempo sin oír al maestro antes de tomar el relevo",
+  "HSRP (standby) es el protocolo propio de Cisco para el mismo trabajo; VRRP y HSRP no se hablan entre sí",
+  "Los PC usan la dirección virtual como puerta de enlace; cada router conserva su propia dirección para la administración y el enrutamiento"
+ ],
+ "steps": [
+  "Inicia pc-office, rtr-edge y pc-edge. El OSPF de la primera lección sigue activo: ambos routers ya conocen ambas redes, así que cualquiera puede ser la puerta de enlace de la oficina. En pc-office, ip route muestra su puerta de enlace predeterminada: 10.80.0.2, el propio router del laboratorio.",
+  "Un ingeniero de Cisco suele escribir primero standby: eso es HSRP, el protocolo propio de Cisco, y la siguiente lección. Aquí ambos routers hablan VRRP, el estándar abierto, que ejecuta vrrpd de FRRouting en ambos.",
+  "El lado del router del laboratorio: todavía en interface g0/1/0, vrrp 1 ip 10.80.0.1, luego vrrp 1 priority 110, end. show vrrp brief: grupo 1, prioridad 110 y, unos segundos después, State Master. Es maestro porque aún no hay nadie más en el grupo.",
+  "El lado de rtr-edge, a mano. Activa vrrpd: sudo sed -i 's/^vrrpd=no/vrrpd=yes/' /etc/frr/daemons, sudo systemctl restart frr. Crea la interfaz virtual sobre eth1 (la tarjeta de la oficina) con la MAC virtual del grupo y la dirección: sudo ip link add vrrp4-1 link eth1 addrgenmode random type macvlan mode bridge; sudo ip link set dev vrrp4-1 address 00:00:5e:00:01:01; sudo ip addr add 10.80.0.1/24 dev vrrp4-1; sudo ip link set dev vrrp4-1 up. Deja que solo esa interfaz responda ARP para la dirección: sudo sysctl -w net.ipv4.conf.eth1.arp_ignore=1.",
+  "Luego el grupo en FRRouting: sudo vtysh, configure terminal, interface eth1, vrrp 1 version 2, vrrp 1 ip 10.80.0.1, end, write memory. La versión 2 es la que habla IOS; si no, FRRouting usaría la versión 3 y los dos routers se ignorarían. show vrrp en vtysh: rtr-edge es Backup (prioridad 100 frente a 110), e ip -d link show vrrp4-1 dice protodown on: vrrpd mantiene la dirección inactiva mientras es reserva.",
+  "Apunta el PC a la puerta de enlace virtual. La dirección de pc-office está escrita en su archivo de netplan: sudo sed -i 's/via: 10.80.0.2/via: 10.80.0.1/' /etc/netplan/50-cloud-init.yaml, luego sudo netplan apply. ip route muestra default via 10.80.0.1. ping -c 2 10.81.0.10 (pc-edge) responde, e ip neigh muestra 10.80.0.1 en 00:00:5e:00:01:01: el PC habla con la MAC virtual, no con la propia de ninguno de los routers.",
+  "Haz fallar al maestro. Deja ping 10.81.0.10 en marcha en pc-office. En la consola del router: configure terminal, interface g0/1/0, shutdown. Se pierden unos cuantos pings (unos tres segundos) y luego vuelven las respuestas: show vrrp en rtr-edge dice Master, e ip -d link show vrrp4-1 ya no dice protodown. La dirección de la puerta de enlace del PC nunca cambió.",
+  "Recupera el router del laboratorio: no shutdown en g0/1/0. Con la preferencia (activada de forma predeterminada) su prioridad 110 vuelve a ganar en pocos segundos; show vrrp brief en la consola dice Master y rtr-edge dice Backup. Detén el ping (Ctrl+C) y lee cuántos se perdieron.",
+  "Pulsa Comprobar mi trabajo: lee qué router es maestro y cuál reserva en ambos kernels, la puerta de enlace del PC y un ping a través de ella."
+ ],
+ "pitfalls": [
+  "Ambos routers dicen Master: no se oyen. Comprueba la versión (2 en ambos), el número de grupo y la subred; tcpdump -ni eth1 vrrp en rtr-edge muestra de quién llegan los anuncios.",
+  "El macvlan de rtr-edge no se conserva tras un reinicio: netplan no puede crear uno. En producción lo haría una pareja .netdev y .network de systemd-networkd en /etc/systemd/network.",
+  "La dirección virtual es una tercera dirección en la subred: no la propia de ninguno de los routers. El router del laboratorio rechaza su propia dirección como virtual.",
+  "Sin preferencia, un router que vuelve con mayor prioridad se queda de reserva; a veces es lo que quieres, para que un enlace inestable no mueva la puerta de enlace dos veces.",
+  "VRRP mueve la puerta de enlace, no las rutas que hay detrás: ambos routers deben poder llegar ya a las redes que quiere el PC (aquí, OSPF de la primera lección)."
+ ],
+ "verify": [
+  "qué router es maestro: la interfaz virtual del router del laboratorio y vrrpd",
+  "el lado de rtr-edge",
+  "la puerta de enlace de pc-office y de quién es su MAC"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué dirección MAC ve un PC para la puerta de enlace del grupo VRRP 1?",
+   "answer": "00:00:5e:00:01:01, la MAC virtual, sea cual sea el router maestro",
+   "wrong": [
+    "La propia dirección MAC del router maestro",
+    "ff:ff:ff:ff:ff:ff",
+    "La MAC de cada router por turnos"
+   ],
+   "why": "La MAC virtual se mueve con el papel de maestro, así que la entrada ARP del PC sigue siendo correcta tras una conmutación por error."
+  },
+  {
+   "q": "Una puerta de enlace ejecuta el grupo VRRP 1 y la otra el grupo HSRP 1 para la misma dirección. ¿Qué ocurre?",
+   "answer": "Se ignoran: VRRP y HSRP son protocolos distintos y no interoperan",
+   "wrong": [
+    "Eligen un maestro entre ellas",
+    "Gana HSRP porque es el de Cisco",
+    "Gana VRRP porque es el estándar"
+   ],
+   "why": "Cada protocolo solo oye sus propios paquetes; ambos routers responderían por la dirección como si estuvieran solos."
+  },
+  {
+   "q": "Dos routers VRRP dicen ser ambos maestro. ¿Cuál es la causa más probable?",
+   "answer": "No reciben los anuncios del otro (difieren la versión, el grupo o la subred, o el enlace está cortado)",
+   "wrong": [
+    "Ambos tienen prioridad 100",
+    "La preferencia está activada",
+    "Los PC usan la dirección virtual"
+   ],
+   "why": "Un router de reserva solo se convierte en maestro cuando no oye nada de un maestro mejor."
+  }
+ ]
+}

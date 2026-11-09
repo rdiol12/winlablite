@@ -1,0 +1,17 @@
+{
+ "Two cables to the floor switch, bundled with LACP": "كبلان إلى مبدّل الطابق، مجمّعان باستخدام LACP",
+ "The floor switch hangs off corp's switch by one cable, and the second cable\nyou added is blocked by spanning tree. Bundle the two into one port-channel\nwith LACP, so both carry traffic and spanning tree sees one link, and spread\nthe conversations over the members by IP address. The checks read the\nrouter, where each switch's port-channel is a Linux bond and the two bonds\nspeak LACP to each other.": "يتصل مبدّل الطابق بمبدّل corp بكبل واحد، والكبل الثاني الذي أضفته محظور بواسطة spanning tree. اجمع الكبلين في port-channel واحد باستخدام LACP، كي يحمل كلاهما الحركة ويرى spanning tree رابطًا واحدًا، ووزّع المحادثات على الأعضاء حسب عنوان IP. تقرأ عمليات التحقق الموجّه، حيث يكون port-channel لكل مبدّل عبارة عن bond في Linux ويتحدث الـ bond-ان مع بعضهما عبر LACP.",
+ "On the Workbench add a switch, cable its uplink (Gi0/1) into corp's switch, and drag a second cable between the same two switches": "في طاولة الشبكة أضف مبدّلًا، وصِل منفذه الصاعد (Gi0/1) بمبدّل corp، واسحب كبلًا ثانيًا بين المبدّلين نفسيهما",
+ "On corp's switch: interface range over its two ports to the new switch, channel-group 1 mode active": "على مبدّل corp: interface range على منفذيه المتصلين بالمبدّل الجديد، ثم channel-group 1 mode active",
+ "On the new switch: interface range gi0/1 - 2, channel-group 1 mode active (or passive)": "على المبدّل الجديد: interface range gi0/1 - 2، ثم channel-group 1 mode active (أو passive)",
+ "On both: port-channel load-balance src-dst-ip": "على كليهما: port-channel load-balance src-dst-ip",
+ "Check with show etherchannel summary that Po1 is SU and both members are P, and save both switches": "تحقق باستخدام show etherchannel summary من أن Po1 في الحالة SU وأن العضوين في الحالة P، واحفظ إعدادات المبدّلين",
+ "a port-channel runs LACP: an 802.3ad bond with two members": "يشغّل port-channel بروتوكول LACP: bond من نوع 802.3ad بعضوين",
+ "interface range gi0/2 - 3 (the two ports to the other switch), channel-group 1 mode active. mode on makes a bond without LACP; this check wants LACP.": "interface range gi0/2 - 3 (المنفذان المتصلان بالمبدّل الآخر)، ثم channel-group 1 mode active. الوضع mode on ينشئ bond دون LACP؛ وهذا التحقق يتطلب LACP.",
+ "LACP is negotiated: both members are in the active aggregator, with a partner": "تم التفاوض على LACP: العضوان في المجمّع النشط، ولكل منهما شريك",
+ "Both ends need a channel-group, and at least one must be active: passive with passive never forms. show etherchannel summary on both switches should say Po1(SU) with members (P).": "يحتاج الطرفان إلى channel-group، ويجب أن يكون أحدهما على الأقل active: passive مع passive لا يتشكّل أبدًا. يجب أن يعرض show etherchannel summary على المبدّلين Po1(SU) مع أعضاء (P).",
+ "spanning tree sees one link and forwards on it": "يرى spanning tree رابطًا واحدًا ويمرّر الحركة عليه",
+ "show spanning-tree on the new switch: one row, Po1, FWD. A blocking Gi port means one cable is still outside the bundle (a mode that does not bundle, or a third cable).": "show spanning-tree على المبدّل الجديد: صف واحد، Po1، FWD. وجود منفذ Gi في حالة حظر يعني أن أحد الكبلات لا يزال خارج التجميع (وضع لا يجمّع، أو كبل ثالث).",
+ "the conversations are spread by IP address": "المحادثات موزعة حسب عنوان IP",
+ "port-channel load-balance src-dst-ip, in configure terminal, on both switches (show etherchannel load-balance).": "port-channel load-balance src-dst-ip، في configure terminal، على المبدّلين (show etherchannel load-balance)."
+}

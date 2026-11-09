@@ -1,0 +1,18 @@
+{
+ "The Windows ISO is missing": "ملف ISO الخاص بـ Windows مفقود",
+ "Common problems": "مشكلات شائعة",
+ "iso": "iso",
+ "windows": "windows",
+ "download": "تنزيل",
+ "evaluation": "تقييم",
+ "missing": "مفقود",
+ "no prepared base": "no prepared base",
+ "installer": "مثبّت",
+ "import": "استيراد",
+ "image": "صورة",
+ "media": "وسائط",
+ "server 2025": "server 2025",
+ "windows 11": "windows 11",
+ "winlab cannot ship Windows. You download it from Microsoft once.": "لا يمكن لـ winlab أن يتضمن Windows. تنزّله من Microsoft مرة واحدة.",
+ "Windows belongs to Microsoft, so winlab does not include it. You download the free evaluation ISO from Microsoft's evaluation center and give it to winlab once; winlab then prepares a reusable base from it.\n\n**Setup shows the link** for each Windows the lab uses. After the download:\n\n```\nwinlab images import ws2025 C:\\Users\\you\\Downloads\\server2025.iso\nwinlab images prepare ws2025\n```\n\nSetup also looks in your Downloads folder and offers ISOs it finds there.\n\n**\"no prepared base and no installer for image\"** means a machine needs a Windows that has not been imported yet. Import it as above.\n\n**\"the attached ISO is not in the image store\"** means a disc in a machine's DVD drive was removed from Images. Eject it from the machine's Media menu, or add the ISO again.": "Windows ملك لـ Microsoft، لذا لا يتضمنه winlab. تنزّل ملف ISO التقييمي المجاني من مركز التقييم لدى Microsoft وتعطيه لـ winlab مرة واحدة؛ ثم يُعدّ winlab منه قاعدة قابلة لإعادة الاستخدام.\n\n**يعرض الإعداد الرابط** لكل إصدار Windows يستخدمه المختبر. بعد التنزيل:\n\n```\nwinlab images import ws2025 C:\\Users\\you\\Downloads\\server2025.iso\nwinlab images prepare ws2025\n```\n\nيبحث الإعداد أيضاً في مجلد التنزيلات لديك ويعرض ملفات ISO التي يجدها هناك.\n\n**\"no prepared base and no installer for image\"** تعني أن جهازاً يحتاج إلى Windows لم يُستورد بعد. استورده كما سبق.\n\n**\"the attached ISO is not in the image store\"** تعني أن قرصاً في محرك DVD لجهاز ما قد أُزيل من الصور. أخرجه من قائمة الوسائط الخاصة بالجهاز، أو أضف ملف ISO مرة أخرى."
+}

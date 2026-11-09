@@ -375,9 +375,9 @@ def view(lab, plan) -> dict:
     drill = None
     if d:
         drill = {"id": d["id"], "ap": d["ap"], "shown": int(d.get("hints", 0)), "of": len(HINTS),
-                 "hints": [h.format(**_words(lab, d)) for h in HINTS[:int(d.get("hints", 0))]],
-                 "symptom": SYMPTOM.format(**_words(lab, d)), "done": bool(d.get("done")),
-                 "title": TITLE if d.get("done") else "", "fix": FIX if d.get("done") else ""}
+                 "hints": [_pt(h).format(**_words(lab, d)) for h in HINTS[:int(d.get("hints", 0))]],
+                 "symptom": _pt(SYMPTOM).format(**_words(lab, d)), "done": bool(d.get("done")),
+                 "title": _pt(TITLE) if d.get("done") else "", "fix": _pt(FIX) if d.get("done") else ""}
     return {"aps": aps, "drill": drill}
 
 
@@ -453,6 +453,12 @@ HINTS = (
 FIX = "the AP's shared secret back to the one the RADIUS server has for it"
 
 
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 def _drill_path(lab_name: str):
     return paths.lab_dir(lab_name) / "wpaent-drill.json"
 
@@ -504,7 +510,7 @@ def drill(dash, op: str, params: dict) -> dict:
     if op == "hint":
         d["hints"] = min(len(HINTS), int(d.get("hints", 0)) + 1)
         _drill_save(lab.name, d)
-        return {"ok": True, "message": HINTS[d["hints"] - 1].format(**_words(lab, d))}
+        return {"ok": True, "message": _pt(HINTS[d["hints"] - 1]).format(**_words(lab, d))}
     if op == "check":
         res = check(dash, d)
         if res["passed"]:
@@ -521,7 +527,7 @@ def drill(dash, op: str, params: dict) -> dict:
                 own["radius-key"] = d["was"]
             _save(dash)
             _drill_save(lab.name, None)
-            return {"ok": True, "message": f"put back: it was {TITLE[0].lower() + TITLE[1:]}{_sync(dash)}"}
+            return {"ok": True, "message": f"put back: it was {_pt(TITLE)[0].lower() + _pt(TITLE)[1:]}{_sync(dash)}"}
         _drill_save(lab.name, None)
         return {"ok": True, "message": ""}
     raise WpaEntError(f"unknown drill step {op!r}")
@@ -560,6 +566,6 @@ def check(dash, d: dict) -> dict:
     rows = [(f"{name}'s shared secret is the server's again (or the server took the new one and a laptop signs in)",
              same or authed)]
     passed = all(ok for _, ok in rows)
-    msg = (f"fixed: it was {TITLE[0].lower() + TITLE[1:]}. The fix: {FIX}." if passed else
+    msg = (f"fixed: it was {_pt(TITLE)[0].lower() + _pt(TITLE)[1:]}. The fix: {_pt(FIX)}." if passed else
            "not yet: " + "; ".join(t for t, ok in rows if not ok))
     return {"ok": True, "passed": passed, "message": msg, "results": [{"check": t, "passed": ok} for t, ok in rows]}

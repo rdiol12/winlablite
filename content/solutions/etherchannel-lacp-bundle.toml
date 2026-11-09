@@ -1,0 +1,44 @@
+[solution]
+exercise = "etherchannel-lacp-bundle"
+notes = "The new switch (floor1) and its two cables come from winlab workbench: its uplink Gi0/1 into corp, then a spare cable (floor1 Gi0/2 into corp Gi0/3). Both ends active."
+
+[[step]]
+node = "winlab"
+shell = "winlab"
+script = '''
+workbench ad-ds-basics wb-add shelf=switch id=floor1 x=300 y=520
+workbench ad-ds-basics wb-cable node=switch network=floor1 to=corp
+workbench ad-ds-basics wb-stp-cable a=floor1 b=corp
+'''
+wait = 5
+
+[[step]]
+node = "sw:corp"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface range gi0/2 - 3
+channel-group 1 mode active
+exit
+port-channel load-balance src-dst-ip
+end
+copy running-config startup-config
+startup-config
+'''
+
+[[step]]
+node = "sw:floor1"
+shell = "console"
+script = '''
+enable
+configure terminal
+interface range gi0/1 - 2
+channel-group 1 mode active
+exit
+port-channel load-balance src-dst-ip
+end
+copy running-config startup-config
+startup-config
+'''
+wait = 40

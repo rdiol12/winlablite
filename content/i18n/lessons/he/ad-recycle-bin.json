@@ -1,0 +1,64 @@
+{
+ "title": "סל המחזור של AD: החזר OU שנמחקה עם האנשים והקבוצות שלה",
+ "summary": "הפעל את סל המחזור לפני שתזדקק לו, ואז שחזר OU שלמה שנמחקה, קודם ההורה, עם כל מאפיין וכל חברות בקבוצה.",
+ "why": "מישהו מוחק OU. איתה נעלמים חשבונות המשתמש שבתוכה, קבוצה שישבה שם, וכל החברויות\nשהיו לאותם משתמשים בקבוצות במקומות אחרים. לפני Windows Server 2008 R2 הדרך חזרה\nהייתה שחזור system state במצב Directory Services Restore Mode ושחזור authoritative\nעם ntdsutil (השיעור ad-authoritative-restore), כשה-DC מנותק והקישורים ההפוכים\nמשוחזרים ידנית.\n\nסל המחזור שומר אובייקט שנמחק בשלמותו לאורך כל חייו (180 יום כברירת מחדל): כל מאפיין,\nה-SID שלו, הסיסמה שלו והקישורים שלו, כך שמשתמש משוחזר חוזר לקבוצות שהיה בהן ויכול\nלהתחבר שוב עם הסיסמה שהייתה לו. צריך להפעיל אותו קודם, אי אפשר לכבות אותו, והוא\nשומר רק את מה שנמחק אחרי ההפעלה.\n\nהפעל אותו, לחץ על שבור, ו-OU=Contractors נעלמת מ-dc01 עם שני הקבלנים שבתוכה\nוקבוצת ה-VPN שישבה שם.",
+ "concepts": [
+  "אובייקטים שנמחקו: עם סל המחזור, isDeleted והעברה ל-CN=Deleted Objects, והמאפיינים והקישורים נשמרים; בלעדיו, tombstone ששומר כמעט כלום",
+  "msDS-deletedObjectLifetime ו-tombstoneLifetime: כמה זמן אובייקט שנמחק יכול לחזור (180 יום כל אחד, כברירת מחדל)",
+  "lastKnownParent: היכן אובייקט ישב; אפשר לשחזר ילד רק לתוך הורה שקיים, לכן שחזר מלמעלה למטה",
+  "מאפיינים מקושרים (member ו-memberOf) חוזרים עם האובייקט, ואילו בשחזור authoritative צריך לתקן אותם ידנית",
+  "ProtectedFromAccidentalDeletion: רשומת deny-delete על ה-OU שהקונסולה ו-PowerShell מכבדים"
+ ],
+ "steps": [
+  "הפעל את סל המחזור (לכל ה-forest, בכיוון אחד): Enable-ADOptionalFeature 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target corp.lab. בדוק: (Get-ADOptionalFeature 'Recycle Bin Feature').EnabledScopes.",
+  "לחץ על שבור (או winlab break dc01 ou-deleted). ב-Active Directory Users and Computers (רענן), ב-Corp אין OU בשם Contractors.",
+  "הסתכל בסל: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent, whenChanged | Format-Table Name, ObjectClass, lastKnownParent, whenChanged -AutoSize.",
+  "שחזר קודם את ה-OU: Get-ADObject -Filter \"isDeleted -eq `$true -and Name -like 'Contractors*'\" -IncludeDeletedObjects | Restore-ADObject.",
+  "אחר כך את כל מה שישב בה: Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Properties lastKnownParent | Where-Object { $_.lastKnownParent -like 'OU=Contractors,*' } | Restore-ADObject.",
+  "בדוק שהקישורים חזרו: Get-ADUser mnovak -Properties MemberOf | Select-Object -ExpandProperty MemberOf, וגם Get-ADGroupMember G-Contractors-VPN.",
+  "הקשה על זה בפעם הבאה: Set-ADOrganizationalUnit 'OU=Contractors,OU=Corp,DC=corp,DC=lab' -ProtectedFromAccidentalDeletion $true.",
+  "גלה מי עשה את זה: ב-dc01, Get-WinEvent -FilterHashtable @{LogName='Security'; Id=5141} (כשביקורת Directory Service Changes פעילה) מציג את שם החשבון. אחר כך לחץ על אמת את התיקון שלי."
+ ],
+ "pitfalls": [
+  "שחזור המשתמשים לפני ה-OU נכשל: ה-lastKnownParent שלהם עדיין מחוק. תמיד מלמעלה למטה.",
+  "יצירה מחדש של המשתמשים ביד יוצרת אובייקטים חדשים עם SID חדשים: קבצים, הרשאות תיבת דואר וחברויות בקבוצות לא מכירים אותם.",
+  "סל המחזור אינו גיבוי: שינוי מאפיין שגוי, מסד נתונים פגום או מחיקה ישנה יותר מתקופת החיים עדיין דורשים את גיבוי ה-system state.",
+  "אי אפשר לבטל את הפעלת סל המחזור, ורמת הפונקציונליות של ה-forest חייבת להיות 2008 R2 ומעלה (כל forest חדש עומד בזה)."
+ ],
+ "verify": [
+  "סל המחזור ומה שיש בו",
+  "ה-OU בשם Contractors, האנשים שלה והקבוצות שלהם"
+ ],
+ "quiz": [
+  {
+   "q": "OU שנמחקה הכילה משתמשים. באיזה סדר תשחזר?",
+   "answer": "קודם את ה-OU, אחר כך את האובייקטים שה-lastKnownParent שלהם הוא ה-OU הזו",
+   "wrong": [
+    "קודם את המשתמשים, אחר כך את ה-OU",
+    "הכול בבת אחת בכל סדר",
+    "קודם את הקבוצות, אחר כך את ה-OU"
+   ],
+   "why": "אובייקט יכול לחזור רק לתוך הורה שקיים."
+  },
+  {
+   "q": "כשסל המחזור פעיל, מה חוזר עם משתמש משוחזר?",
+   "answer": "המאפיינים, ה-SID, הסיסמה והחברויות בקבוצות שלו",
+   "wrong": [
+    "רק השם וה-SID שלו",
+    "הכול חוץ מהחברויות בקבוצות",
+    "רק מה שהיה בגיבוי האחרון"
+   ],
+   "why": "סל המחזור שומר את האובייקט כולו ואת הקישורים שלו; tombstone בלעדיו שומר כמעט כלום."
+  },
+  {
+   "q": "האם אפשר לכבות את סל המחזור של AD אחרי שהופעל?",
+   "answer": "לא, ההפעלה קבועה עבור ה-forest",
+   "wrong": [
+    "כן, עם Disable-ADOptionalFeature",
+    "כן, על ידי הורדת רמת הפונקציונליות של ה-forest",
+    "רק ב-PDC emulator"
+   ],
+   "why": "הפעל אותו מוקדם; הוא עוזר רק במחיקות שנעשו אחרי שהופעל."
+  }
+ ]
+}

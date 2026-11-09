@@ -1,0 +1,71 @@
+{
+ "title": "QoS en el router: clasificar, marcar, conformar y repartir una línea lenta",
+ "summary": "Usa la Modular QoS CLI en el router: class-maps que clasifican el tráfico, un policy-map que da prioridad a la voz, garantiza una parte a las copias de archivos y las marca, un conformador que convierte la LAN de usuarios en una línea de 20 Mbit/s, y los contadores que demuestran que cada clase vio su tráfico.",
+ "why": "Una red con capacidad de sobra no necesita QoS. La QoS importa en el punto\nestrecho: la línea a una sucursal, el enlace ascendente de una oficina con mucha actividad, el momento en que una gran\ncopia de archivos y una llamada telefónica quieren los mismos 20 Mbit/s. Entonces el router debe\ndecidir qué paquetes esperan y cuáles se descartan, y solo puede hacerlo\ncon el tráfico que sabe distinguir.\n\nIOS lo hace con la Modular QoS CLI (MQC), en tres pasos que también encuentras en\nel firewall basado en zonas: class-map (qué tráfico: un valor DSCP, una lista\nde acceso, un protocolo), policy-map (qué recibe cada clase: prioridad para la voz, un\nancho de banda garantizado, una tasa de policing, una nueva marca DSCP) y service-policy\n(en qué interfaz, en qué sentido). Las colas solo se producen donde se forma una\ncola, a la salida de una interfaz que está más ocupada que su línea;\nasí que una directiva que reparte una línea lenta se pone bajo un conformador que hace\nlenta la línea, la directiva jerárquica que ejecuta todo router de sucursal.\n\nEn este router la directiva se convierte en control de tráfico de Linux: un árbol HTB de\nclases en la interfaz, fq_codel o una FIFO en cada una, y nftables marcando\ncada paquete con su clase y su nuevo DSCP. Dos diferencias honestas respecto a un\nISR: la clase de prioridad se mantiene en su tasa en todo momento (un ISR la limita\nsolo cuando la línea está congestionada), y match protocol funciona por puerto conocido,\nno por NBAR. La propia LAN del laboratorio es gigabit, así que la conformas para crear la\ncongestión que la QoS necesita.",
+ "concepts": [
+  "DSCP: seis bits de la cabecera IP que dicen cómo quiere ser tratado un paquete; EF (46) para voz, AF41 para vídeo, de AF11 a AF13 para datos masivos, CS0 (0) best effort; un router confía en ellos o los reescribe",
+  "class-map match-any (basta una línea match) o match-all (todas las líneas): match dscp ef, match access-group name SMB, match protocol http, match any; class-default recoge el resto",
+  "priority <kbps>: cola de baja latencia, atendida primero y mantenida en su tasa para que no deje sin servicio a las demás; bandwidth <kbps> o percent: una parte garantizada que puede tomar prestado lo que esté libre",
+  "police <bps>: un límite duro, lo que lo supera se descarta (o se vuelve a marcar con set-dscp-transmit); shape average <bps>: un límite suave, lo que lo supera espera en una cola",
+  "QoS jerárquica: una directiva padre conforma class-default a la velocidad real de la línea, y una service-policy hija por debajo reparte esa velocidad entre las clases",
+  "Sentido: las colas (priority, bandwidth, shape) solo a la salida; una directiva de entrada solo puede clasificar, marcar y aplicar policing",
+  "show policy-map interface: por clase, los paquetes que coincidieron, lo que se marcó, lo que descartaron el policing y la cola"
+ ],
+ "steps": [
+  "Construye la LAN de usuarios si la lección router-zone-firewall no lo ha hecho: en el Banco de red, un switch en un puerto libre del router con el cable de pc01 conectado, el puerto del router en 10.10.20.1/24 (no shutdown) y un ip dhcp pool USERS con default-router 10.10.20.1 y dns-server 10.10.10.10; ipconfig /renew en pc01. Las copias de archivos de fs01 a pc01 cruzan ahora el router y salen por ese puerto (aquí GigabitEthernet0/0/1).",
+  "Crea algo que copiar. En fs01: New-Item -ItemType Directory C:\\Big, fsutil file createnew C:\\Big\\test.bin 209715200 (200 MB), New-SmbShare -Name Big -Path C:\\Big -ReadAccess 'CORP\\Domain Users'.",
+  "Mide la línea sin conformar: en pc01, Measure-Command { Copy-Item \\\\fs01\\Big\\test.bin $env:TEMP\\test.bin -Force } | Select-Object TotalSeconds. Unos pocos segundos: el laboratorio es gigabit.",
+  "Las clases. En la consola del router: configure terminal, ip access-list extended SMB, permit tcp any eq 445 any, exit. class-map match-any VOICE, match dscp ef, exit. class-map match-any FILES, match access-group name SMB, exit.",
+  "La directiva hija, que reparte la línea: policy-map USERS-OUT, class VOICE, priority 1000, class FILES, bandwidth 5000, set dscp af11, class class-default, fair-queue, exit, exit.",
+  "La directiva padre, que crea la línea: policy-map SHAPE-20M, class class-default, shape average 20000000, service-policy USERS-OUT, exit, exit. Ponla a la salida hacia los usuarios: interface g0/0/1, service-policy output SHAPE-20M, end.",
+  "Vuelve a copiar desde pc01 con Measure-Command: ahora unos 80 segundos, 200 MB a través de un conformador de 20 Mbit/s. Mientras se ejecuta, show policy-map interface g0/0/1 en el router: la clase FILES cuenta paquetes y su línea QoS Set los cuenta marcados como af11; class-default bajo el conformador muestra la cola.",
+  "Policing en lugar de reparto, para notar la diferencia: policy-map USERS-OUT, class FILES, police 8000000 conform-action transmit exceed-action drop, end. Vuelve a copiar: SMB baja a unos 8 Mbit/s, y show policy-map interface g0/0/1 cuenta los paquetes excedidos descartados. TCP se frena por los descartes, así que la copia termina igualmente. Vuelve a quitarlo: policy-map USERS-OUT, class FILES, no police.",
+  "Marca también lo que entra: configure terminal, ip access-list extended SMB-IN, permit tcp any any eq 445, exit, class-map match-any SMB-FROM-USERS, match access-group name SMB-IN, exit, policy-map MARK-IN, class SMB-FROM-USERS, set dscp af21, después interface g0/0/1, service-policy input MARK-IN. Prueba una vez service-policy input SHAPE-20M: el router rechaza las colas en la entrada, como hace IOS.",
+  "Léelo todo: show class-map, show policy-map, show policy-map interface. Guárdalo con write memory; show running-config muestra los class-maps y policy-maps antes de las interfaces, y service-policy bajo interface GigabitEthernet0/0/1."
+ ],
+ "pitfalls": [
+  "Una directiva en una interfaz rápida que nunca se llena no hace nada visible: las colas solo se forman con congestión, por eso el conformador va primero.",
+  "Las garantías no pueden sumar más que el padre: priority 1000 y bandwidth 5000 bajo un conformador de 20 Mbit/s caben; bandwidth 30000 bajo él se rechaza al aplicar la directiva.",
+  "Un class-map que no nombra ninguna directiva, o un policy-map no aplicado a ninguna interfaz, no clasifica nada: comprueba show policy-map interface, no show running-config.",
+  "Aquí class-map y policy-map son de QoS; los del firewall son class-map type inspect y policy-map type inspect. El mismo nombre en ambos son dos cosas distintas.",
+  "Marcar solo sirve donde algo confíe después en la marca: set dscp a la salida hacia los usuarios no significa nada para Windows, pero en el camino hacia una WAN dice a los routers del proveedor qué es el paquete.",
+  "En este router la clase de prioridad está limitada a su tasa incluso cuando la línea está libre; en un ISR puede usar el ancho de banda libre y solo se limita con congestión."
+ ],
+ "verify": [
+  "el árbol de colas en las interfaces del router (clases HTB y lo que enviaron)",
+  "cómo clasifica y marca el router: nftables con contadores por clase",
+  "la copia desde fs01 por la línea conformada, cronometrada"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué acciones puede usar una service-policy de entrada?",
+   "answer": "Clasificar, marcar (set dscp) y aplicar policing; nada de priority, bandwidth ni conformado",
+   "wrong": [
+    "Todas, igual que en la salida",
+    "Solo el conformado",
+    "Solo priority"
+   ],
+   "why": "Las colas se forman a la salida de una interfaz; a la entrada un router solo puede clasificar, marcar y descartar."
+  },
+  {
+   "q": "¿Por qué el class-default de SHAPE-20M recibe una service-policy hija?",
+   "answer": "El conformador crea la línea de 20 Mbit/s; la hija reparte esa línea entre la voz, los archivos y el resto",
+   "wrong": [
+    "Para aplicar policing a class-default",
+    "Porque class-default no puede contener acciones",
+    "Para marcar cada paquete como EF"
+   ],
+   "why": "Eso es QoS jerárquica: sin el conformador la interfaz gigabit nunca se congestiona, y priority y bandwidth de la hija nunca actuarían."
+  },
+  {
+   "q": "¿Qué hace police con el tráfico que supera su tasa, y qué hace shape?",
+   "answer": "Police lo descarta (o lo vuelve a marcar) al momento; shape lo pone en cola y lo envía más tarde",
+   "wrong": [
+    "Ambos lo ponen en cola",
+    "Ambos lo descartan",
+    "Police lo pone en cola, shape lo descarta"
+   ],
+   "why": "Un policer es un techo duro sin búfer; un shaper suaviza las ráfagas en una cola, a costa de retardo."
+  }
+ ]
+}

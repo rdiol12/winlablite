@@ -258,14 +258,25 @@ for _id, (_symptom, _hints) in _SEEN.items():
     SCENARIOS[_id].symptom, SCENARIOS[_id].hints = _symptom, _hints
 
 
-def hint(scenario_id: str, n: int) -> str:
-    """Hint n (1-based) of a scenario's ladder."""
+def hint(scenario_id: str, n: int, lang: str | None = None) -> str:
+    """Hint n (1-based) of a scenario's ladder, in the desktop's language."""
+    from .content import problem_text
     s = SCENARIOS.get(scenario_id)
     if not s:
         raise KeyError(scenario_id)
     if n < 1 or n > len(s.hints):
         raise IndexError(n)
-    return s.hints[n - 1]
+    return problem_text(s.hints[n - 1], lang)
+
+
+def words(scenario_id: str, lang: str | None = None) -> dict[str, str]:
+    """The scenario's title, symptom and teaches in the desktop's language
+    (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    s = SCENARIOS.get(scenario_id)
+    if not s:
+        raise KeyError(scenario_id)
+    return {k: problem_text(getattr(s, k) or "", lang) for k in ("title", "symptom", "teaches")}
 
 
 def categories() -> dict[str, list[Scenario]]:

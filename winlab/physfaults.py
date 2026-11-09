@@ -47,6 +47,12 @@ class FaultError(Exception):
     pass
 
 
+def _pt(text: str) -> str:
+    """A drill text in the desktop's language (content/i18n/content/<lang>/problems.json)."""
+    from .content import problem_text
+    return problem_text(text)
+
+
 @dataclass(frozen=True)
 class Kind:
     id: str
@@ -125,6 +131,51 @@ _k(Kind("vlan", "Cable in the wrong port", "port", "router", "Plug it into a por
                "show arp lists it on the wrong interface.",
                "Re-patch it: pull {machine}'s cable out and plug it into {switch} again (drag it "
                "off the switch and back on).")))
+# The wiring faults a cable tester names (winlab/cabletest.py reads them
+# back as a wire map): a pair split across two twisted pairs (the link comes
+# up, crosstalk wrecks what crosses it), a wire cut (open), two wires
+# touching (short), and two pairs crossed at one end (a mispunched jack).
+# The last three take the link down at the card, as the real ones do on a
+# 10/100 link that needs both of its pairs.
+_k(Kind("split", "Split pair", "port", "router", "Wire it with a split pair",
+        "the link lights are on and the port is up at 100, but almost nothing gets through: half the pings "
+        "lost, logons and DHCP time out",
+        "replace the cable (or re-terminate it, keeping each pair on its own pins)",
+        hints=("One desk has link lights and no network. Ping its gateway 20 times (ping -n 20 <gateway>) and "
+               "look at the switch's port: up, at a-100, error-free on the switch's side.",
+               "{machine} loses about half of everything although {switch} shows {sw_port} connected at a-100: "
+               "the link is up and the signal is garbage. Put a cable tester on {machine}'s cable (its menu, "
+               "Test the cable): the wire map shows what is wrong inside it.",
+               "The tester says split pair: the wires go pin to pin, but two of them are twisted with the wrong "
+               "partner, so the pair picks up crosstalk. Replace {machine}'s cable (pull it and plug a new one "
+               "into {switch}).")))
+_k(Kind("open", "Open wire", "port", "card", "Cut a wire in it (open)",
+        "no link at either end: Windows says 'Network cable unplugged' and the switch port is notconnect",
+        "replace the cable (or re-terminate the end with the cut wire)",
+        hints=("Start at each machine: does its network icon show a cable? show interfaces status on the "
+               "switch says which ports have a link.",
+               "{machine} says 'Network cable unplugged' and {switch} lists {sw_port} as notconnect while "
+               "{machine} runs. Is it the card or the cable? Test the cable (its menu, Test the cable).",
+               "The tester shows a wire open part way along: replace {machine}'s cable (pull it and plug a new one "
+               "into {switch}).")))
+_k(Kind("short", "Shorted pair", "port", "card", "Short two wires in it",
+        "no link at either end: Windows says 'Network cable unplugged' and the switch port is notconnect",
+        "replace the cable (a crushed cable or a bad crimp shorts two wires together)",
+        hints=("Start at each machine: does its network icon show a cable? show interfaces status on the "
+               "switch says which ports have a link.",
+               "{machine} has no link and {switch} lists {sw_port} as notconnect. Test the cable before you "
+               "suspect the card (its menu, Test the cable).",
+               "The tester shows two wires shorted together at a distance: a crushed cable or a bad crimp. "
+               "Replace {machine}'s cable.")))
+_k(Kind("crossed", "Crossed pairs (mispunched)", "port", "card", "Punch it down with two pairs crossed",
+        "no link at either end: Windows says 'Network cable unplugged' and the switch port is notconnect",
+        "re-terminate the miswired end to T568B (or replace the cable)",
+        hints=("Start at each machine: does its network icon show a cable? show interfaces status on the "
+               "switch says which ports have a link.",
+               "{machine} has no link and {switch} lists {sw_port} as notconnect: a new jack was punched down "
+               "here recently. Test the cable (its menu, Test the cable).",
+               "The wire map shows the green and the blue pairs swapped at one end: the receive pair lands on "
+               "pins the card does not listen on. Re-terminate (here: replace {machine}'s cable).")))
 _k(Kind("disk", "Disk full", "machine", "guest", "Fill its disk",
         "'low disk space', services fail to write, logons slow", "find the file that ate the disk and delete it",
         by="", drill=False))
@@ -155,6 +206,13 @@ def _pid(lab_name: str, node_id: str) -> int:
     st = state.load(lab_name)
     ns = st.nodes.get(node_id) if st else None
     return ns.pid if ns and ns.pid and state.pid_alive(ns.pid) else 0
+
+
+def card_side(kind: str) -> bool:
+    """A fault that takes the link down at the machine's card (a dead card,
+    or a cable with no working pair to carry the link)."""
+    k = KINDS.get(kind)
+    return bool(k and k.side == "card")
 
 
 def _holder(rec: dict) -> str:
@@ -191,6 +249,7 @@ def _tc_off(i: str) -> list[str]:
 # The cable's two directions: towards the machine (the port's egress
 # qdisc) and from it (a filter on the port's ingress).
 _TC = {"bad": ("netem loss 8% 25% corrupt 2%", "action gact ok random netrand drop 12"),  # 1 in 12
+       "split": ("netem loss 45% 25% corrupt 6%", "action gact ok random netrand drop 2"),  # 1 in 2
        "slow": ("tbf rate 10mbit burst 16kb latency 60ms", "police rate 10mbit burst 16k drop"),
        "duplex": ("netem rate 10mbit loss 3%", "police rate 10mbit burst 16k drop")}
 
@@ -255,7 +314,7 @@ def parse_probe(text: str) -> dict[str, dict[str, str]]:
 def still_there(rec: dict, seen: dict[str, str]) -> bool:
     """Whether the router's port still shows the fault."""
     k, tc = rec["kind"], seen.get("tc", "")
-    if k == "bad":
+    if k in ("bad", "split"):
         return "netem" in tc or "gact" in tc
     if k == "slow":
         return "tbf" in tc or "police" in tc
@@ -387,6 +446,9 @@ def add(lab, kind: str, node_id: str, nic: int = 0, hidden: bool = False, rng=No
         raise FaultError(f"no machine {node_id!r} on the canvas")
     rec = {"kind": kind, "node": node_id, "nic": nic, "link": "", "hidden": hidden,
            "state": "on", "how": "", "at": int(time.time())}
+    # Where along the cable it is (as a fraction of its length): what the
+    # tester's TDR reads back (winlab/cabletest.py).
+    rec["along"] = round(rng.uniform(0.2, 0.85), 3)
     if k.on == "port":
         plan = _plan(lab)
         link = _link(lab, plan, node_id, nic)
@@ -524,7 +586,7 @@ def port_look(lab, link) -> dict:
     out = {"duplex": "a-full", "speed": "a-100", "down": False}
     for rec in active(lab.name, link=link.label):
         k = rec["kind"]
-        if k == "nic":
+        if card_side(k):
             out["down"] = True
         elif k == "flap":
             out["down"] = (time.time() - rec["at"]) % (FLAP_DOWN + FLAP_UP) < FLAP_DOWN
@@ -563,7 +625,7 @@ def drill_start(lab, count: int = 0, rng=None) -> dict:
     for link in picked:
         kinds = [k.id for k in KINDS.values() if k.drill and k.on == "port"]
         if not _pid(lab.name, link.node_id):
-            kinds.remove("nic")
+            kinds = [x for x in kinds if not card_side(x)]
         if _wrong_vid(lab, plan, link, rng) is None:
             kinds.remove("vlan")
         fresh = [k for k in kinds if k not in used] or kinds
@@ -614,8 +676,8 @@ def _reveal(lab, rec: dict, plan=None) -> dict:
     how = {"cable": "you reseated or replaced the cable", "console": "you set the port back to auto",
            "gone": "it is gone from the router", "shown": "shown to you and mended",
            "undone": "undone"}.get(rec["how"], rec["how"] or "")
-    return {"id": rec["id"], "kind": rec["kind"], "title": k.title, "where": place, "link": rec.get("link", ""),
-            "node": rec["node"], "symptom": k.symptom, "fix": k.fix, "state": rec["state"], "how": how}
+    return {"id": rec["id"], "kind": rec["kind"], "title": _pt(k.title), "where": place, "link": rec.get("link", ""),
+            "node": rec["node"], "symptom": _pt(k.symptom), "fix": _pt(k.fix), "state": rec["state"], "how": how}
 
 
 def drill_check(lab) -> dict:
@@ -670,7 +732,7 @@ def drill_hint(lab) -> dict:
     _write(lab.name, data)
     pos = dr["ids"].index(rec["id"]) + 1
     return {"n": n, "of": len(k.hints), "fault": pos, "total": len(dr["ids"]),
-            "text": _fill(k.hints[n - 1], _where(lab, rec)),
+            "text": _fill(_pt(k.hints[n - 1]), _where(lab, rec)),
             "message": f"fault {pos} of {len(dr['ids'])}, hint {n} of {len(k.hints)}"}
 
 
@@ -704,9 +766,9 @@ def drill_end(lab) -> None:
 # ------------------------------------------------------------------ the canvas
 def _pub(lab, rec: dict, plan) -> dict:
     k, w = KINDS[rec["kind"]], _where(lab, rec, plan)
-    return {"id": rec["id"], "kind": rec["kind"], "title": k.title, "node": rec["node"], "nic": rec["nic"],
+    return {"id": rec["id"], "kind": rec["kind"], "title": _pt(k.title), "node": rec["node"], "nic": rec["nic"],
             "link": rec.get("link", ""), "where": f"{w['machine']}" + (f" port {w['nic']}" if k.on == "port" else ""),
-            "symptom": k.symptom, "fix": k.fix}
+            "symptom": _pt(k.symptom), "fix": _pt(k.fix)}
 
 
 def view(lab, plan=None) -> dict:
@@ -715,7 +777,7 @@ def view(lab, plan=None) -> dict:
     data = refresh(lab.name)
     plan = plan or _plan(lab)
     out = {"faults": [_pub(lab, r, plan) for r in data["faults"] if r["state"] == "on" and not r["hidden"]],
-           "kinds": [{"id": k.id, "title": k.title, "on": k.on, "menu": k.menu, "symptom": k.symptom}
+           "kinds": [{"id": k.id, "title": _pt(k.title), "on": k.on, "menu": k.menu, "symptom": _pt(k.symptom)}
                      for k in KINDS.values()],
            "drill": None}
     dr = data["drill"]
@@ -743,14 +805,14 @@ def act(dash, action: str, params: dict) -> dict:
                 node = naming.resolve(lab, str(params.get("node") or ""))
                 rec = add(lab, str(params.get("kind") or ""), node, int(params.get("nic") or 0))
                 k = KINDS[rec["kind"]]
-                return {"ok": True, "id": rec["id"], "message": f"{k.title}: {naming.display(lab, node)}"
-                        f"{' port ' + str(rec['nic'] + 1) if k.on == 'port' else ''} — {k.symptom}"}
+                return {"ok": True, "id": rec["id"], "message": f"{_pt(k.title)}: {naming.display(lab, node)}"
+                        f"{' port ' + str(rec['nic'] + 1) if k.on == 'port' else ''} — {_pt(k.symptom)}"}
             if op == "clear":
                 if params.get("id") == "all":
                     n = len(clear_all(lab))
                     return {"ok": True, "message": f"{n} fault{'s' if n != 1 else ''} undone"}
                 rec = clear(lab, str(params.get("id") or ""))
-                return {"ok": True, "message": f"{KINDS[rec['kind']].title} undone"}
+                return {"ok": True, "message": f"{_pt(KINDS[rec['kind']].title)} undone"}
             return {"ok": True, **view(lab, dash.plan)}
         if op == "start":
             return {"ok": True, **drill_start(lab, int(params.get("count") or 0))}

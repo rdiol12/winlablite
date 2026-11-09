@@ -148,9 +148,13 @@ def handshake_response(headers, path: str = "") -> tuple[int, str, list[tuple[st
 
 
 def bridge(client: socket.socket, read, write, host: str, port: int,
-           connect_timeout: float = 5.0) -> None:
+           connect_timeout: float = 5.0, tap=None) -> None:
     """Pumps a handshaken WebSocket (read/write on the client, which is also
-    `client` for shutdown) to TCP host:port until either side closes."""
+    `client` for shutdown) to TCP host:port until either side closes.
+
+    tap, when given, is called with every chunk on its way from the target
+    to the browser (a Terminal window's recording, recordings.py); nothing
+    the browser sends is passed to it, and a tap that fails is dropped."""
     try:
         target = socket.create_connection((host, port), timeout=connect_timeout)
     except OSError as exc:
@@ -182,6 +186,11 @@ def bridge(client: socket.socket, read, write, host: str, port: int,
                 if not data:
                     break
                 send(encode_frame(data, OP_BINARY))
+                if tap is not None:
+                    try:
+                        tap(data)
+                    except Exception:  # noqa: BLE001 - a recording never breaks the session
+                        pass
         except OSError:
             pass
         finally:

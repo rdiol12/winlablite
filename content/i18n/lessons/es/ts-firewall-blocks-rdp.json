@@ -1,0 +1,58 @@
+{
+ "title": "Ping funciona, RDP no",
+ "summary": "Los administradores no pueden conectarse por Escritorio remoto a un servidor que por lo demás está bien.",
+ "why": "Cuando un puerto no responde hay tres posibilidades: el servicio no está escuchando, algo entre tú y\nél filtra el puerto, o el propio firewall del host lo descarta. Test-NetConnection desde fuera y\nGet-NetTCPConnection en el host las separan en dos comandos. Luego la lista de reglas del firewall, donde\nuna regla de bloqueo siempre gana a una de permiso, así que añadir otro permiso no cambia nada.",
+ "concepts": [
+  "Test-NetConnection -Port: una prueba de conexión TCP desde el lado del cliente",
+  "Get-NetTCPConnection -State Listen: si hay algo vinculado al puerto en el host",
+  "Precedencia de reglas: el bloqueo gana al permiso; busca reglas de bloqueo antes de añadir reglas de permiso",
+  "Get-NetFirewallPortFilter: encuentra reglas por puerto en lugar de por nombre"
+ ],
+ "steps": [
+  "Pulsa Romper arriba (o ejecuta winlab break fs01 firewall-blocks-rdp). No leas todavía las pistas.",
+  "Reproduce el síntoma tal como lo vería un usuario, desde otra máquina cuando tenga sentido.",
+  "Formula una hipótesis y pruébala con un comando; anota lo que descartaste.",
+  "Corrige la causa, no el síntoma. Luego pulsa Verificar mi arreglo: comprueba la máquina, no tu respuesta.",
+  "Encuentra en los registros la evidencia que te lo habría dicho antes, y anota qué monitorización lo habría detectado."
+ ],
+ "pitfalls": [
+  "Desactivar el firewall para probar es una prueba que no se puede deshacer limpiamente en producción; busca la regla en su lugar.",
+  "Una regla puede limitarse a un perfil; la misma regla es inofensiva en Domain y bloquea en Public."
+ ],
+ "verify": [
+  "si el puerto está escuchando",
+  "las reglas de bloqueo que mencionan el 3389"
+ ],
+ "quiz": [
+  {
+   "q": "¿Qué cmdlet prueba un puerto TCP desde el lado del cliente?",
+   "answer": "Test-NetConnection -Port",
+   "wrong": [
+    "Get-NetAdapter",
+    "Resolve-DnsName",
+    "Get-NetIPAddress"
+   ],
+   "why": "Luego comprueba el agente de escucha en el host."
+  },
+  {
+   "q": "¿Cómo encuentras reglas de firewall por puerto en lugar de por nombre?",
+   "answer": "Get-NetFirewallPortFilter",
+   "wrong": [
+    "Get-NetFirewallProfile",
+    "Get-NetTCPConnection",
+    "netstat -b"
+   ],
+   "why": "Canalízalo a Get-NetFirewallRule para ver la regla."
+  },
+  {
+   "q": "¿Por qué no desactivar el firewall para probar?",
+   "answer": "No se puede deshacer limpiamente en producción y oculta la regla real",
+   "wrong": [
+    "Es imposible en servidores",
+    "Reinicia el servidor",
+    "Desactiva RDP"
+   ],
+   "why": "Busca la regla en su lugar."
+  }
+ ]
+}
