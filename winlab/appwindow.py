@@ -13,10 +13,11 @@ window is never merged into the user's open browser session and none of their
 extensions or sign-ins come along. When no such browser is found, or
 ``WINLAB_BROWSER=tab`` is set, the default browser opens the page as before.
 
-On Windows, winlab's own native window comes first (``nativewin``: a Win32
-window with WebView2 drawing the desktop, no browser behind it), started as
-``winlab window <url>``. If it cannot start, the Edge app window opens
-instead; ``WINLAB_BROWSER=edge`` asks for the Edge window outright.
+winlab's own native window comes first (``nativewin``: WebView2 on Windows,
+WebKitGTK on Linux, no browser behind it), started as ``winlab window <url>``.
+If it cannot start, the Edge app window opens instead and the desktop says
+why; ``WINLAB_BROWSER=edge`` asks for the Edge window outright. Closing the
+window (native or app window) stops the desktop.
 """
 
 from __future__ import annotations
@@ -81,8 +82,17 @@ def _detached() -> int:
     return 0
 
 
-def open_native(url: str, wait: float = 2.0, popen=subprocess.Popen) -> bool:
-    """Start winlab's native window; False if it is not there or quit at once."""
+# `winlab window` exits with this when the desktop went to a browser tab it
+# cannot follow: the desktop then keeps running until it is stopped.
+UNTRACKED = 4
+# A browser process that ends this fast handed the window to one already open
+# (the same profile), so its end is not the window closing.
+HANDED_OFF = 5.0
+
+
+def open_native(url: str, wait: float = 2.0, popen=subprocess.Popen):
+    """Start winlab's own window as a process of its own: that process, or
+    None when it could not start or quit at once with an error."""
     from . import nativewin
 
     try:
@@ -90,37 +100,96 @@ def open_native(url: str, wait: float = 2.0, popen=subprocess.Popen) -> bool:
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=_detached(), close_fds=True)
     except OSError:
-        return False
-    # A window that cannot start (no runtime, a policy blocking it) exits
-    # within a moment; one that runs is still there.
+        return None
+    # A window that cannot start at all (the program missing, an import
+    # error) exits within a moment; one that runs is still there. A window
+    # that fails later falls back to the browser window by itself.
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         code = proc.poll()
         if code is not None:
-            return code == 0
+            return proc if code in (0, UNTRACKED) else None
         time.sleep(0.1)
-    return True
+    return proc
 
 
-def open_window(url: str, profile: Path, env: dict | None = None,
-                native=None) -> str:
-    """Open ``url`` as a program window; return how it opened
-    ("native", "app" or "tab")."""
+def open_browser_window(url: str, profile: Path, env: dict | None = None):
+    """The Edge/Chrome app window, else a tab of the default browser:
+    ("app", process) or ("tab", None)."""
     env = os.environ if env is None else env
-    if native is None:
-        from . import nativewin
-        native = nativewin.env_allows(env) and nativewin.available()
-    if native and open_native(url):
-        return "native"
     browser = None if env.get("WINLAB_BROWSER", "").lower() == "tab" else find_browser(env)
     if browser:
         try:
             profile.mkdir(parents=True, exist_ok=True)
-            subprocess.Popen(app_args(browser, url, profile), stdin=subprocess.DEVNULL,
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             creationflags=_detached(), close_fds=True)
-            return "app"
+            proc = subprocess.Popen(app_args(browser, url, profile), stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                    creationflags=_detached(), close_fds=True)
+            return "app", proc
         except OSError:
             pass
     webbrowser.open(url)
-    return "tab"
+    return "tab", None
+
+
+def wait_browser(proc) -> bool:
+    """Wait for an app window's browser process; True when that was the
+    window closing (not a hand-off to a window already open)."""
+    start = time.monotonic()
+    proc.wait()
+    return time.monotonic() - start >= HANDED_OFF
+
+
+def _follow(target, *args) -> None:
+    import threading
+
+    threading.Thread(target=target, args=args, daemon=True).start()
+
+
+def _follow_browser(proc, on_closed) -> None:
+    if wait_browser(proc):
+        on_closed()
+
+
+def _follow_native(proc, url: str, profile: Path, env: dict, on_closed) -> None:
+    from . import nativewin
+
+    code = proc.wait()
+    if code == 0:
+        on_closed()
+    elif code != UNTRACKED:
+        # The window process ended by itself (a crash): the desktop is still
+        # running, so bring it back in the browser window, saying why.
+        nativewin.note_fallback("crashed", f"winlab's window ended unexpectedly (exit code {code})")
+        how, again = open_browser_window(url, profile, env)
+        if again is not None:
+            _follow_browser(again, on_closed)
+
+
+def open_window(url: str, profile: Path, env: dict | None = None,
+                native=None, on_closed=None) -> str:
+    """Open ``url`` as a program window; return how it opened ("native",
+    "app" or "tab"). ``on_closed`` is called (from another thread) when the
+    user closes that window; a browser tab cannot be followed."""
+    from . import nativewin
+
+    env = os.environ if env is None else env
+    if native is None:
+        native = False
+        if nativewin.env_allows(env):
+            code, detail = nativewin.unavailable(env)
+            if code:
+                nativewin.note_fallback(code, detail)
+            else:
+                native = True
+    if native:
+        nativewin.clear_fallback()
+        proc = open_native(url)
+        if proc is not None:
+            if on_closed:
+                _follow(_follow_native, proc, url, profile, env, on_closed)
+            return "native"
+        nativewin.note_fallback("crashed", "winlab's window ended as it started")
+    how, proc = open_browser_window(url, profile, env)
+    if on_closed and proc is not None:
+        _follow(_follow_browser, proc, on_closed)
+    return how

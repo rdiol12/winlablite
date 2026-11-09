@@ -106,19 +106,21 @@ Name: "addtopath"; Description: "Let me type winlab in a command prompt (adds it
 
 [Files]
 Source: "{#DistDir}\winlab.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Starts winlab.exe without a console window (packaging\launcher\winlab-start.cs).
+Source: "{#DistDir}\winlab-start.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\LICENSING.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\CURRICULUM.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoDir}\EULA*.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{autoprograms}\winlab"; Filename: "{app}\winlab.exe"; Comment: "Your Windows Server lab"
-Name: "{autodesktop}\winlab"; Filename: "{app}\winlab.exe"; Comment: "Your Windows Server lab"; Tasks: desktopicon
+Name: "{autoprograms}\winlab"; Filename: "{app}\winlab-start.exe"; WorkingDir: "{app}"; IconFilename: "{app}\winlab.exe"; Comment: "Your Windows Server lab"
+Name: "{autodesktop}\winlab"; Filename: "{app}\winlab-start.exe"; WorkingDir: "{app}"; IconFilename: "{app}\winlab.exe"; Comment: "Your Windows Server lab"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\winlab.exe"; Description: "Open winlab now"; Flags: nowait postinstall skipifsilent runasoriginaluser
+Filename: "{app}\winlab-start.exe"; Description: "Open winlab now"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; After an update winlab installed itself (silent, /RELAUNCH=1): start it again.
-Filename: "{app}\winlab.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
+Filename: "{app}\winlab-start.exe"; Flags: nowait runasoriginaluser; Check: RelaunchAfterUpdate
 
 [UninstallRun]
 ; Machines first (QEMU runs from the data folder), then winlab's own desktop.

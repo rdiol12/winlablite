@@ -3516,6 +3516,9 @@ class _Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/load":
                 from . import traffic  # the Office window's Load tab: pace, server jobs, activity, cables
                 self._json(traffic.view(self.dash.lab, self.dash))
+            elif u.path == "/api/appwindow":
+                from . import nativewin  # why the desktop is in a browser window, if it is
+                self._json(nativewin.fallback())
             elif u.path == "/api/host":
                 self._json(self.dash.host())
             elif u.path == "/api/images":
@@ -4243,19 +4246,35 @@ def serve(target: str = "", port: int = 8780, accel: str = "", open_browser: boo
     ups.watch_desktop(lambda: _Handler.dash)
     print(f"winlab control plane for '{lab.name}' on {url}")
     print("bound to loopback only; Ctrl-C to stop")
+    closed = threading.Event()
+
+    def window_closed() -> None:
+        # The app window is the program: closing it stops winlab, as closing
+        # any program does (nothing stays behind in the background).
+        if not closed.is_set():
+            closed.set()
+            print("the winlab window was closed")
+            threading.Thread(target=httpd.shutdown, daemon=True).start()
+
     if open_browser:
-        # Its own app window (Edge or Chrome app mode), not a browser tab.
-        threading.Timer(0.6, lambda: appwindow.open_window(url, paths.VAR / "appwindow")).start()
+        # Its own app window (winlab's native window, else Edge or Chrome app
+        # mode), not a browser tab; closing it stops the desktop.
+        threading.Timer(0.6, lambda: appwindow.open_window(url, paths.VAR / "appwindow",
+                                                           on_closed=window_closed)).start()
     try:
         httpd.serve_forever()
+        stopping = closed.is_set()
     except KeyboardInterrupt:
-        # Like Hyper-V when its host shuts down: each running machine's
-        # Automatic Stop Action (Settings > Automatic Stop Action).
-        print("\nstopping the desktop: each running machine's automatic stop action…")
-        try:
-            from . import vmctl
-            vmctl.stop_on_exit(_Handler.dash.lab, _Handler.dash.accel)
-        except Exception as exc:  # noqa: BLE001 - the desktop still stops
-            print(f"could not stop the machines: {exc}; use 'winlab lab down'")
+        stopping = True
+    try:
+        if stopping:
+            # Like Hyper-V when its host shuts down: each running machine's
+            # Automatic Stop Action (Settings > Automatic Stop Action).
+            print("\nstopping the desktop: each running machine's automatic stop action…")
+            try:
+                from . import vmctl
+                vmctl.stop_on_exit(_Handler.dash.lab, _Handler.dash.accel)
+            except Exception as exc:  # noqa: BLE001 - the desktop still stops
+                print(f"could not stop the machines: {exc}; use 'winlab lab down'")
     finally:
         httpd.server_close()

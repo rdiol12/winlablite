@@ -1,21 +1,32 @@
-"""winlab's own program window on Windows: a native Win32 window with the
-desktop drawn inside by Microsoft Edge WebView2, so no browser is behind it.
+"""winlab's own program window: the desktop in a native window of its own,
+drawn by the web view the operating system already carries, so no browser is
+behind it (no address bar, tabs, extensions or "translate this page?").
 
-WebView2 is the web view Windows 10 and 11 carry as a system component (the
-"Evergreen" runtime): Windows keeps it updated and nothing of it is bundled.
-Hosting it takes ``WebView2Loader.dll`` from Microsoft's WebView2 SDK. Like
-QEMU and noVNC, it is fetched on the customer's PC at setup (``fetch``,
-from nuget.org, the SDK's home), never shipped with winlab.
+Windows: a Win32 window with Microsoft Edge WebView2 inside. WebView2 is the
+web view Windows 10 and 11 carry as a system component (the "Evergreen"
+runtime): Windows keeps it updated and nothing of it is bundled. Hosting it
+takes ``WebView2Loader.dll`` from Microsoft's WebView2 SDK. Like QEMU and
+noVNC, it is fetched on the customer's PC at setup (``fetch``, from
+nuget.org, the SDK's home), never shipped with winlab.
 
 The host is written against the WebView2 COM interfaces with ``ctypes`` only:
 a window class and message loop (user32), the environment created by the
 loader, a controller filling the window's client area, and the web view on
-the desktop's URL. Two events are handled: the page's title becomes the
-window's, and an element going full screen (a machine's screen, View > Full
-screen) makes the window cover its monitor, as a full-screen program does.
+the desktop's URL. Three events are handled: the page's title becomes the
+window's; an element going full screen (a machine's screen, View > Full
+screen) makes the window cover its monitor, as a full-screen program does;
+and a link to the outside world (Microsoft's download page, the website)
+opens in the user's own browser while winlab's own pop-outs (a machine's
+screen in a window of its own) stay winlab windows.
 
-When anything is missing (not Windows, no loader, no runtime) or the host
-fails to start, ``appwindow`` falls back to the Edge/Chrome app window.
+Linux: a GTK 3 window with WebKitGTK inside, both from the distribution
+(``libwebkit2gtk-4.1``, or 4.0), called through ``ctypes`` the same way.
+
+``winlab window <url>`` runs the window as a process of its own; the desktop
+server follows that process and stops when the window is closed. When the
+window cannot start (no loader, no runtime, no WebKitGTK, an error inside),
+the reason is written to ``var/appwindow/fallback.json`` and the desktop
+opens in an Edge/Chrome app window instead, where it says why.
 """
 
 from __future__ import annotations
@@ -49,10 +60,13 @@ CTL_CLOSE = 24
 CTL_GET_COREWEBVIEW2 = 25
 WV_GET_SETTINGS = 3
 WV_NAVIGATE = 5
+WV_ADD_NEW_WINDOW_REQUESTED = 44
 WV_ADD_DOCUMENT_TITLE_CHANGED = 46
 WV_GET_DOCUMENT_TITLE = 48
 WV_ADD_FULLSCREEN_CHANGED = 52
 WV_GET_CONTAINS_FULLSCREEN = 54
+NWR_GET_URI = 3      # ICoreWebView2NewWindowRequestedEventArgs
+NWR_PUT_HANDLED = 6
 SET_PUT_STATUS_BAR = 10
 SET_PUT_DEV_TOOLS = 12
 SET_PUT_ZOOM_CONTROL = 18
@@ -68,7 +82,57 @@ _REFUSED_IIDS = {
 
 
 class NativeWindowError(Exception):
-    pass
+    """The window cannot start. ``code`` names the reason for the desktop's
+    notice (it shows a translated sentence per code; the message is the
+    technical detail under it)."""
+
+    def __init__(self, message: str, code: str = "failed"):
+        super().__init__(message)
+        self.code = code
+
+
+# Why the desktop is in a browser window instead (fallback.json "code"):
+# loader   the WebView2 loader is not fetched (setup fetches it)
+# runtime  the WebView2 runtime is missing (Windows Update installs it)
+# webkit   WebKitGTK is not installed (Linux)
+# display  there is no graphical session to open a window on
+# platform no native window on this system (macOS)
+# failed   the window started and failed
+# crashed  the window process ended by itself
+FALLBACK_CODES = ("loader", "runtime", "webkit", "display", "platform", "failed", "crashed")
+
+
+def fallback_path() -> Path:
+    return paths.VAR / "appwindow" / "fallback.json"
+
+
+def note_fallback(code: str, detail: str = "") -> None:
+    """Remember why the desktop opened in a browser window (the page reads it)."""
+    import time
+
+    f = fallback_path()
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps({"code": code if code in FALLBACK_CODES else "failed",
+                                 "detail": str(detail)[:400], "at": int(time.time())}), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def clear_fallback() -> None:
+    try:
+        fallback_path().unlink()
+    except OSError:
+        pass
+
+
+def fallback() -> dict:
+    """{"code", "detail", "at"} when the desktop is in a browser window, else {}."""
+    try:
+        data = json.loads(fallback_path().read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) and data.get("code") in FALLBACK_CODES else {}
+    except (OSError, ValueError):
+        return {}
 
 
 def loader_path() -> Path:
@@ -145,8 +209,70 @@ def runtime_version() -> str:
         return ""
 
 
+# WebKitGTK for GTK 3: 4.1 (libsoup 3, current distributions) or 4.0.
+_GTK = "libgtk-3.so.0"
+_WEBKIT = ("libwebkit2gtk-4.1.so.0", "libwebkit2gtk-4.0.so.37")
+
+
+def _webkit_lib() -> str:
+    """The WebKitGTK library this Linux PC has ("" when none)."""
+    for name in _WEBKIT:
+        try:
+            ctypes.CDLL(name)
+            ctypes.CDLL(_GTK)
+            return name
+        except OSError:
+            continue
+    return ""
+
+
+def unavailable(env: dict | None = None, platform: str | None = None) -> tuple[str, str]:
+    """("", "") when winlab's own window can open here, else (code, detail)."""
+    env = os.environ if env is None else env
+    platform = platform or sys.platform
+    if platform == "win32":
+        if not loader_path().exists():
+            return "loader", "the WebView2 loader is not fetched yet (setup fetches it)"
+        if not runtime_version():
+            return "runtime", "this PC has no WebView2 runtime (Windows Update installs it)"
+        return "", ""
+    if platform.startswith("linux"):
+        if not (env.get("DISPLAY") or env.get("WAYLAND_DISPLAY")):
+            return "display", "no graphical session (DISPLAY or WAYLAND_DISPLAY is not set)"
+        if not _webkit_lib():
+            return "webkit", ("WebKitGTK is not installed (package libwebkit2gtk-4.1-0 on Debian/Ubuntu, "
+                              "webkit2gtk4.1 on Fedora, webkit2gtk-4.1 on Arch)")
+        return "", ""
+    return "platform", "winlab's own window is made for Windows and Linux"
+
+
 def available() -> bool:
-    return bool(runtime_version())
+    return not unavailable()[0]
+
+
+def is_local(target: str, home: str) -> bool:
+    """Is ``target`` part of the desktop at ``home`` (same scheme, host and
+    port), so a new window for it stays a winlab window? Anything else is the
+    outside world and opens in the user's own browser."""
+    from urllib.parse import urlsplit
+
+    if not target or target.startswith(("about:", "blob:", "data:")):
+        return True
+    a, b = urlsplit(target), urlsplit(home)
+    return (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port)
+
+
+def open_outside(target: str) -> None:
+    """A link to the outside world: the user's own browser, as any program does."""
+    import webbrowser
+
+    try:
+        if sys.platform == "win32":
+            os.startfile(target)  # noqa: S606 - the default browser, by the URL's scheme
+        else:
+            webbrowser.open(target)
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------- COM glue
@@ -239,12 +365,17 @@ MONITOR_DEFAULTTONEAREST = 2
 
 
 def run(url: str, profile: Path, title: str = "winlab") -> int:
-    """Open the window on ``url`` and run until it is closed. Raises
-    NativeWindowError when WebView2 cannot start, so the caller falls back."""
-    if sys.platform != "win32":
-        raise NativeWindowError("the native window is a Windows program")
-    if not loader_path().exists():
-        raise NativeWindowError("the WebView2 loader is not fetched yet (run setup)")
+    """Open the window on ``url`` and run until it is closed (0). Raises
+    NativeWindowError when it cannot start, so the caller falls back."""
+    code, detail = unavailable()
+    if code:
+        raise NativeWindowError(detail, code)
+    if sys.platform == "win32":
+        return _run_windows(url, profile, title)
+    return _run_gtk(url, profile, title)
+
+
+def _run_windows(url: str, profile: Path, title: str) -> int:
     from ctypes import wintypes as W
 
     user32, kernel32, ole32 = ctypes.windll.user32, ctypes.windll.kernel32, ctypes.windll.ole32
@@ -295,7 +426,7 @@ def run(url: str, profile: Path, title: str = "winlab") -> int:
     class MONITORINFO(ctypes.Structure):
         _fields_ = [("cbSize", W.DWORD), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", W.DWORD)]
 
-    st = {"controller": None, "webview": None, "error": None, "full": False, "placement": None}
+    st = {"controller": None, "webview": None, "error": None, "full": False, "placement": None, "shown": False}
     keep: list = []
 
     def fit(hwnd):
@@ -374,6 +505,32 @@ def run(url: str, profile: Path, title: str = "winlab") -> int:
             if zoomed:
                 user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
 
+    def on_new_window(sender, args):
+        # A window.open or target=_blank link: winlab's own pages (a machine's
+        # screen popped out) get WebView2's own window; the outside world goes
+        # to the user's browser.
+        out = ctypes.c_wchar_p()
+        vcall(args, NWR_GET_URI, [ctypes.POINTER(ctypes.c_wchar_p)], ctypes.byref(out))
+        target = out.value or ""
+        if out:
+            ole32.CoTaskMemFree(ctypes.cast(out, ctypes.c_void_p))
+        if not is_local(target, url):
+            vcall(args, NWR_PUT_HANDLED, [ctypes.c_int], 1)
+            open_outside(target)
+
+    def failed(what):
+        # An exception inside a WebView2 callback must not leave a blank
+        # window behind: end the loop, so the caller falls back and says why.
+        def wrapped(*a):
+            try:
+                return what(*a)
+            except Exception as exc:  # noqa: BLE001
+                st["error"] = st["error"] or f"{what.__name__}: {exc}"
+                user32.PostQuitMessage(1)
+                return S_OK
+        return wrapped
+
+    @failed
     def on_controller(hr, controller):
         if hr < 0 or not controller:
             st["error"] = f"WebView2 could not make its view (0x{hr & 0xFFFFFFFF:08X})"
@@ -389,7 +546,8 @@ def run(url: str, profile: Path, title: str = "winlab") -> int:
         for slot in (SET_PUT_STATUS_BAR, SET_PUT_DEV_TOOLS, SET_PUT_ZOOM_CONTROL):
             vcall(settings.value, slot, [ctypes.c_int], 0)
         for slot, fn in ((WV_ADD_DOCUMENT_TITLE_CHANGED, on_title),
-                         (WV_ADD_FULLSCREEN_CHANGED, on_fullscreen)):
+                         (WV_ADD_FULLSCREEN_CHANGED, on_fullscreen),
+                         (WV_ADD_NEW_WINDOW_REQUESTED, on_new_window)):
             cb = Callback([ctypes.c_void_p, ctypes.c_void_p], fn)
             keep.append(cb)
             tok = Token()
@@ -397,8 +555,11 @@ def run(url: str, profile: Path, title: str = "winlab") -> int:
         fit(hwnd)
         vcall(controller, CTL_PUT_IS_VISIBLE, [ctypes.c_int], 1)
         vcall(wv.value, WV_NAVIGATE, [ctypes.c_wchar_p], url)
+        st["shown"] = True
+        clear_fallback()
         return S_OK
 
+    @failed
     def on_environment(hr, env):
         if hr < 0 or not env:
             st["error"] = f"the WebView2 runtime did not start (0x{hr & 0xFFFFFFFF:08X})"
@@ -417,25 +578,127 @@ def run(url: str, profile: Path, title: str = "winlab") -> int:
                                                          ctypes.c_void_p(env_cb.ptr))
     if hr != S_OK:
         user32.DestroyWindow(hwnd)
-        raise NativeWindowError(f"the WebView2 runtime is not usable (0x{hr & 0xFFFFFFFF:08X})")
+        raise NativeWindowError(f"the WebView2 runtime is not usable (0x{hr & 0xFFFFFFFF:08X})", "runtime")
     user32.ShowWindow(hwnd, SW_SHOWMAXIMIZED)
     msg = W.MSG()
     while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
         user32.TranslateMessage(ctypes.byref(msg))
         user32.DispatchMessageW(ctypes.byref(msg))
     if st["error"]:
-        raise NativeWindowError(st["error"])
+        raise NativeWindowError(st["error"], "runtime" if "runtime" in st["error"] else "failed")
+    return 0
+
+
+# ---------------------------------------------------------------- Linux (GTK)
+def _run_gtk(url: str, profile: Path, title: str) -> int:
+    """The same window on Linux: GTK 3 + WebKitGTK through ctypes."""
+    P, S, I = ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int
+    try:
+        gtk = ctypes.CDLL(_GTK)
+        wk = ctypes.CDLL(_webkit_lib())
+        gobj = ctypes.CDLL("libgobject-2.0.so.0")
+        glib = ctypes.CDLL("libglib-2.0.so.0")
+    except OSError as exc:
+        raise NativeWindowError(f"WebKitGTK could not be loaded: {exc}", "webkit") from None
+    for fn, res, args in (
+        (gtk.gtk_init_check, I, [P, P]),
+        (gtk.gtk_window_new, P, [I]),
+        (gtk.gtk_window_set_title, None, [P, S]),
+        (gtk.gtk_window_set_default_size, None, [P, I, I]),
+        (gtk.gtk_window_maximize, None, [P]),
+        (gtk.gtk_window_fullscreen, None, [P]),
+        (gtk.gtk_window_set_default_icon_from_file, I, [S, P]),
+        (gtk.gtk_container_add, None, [P, P]),
+        (gtk.gtk_widget_get_toplevel, P, [P]),
+        (gtk.gtk_widget_show_all, None, [P]),
+        (gtk.gtk_widget_destroy, None, [P]),
+        (gtk.gtk_main, None, []),
+        (gtk.gtk_main_quit, None, []),
+        (glib.g_set_prgname, None, [S]),
+        (glib.g_set_application_name, None, [S]),
+        (gobj.g_signal_connect_data, ctypes.c_ulong, [P, S, P, P, P, I]),
+        (wk.webkit_web_view_new, P, []),
+        (wk.webkit_web_view_new_with_related_view, P, [P]),
+        (wk.webkit_web_view_load_uri, None, [P, S]),
+        (wk.webkit_web_view_get_title, S, [P]),
+        (wk.webkit_web_view_get_settings, P, [P]),
+        (wk.webkit_settings_set_enable_developer_extras, None, [P, I]),
+        (wk.webkit_navigation_action_get_request, P, [P]),
+        (wk.webkit_uri_request_get_uri, S, [P]),
+    ):
+        fn.restype, fn.argtypes = res, args
+
+    # The program's name is the window's class, so the desktop matches the
+    # window to winlab.desktop (StartupWMClass=winlab) and shows its icon.
+    glib.g_set_prgname(b"winlab")
+    glib.g_set_application_name(title.encode())
+    if not gtk.gtk_init_check(None, None):
+        raise NativeWindowError("GTK could not open the display", "display")
+    try:
+        from . import appicon
+        gtk.gtk_window_set_default_icon_from_file(str(appicon.write(profile / "winlab.png", size=256)).encode(), None)
+    except Exception:  # noqa: BLE001 - an icon is a nicety
+        pass
+
+    keep: list = []
+    windows: list = []
+    TITLE = ctypes.CFUNCTYPE(None, P, P, P)
+    CREATE = ctypes.CFUNCTYPE(P, P, P, P)
+    SIMPLE = ctypes.CFUNCTYPE(None, P, P)
+
+    def connect(obj, signal, proto, fn):
+        cb = proto(fn)
+        keep.append(cb)
+        gobj.g_signal_connect_data(obj, signal, ctypes.cast(cb, P), None, None, 0)
+
+    def frame(view, main):
+        win = gtk.gtk_window_new(0)
+        gtk.gtk_window_set_title(win, title.encode())
+        gtk.gtk_window_set_default_size(win, 1100 if not main else 1400, 780 if not main else 880)
+        gtk.gtk_container_add(win, view)
+        windows.append(win)
+        connect(view, b"notify::title", TITLE,
+                lambda v, _p, _d: gtk.gtk_window_set_title(win, wk.webkit_web_view_get_title(v) or title.encode()))
+        connect(view, b"create", CREATE, on_create)
+        connect(view, b"close", SIMPLE, lambda v, _d: gtk.gtk_widget_destroy(win))
+        settings = wk.webkit_web_view_get_settings(view)
+        wk.webkit_settings_set_enable_developer_extras(settings, 0)
+        if main:
+            connect(win, b"destroy", SIMPLE, lambda w, _d: gtk.gtk_main_quit())
+        return win
+
+    def on_create(view, action, _data):
+        # window.open / target=_blank: winlab's own pages get a winlab window,
+        # the outside world the user's browser (as on Windows).
+        req = wk.webkit_navigation_action_get_request(action)
+        target = (wk.webkit_uri_request_get_uri(req) or b"").decode("utf-8", "replace") if req else ""
+        if not is_local(target, url):
+            open_outside(target)
+            return None
+        new = wk.webkit_web_view_new_with_related_view(view)
+        win = frame(new, main=False)
+        connect(new, b"ready-to-show", SIMPLE, lambda v, _d: gtk.gtk_widget_show_all(win))
+        return new
+
+    view = wk.webkit_web_view_new()
+    if not view:
+        raise NativeWindowError("WebKitGTK could not make its view", "webkit")
+    win = frame(view, main=True)
+    gtk.gtk_window_maximize(win)
+    wk.webkit_web_view_load_uri(view, url.encode())
+    gtk.gtk_widget_show_all(win)
+    clear_fallback()
+    gtk.gtk_main()
     return 0
 
 
 def render_status() -> str:
-    if sys.platform != "win32":
-        return "program window: Edge/Chrome app window (the native window is for Windows)"
-    if not loader_path().exists():
-        return "program window: WebView2 loader not fetched yet (setup fetches it); Edge app window meanwhile"
-    version = runtime_version()
-    return (f"program window: native, WebView2 runtime {version}" if version else
-            "program window: WebView2 runtime missing (Windows Update installs it); Edge app window meanwhile")
+    code, detail = unavailable()
+    if not code:
+        if sys.platform == "win32":
+            return f"program window: winlab's own window, WebView2 runtime {runtime_version()}"
+        return f"program window: winlab's own window, WebKitGTK ({_webkit_lib()})"
+    return f"program window: {detail}; the desktop opens in an Edge/Chrome app window meanwhile"
 
 
 def window_command(url: str) -> list[str]:
