@@ -22,6 +22,7 @@ import sys
 import types
 
 ABSENT = frozenset({
+    "tacacs",  # the TACACS+ server's pack: no trial lab has that server
     "activity", "advnet", "aidc", "alerts", "apos", "automation", "aws", "azure",
     "bareos", "bluescreen", "blueteam", "breakfix", "building", "buildlife",
     "buildlive", "buildsys", "cabletest", "calab", "campus", "capstones", "castplayer",

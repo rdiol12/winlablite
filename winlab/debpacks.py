@@ -966,23 +966,6 @@ PACKS: dict[str, Pack] = {
         note="tftp-hpa (BSD-style licence) from the Ubuntu archive: a TFTP server for device configurations, "
              "set up by hand in /etc/default/tftpd-hpa (--create, a directory the tftp user may write)",
     ),
-    # The TACACS+ server the router's and switches' logins, commands and
-    # accounting go to (winlab/aaa.py, lesson aaa-tacacs-plus): tac_plus-ng,
-    # which no distribution packages, built from source by the student. The
-    # stick carries the compiler and the libraries from the Ubuntu archive
-    # and, as the extra file, the source of one pinned commit, checked
-    # against the tree GitHub says that commit holds (winlab/tacacs.py).
-    "tacacs": Pack(
-        id="tacacs",
-        title="TACACS+ server: tac_plus-ng's source and the tools to build it",
-        image="ubuntu",
-        packages=("build-essential", "libpcre2-dev", "libssl-dev", "libc-ares-dev"),
-        typical_mb=95,
-        note="tac_plus-ng (Event-Driven-Servers, BSD-style licence) as the source of a pinned commit from GitHub, "
-             "checked against that commit's tree; gcc, make and the PCRE2, OpenSSL and c-ares headers "
-             "(GPL, LGPL, Apache-2.0 and MIT) from the Ubuntu archive: built and set up by hand",
-        extra="tacacs",
-    ),
     # The FTP server the router's and switches' configurations are copied to
     # with copy running-config ftp: (winlab/ftpscp.py), set up by hand;
     # SCP needs nothing more than the OpenSSH server Ubuntu already runs.
