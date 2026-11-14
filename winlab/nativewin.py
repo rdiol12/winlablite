@@ -350,11 +350,34 @@ WS_POPUP = 0x80000000
 WS_VISIBLE = 0x10000000
 GWL_STYLE = -16
 CW_USEDEFAULT = -0x80000000
+SW_HIDE = 0
 SW_SHOWMAXIMIZED = 3
+SW_SHOW = 5
 WM_DESTROY = 0x0002
 WM_SIZE = 0x0005
 WM_SETFOCUS = 0x0007
 WM_CLOSE = 0x0010
+WM_COMMAND = 0x0111
+WM_SYSCOMMAND = 0x0112
+SC_MINIMIZE = 0xF020
+WM_LBUTTONUP = 0x0202
+WM_LBUTTONDBLCLK = 0x0203
+WM_RBUTTONUP = 0x0205
+WM_TRAY = 0x8000 + 1   # WM_APP + 1: the notification-area icon talks back with this
+NIM_ADD, NIM_DELETE = 0, 2
+NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
+TRAY_OPEN, TRAY_QUIT = 1, 2
+
+
+def _guid(text: str) -> GUID:
+    import uuid
+    return GUID.from_buffer_copy(uuid.UUID(text).bytes_le)
+
+
+CLSID_TASKBARLIST = _guid("56FDF344-FD6D-11D0-958A-006097C9A090")
+IID_ITASKBARLIST2 = _guid("602D4995-B13A-429B-A66E-1935E44F4317")
+TRAY_TIP = "winlab"
+TRAY_HINT = "winlab is still running here. Click to open it."
 IMAGE_ICON = 1
 LR_LOADFROMFILE = 0x10
 LR_DEFAULTSIZE = 0x40
@@ -426,8 +449,70 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
     class MONITORINFO(ctypes.Structure):
         _fields_ = [("cbSize", W.DWORD), ("rcMonitor", RECT), ("rcWork", RECT), ("dwFlags", W.DWORD)]
 
-    st = {"controller": None, "webview": None, "error": None, "full": False, "placement": None, "shown": False}
+    st = {"controller": None, "webview": None, "error": None, "full": False, "placement": None, "shown": False,
+          "tray": False, "hinted": False, "icon": None}
     keep: list = []
+
+    # Minimize puts the window away in the notification area: the lab's
+    # machines keep running, a click on the icon brings the window back, and
+    # its menu has Open and Quit. Closing the window still stops winlab.
+    class NOTIFYICONDATAW(ctypes.Structure):
+        _fields_ = [("cbSize", W.DWORD), ("hWnd", W.HWND), ("uID", W.UINT), ("uFlags", W.UINT),
+                    ("uCallbackMessage", W.UINT), ("hIcon", W.HICON), ("szTip", W.WCHAR * 128),
+                    ("dwState", W.DWORD), ("dwStateMask", W.DWORD), ("szInfo", W.WCHAR * 256),
+                    ("uVersion", W.UINT), ("szInfoTitle", W.WCHAR * 64), ("dwInfoFlags", W.DWORD),
+                    ("guidItem", GUID), ("hBalloonIcon", W.HICON)]
+
+    shell32 = ctypes.windll.shell32
+    shell32.Shell_NotifyIconW.restype, shell32.Shell_NotifyIconW.argtypes = W.BOOL, [W.DWORD, ctypes.c_void_p]
+    for fn, res, args in (
+        (user32.CreatePopupMenu, W.HMENU, []),
+        (user32.AppendMenuW, W.BOOL, [W.HMENU, W.UINT, ctypes.c_size_t, W.LPCWSTR]),
+        (user32.TrackPopupMenu, W.BOOL, [W.HMENU, W.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int, W.HWND,
+                                         ctypes.c_void_p]),
+        (user32.DestroyMenu, W.BOOL, [W.HMENU]),
+        (user32.GetCursorPos, W.BOOL, [ctypes.POINTER(W.POINT)]),
+        (user32.SetForegroundWindow, W.BOOL, [W.HWND]),
+    ):
+        fn.restype, fn.argtypes = res, args
+
+    def tray_data(hwnd):
+        nid = NOTIFYICONDATAW(cbSize=ctypes.sizeof(NOTIFYICONDATAW), hWnd=hwnd, uID=1,
+                              uFlags=NIF_MESSAGE | NIF_ICON | NIF_TIP, uCallbackMessage=WM_TRAY,
+                              hIcon=st["icon"], szTip=TRAY_TIP)
+        return nid
+
+    def to_tray(hwnd) -> bool:
+        nid = tray_data(hwnd)
+        if not st["hinted"]:
+            nid.uFlags |= NIF_INFO
+            nid.szInfo, nid.szInfoTitle = TRAY_HINT, TRAY_TIP
+        if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(nid)):
+            return False   # no notification area (a shell without one): minimize as usual
+        st["tray"] = st["hinted"] = True
+        user32.ShowWindow(hwnd, SW_HIDE)
+        return True
+
+    def from_tray(hwnd) -> None:
+        if st["tray"]:
+            shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(tray_data(hwnd)))
+            st["tray"] = False
+        user32.ShowWindow(hwnd, SW_SHOW)
+        user32.SetForegroundWindow(hwnd)
+
+    def tray_menu(hwnd) -> None:
+        menu = user32.CreatePopupMenu()
+        user32.AppendMenuW(menu, 0, TRAY_OPEN, "Open winlab")
+        user32.AppendMenuW(menu, 0, TRAY_QUIT, "Quit winlab")
+        pt = W.POINT()
+        user32.GetCursorPos(ctypes.byref(pt))
+        user32.SetForegroundWindow(hwnd)   # or the menu stays up when the click lands elsewhere
+        cmd = user32.TrackPopupMenu(menu, 0x0100 | 0x0002, pt.x, pt.y, 0, hwnd, None)   # TPM_RETURNCMD | RIGHTBUTTON
+        user32.DestroyMenu(menu)
+        if cmd == TRAY_OPEN:
+            from_tray(hwnd)
+        elif cmd == TRAY_QUIT:
+            user32.DestroyWindow(hwnd)
 
     def fit(hwnd):
         if st["controller"]:
@@ -437,6 +522,14 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
 
     def wndproc(hwnd, msg, wp, lp):
         try:
+            if msg == WM_SYSCOMMAND and (wp & 0xFFF0) == SC_MINIMIZE and to_tray(hwnd):
+                return 0
+            if msg == WM_TRAY:
+                if lp in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
+                    from_tray(hwnd)
+                elif lp == WM_RBUTTONUP:
+                    tray_menu(hwnd)
+                return 0
             if msg == WM_SIZE:
                 fit(hwnd)
                 return 0
@@ -444,6 +537,9 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
                 vcall(st["controller"], CTL_MOVE_FOCUS, [ctypes.c_int], 0)
                 return 0
             if msg == WM_DESTROY:
+                if st["tray"]:
+                    shell32.Shell_NotifyIconW(NIM_DELETE, ctypes.byref(tray_data(hwnd)))
+                    st["tray"] = False
                 if st["controller"]:
                     vcall(st["controller"], CTL_CLOSE, [])
                 user32.PostQuitMessage(0)
@@ -462,6 +558,8 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
         icon = user32.LoadImageW(None, str(ico), IMAGE_ICON, 0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE)
     except Exception:  # an icon is a nicety
         icon = None
+    st["icon"] = icon or user32.LoadImageW(None, ctypes.cast(ctypes.c_void_p(32512), W.LPCWSTR), IMAGE_ICON, 0, 0,
+                                           LR_DEFAULTSIZE | 0x8000)   # the stock application icon, shared
     wc = WNDCLASSEXW(cbSize=ctypes.sizeof(WNDCLASSEXW), lpfnWndProc=proc, hInstance=hinst,
                      hIcon=icon, hIconSm=icon, hCursor=user32.LoadCursorW(None, ctypes.c_void_p(32512)),
                      lpszClassName="winlabDesktop")
@@ -481,6 +579,26 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
         if out:
             ole32.CoTaskMemFree(ctypes.cast(out, ctypes.c_void_p))
 
+    def mark_fullscreen(on: bool) -> None:
+        """Tells the taskbar the window is (no longer) full screen. Covering
+        the monitor is not enough here: the keyboard focus sits in WebView2's
+        own child process, so the shell does not see a full-screen foreground
+        window by itself and keeps the taskbar on top of it."""
+        try:
+            if st.get("taskbar") is None:
+                tb = ctypes.c_void_p()
+                hr = ole32.CoCreateInstance(ctypes.byref(CLSID_TASKBARLIST), None, 1,
+                                            ctypes.byref(IID_ITASKBARLIST2), ctypes.byref(tb))
+                if hr < 0 or not tb.value:
+                    st["taskbar"] = 0
+                    return
+                vcall(tb.value, 3, [])   # HrInit
+                st["taskbar"] = tb.value
+            if st["taskbar"]:
+                vcall(st["taskbar"], 8, [W.HWND, W.BOOL], hwnd, on)   # MarkFullscreenWindow
+        except (NativeWindowError, OSError):
+            pass   # the window is still full size; only the taskbar may stay in front
+
     def on_fullscreen(sender, args):
         full = ctypes.c_int()
         vcall(st["webview"], WV_GET_CONTAINS_FULLSCREEN, [ctypes.POINTER(ctypes.c_int)], ctypes.byref(full))
@@ -496,8 +614,10 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
             user32.SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE)
             user32.SetWindowPos(hwnd, None, m.left, m.top, m.right - m.left, m.bottom - m.top,
                                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER)
+            mark_fullscreen(True)
         elif not full.value and st["full"]:
             st["full"] = False
+            mark_fullscreen(False)
             style, rc, zoomed = st["placement"]
             user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style)
             user32.SetWindowPos(hwnd, None, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,

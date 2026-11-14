@@ -1137,7 +1137,7 @@ def test_job_records():
         go.wait(10)   # still running until the test has looked at it
         emit("done")
 
-    def rec_of(job_id, until=lambda r: True, within=5.0):
+    def rec_of(job_id, until=lambda r: True, within=30.0):   # a busy build machine starts a thread late
         """The job's record, polled until `until` holds (or the time is up)."""
         end = _t.monotonic() + within
         while True:
@@ -1270,7 +1270,7 @@ def test_base_trim_and_seal():
                 except prepare.PrepareError as exc:
                     check("prepare after retire explains the missing ISO", "removed after" in str(exc), str(exc))
             finally:
-                images.CATALOG["ws2025"].min_gb = 20.0
+                images.CATALOG["ws2025"].min_gb = images.WINDOWS_MIN_GB
         finally:
             images._run_img = real_run
             os.environ.pop("WINLAB_IMAGES", None)
@@ -2689,7 +2689,7 @@ def test_windows_versions():
             check("machine tiles name the version", nodes["dc01"]["os"] == "Windows Server 2022"
                   and nodes["fs01"]["os"] == "Windows Server 2022 Core" and nodes["pc01"]["os"] == "Windows 10")
         finally:
-            images.CATALOG["ws2022"].min_gb = images.CATALOG["ws2019"].min_gb = 20.0
+            images.CATALOG["ws2022"].min_gb = images.CATALOG["ws2019"].min_gb = images.WINDOWS_MIN_GB
             os.environ.pop("WINLAB_IMAGES", None)
 
 
@@ -14342,6 +14342,377 @@ _TOFU_LESSONS = {   # lesson -> (lab, exercise)
 
 
 
+
+
+def test_qemu_whpx_reset_fix():
+    """A packaged QEMU 11.1 lacks the WHPX reset fix: bootstrap fetches the
+    program built with it, checked by its SHA-256, and puts it in place; a
+    QEMU that has the fix, or another series, is left alone."""
+    import importlib.util
+    import io
+    import tarfile
+    import tempfile
+    from winlab import bootstrap as bs, paths
+
+    check("the fixed build is pinned by its SHA-256 and comes from winlab's public release",
+          len(bs.WHPX_FIX_SHA256) == 64 and bs.WHPX_FIX_RELEASE ==
+          f"https://github.com/rdiol12/winlablite/releases/download/qemu-whpx-reset-{bs.WHPX_FIX_BASE}"
+          and bs.WHPX_FIX_BASE.startswith(bs.WHPX_FIX_SERIES)
+          and bs.WHPX_FIX_ASSET == f"qemu-whpx-reset-{bs.WHPX_FIX_BASE}-{bs.WHPX_FIX_BUILD}.tar.gz")
+    spec = importlib.util.spec_from_file_location("pack_qemu_whpx", paths.APP_DIR / "tools" / "pack_qemu_whpx.py")
+    pk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pk)
+    orig = paths.RUNTIME
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        paths.RUNTIME = tmp / "runtime"
+        try:
+            fixed = b"MZ fixed " + bs.WHPX_FIX_MARK + b" " + bs.WHPX_XSAVE_MARK + b" end"
+            (tmp / "fixed.exe").write_bytes(fixed)
+            (tmp / "COPYING").write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 2")
+            (tmp / "0001-fix.patch").write_bytes(b"diff")
+            blob = pk.pack(tmp / "fixed.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
+            check("the archive is reproducible and carries the program, the licence, the patch and a notice",
+                  blob == pk.pack(tmp / "fixed.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
+                  and sorted(tarfile.open(fileobj=io.BytesIO(blob)).getnames()) ==
+                  ["qemu-whpx-reset/0001-fix.patch", "qemu-whpx-reset/COPYING", "qemu-whpx-reset/NOTICE", bs.WHPX_FIX_EXE]
+                  and bs.WHPX_FIX_COMMIT.encode() in pk.notice() and pk.SOURCE.encode() in pk.notice()
+                  and all(c.encode() in pk.notice() for c in bs.WHPX_FIX_ALSO))
+            (tmp / "stock-in.exe").write_bytes(b"MZ stock")
+            try:
+                pk.pack(tmp / "stock-in.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
+                refused = False
+            except SystemExit:
+                refused = True
+            check("a program without the fix is never packed", refused)
+            calls = []
+
+            def download(url, dest, sha, label=""):
+                calls.append((url, sha))
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(blob)
+                return dest
+            said = []
+            exe = tmp / "qemu-system-x86_64.exe"
+            exe.write_bytes(b"MZ stock")
+            check("a stock program is told from a fixed one by the fix's own message",
+                  not bs.has_whpx_reset_fix(exe) and bs.has_whpx_reset_fix(tmp / "fixed.exe")
+                  and not bs.has_whpx_reset_fix(tmp / "missing.exe"))
+            did = bs.fit_whpx_reset_fix(exe, "11.1.3-2", said.append, download)
+            check("a packaged 11.1 without the fix gets the fixed program, fetched against the pinned SHA-256",
+                  did == "fitted" and exe.read_bytes() == fixed and said
+                  and calls == [(f"{bs.WHPX_FIX_RELEASE}/{bs.WHPX_FIX_ASSET}", bs.WHPX_FIX_SHA256)]
+                  and not (paths.RUNTIME / "cache" / bs.WHPX_FIX_ASSET).exists(), did)
+            check("a QEMU that has the fix is left alone and nothing is fetched",
+                  bs.fit_whpx_reset_fix(exe, "11.1.3-2", said.append, download) == "has it" and len(calls) == 1)
+            exe.write_bytes(b"MZ stock 12")
+            did = bs.fit_whpx_reset_fix(exe, "12.0.0-1", said.append, download)
+            check("another series is never given an 11.1 program", did not in ("fitted", "has it")
+                  and exe.read_bytes() == b"MZ stock 12" and len(calls) == 1, did)
+
+            def wrong(url, dest, sha, label=""):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                raw = io.BytesIO()
+                with tarfile.open(fileobj=raw, mode="w:gz") as tar:
+                    ti = tarfile.TarInfo(bs.WHPX_FIX_EXE)
+                    ti.size = 8
+                    tar.addfile(ti, io.BytesIO(b"MZ stock"))
+                dest.write_bytes(raw.getvalue())
+                return dest
+            exe.write_bytes(b"MZ stock")
+            try:
+                bs.fit_whpx_reset_fix(exe, "11.1.4-1", said.append, wrong)
+                refused = False
+            except bs.BootstrapError:
+                refused = True
+            check("an archive whose program lacks the fix is refused and the packaged one stays",
+                  refused and exe.read_bytes() == b"MZ stock")
+        finally:
+            paths.RUNTIME = orig
+    # The host's own processor for a WHPX machine, only on a QEMU with the XSAVE fix.
+    from winlab import orchestrator
+    from winlab.providers import qemu as qp
+    oexe, oready, olinux = paths.qemu_exe, paths.qemu_ready, bs.is_linux
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        paths.RUNTIME = tmp / "runtime"
+        paths.RUNTIME.mkdir()
+        exe = tmp / "qemu-system-x86_64.exe"
+        paths.qemu_exe = lambda: exe
+        try:
+            check("no QEMU yet: the named model", qp.cpu_model("whpx") == qp.WHPX_NAMED)
+            exe.write_bytes(b"MZ " + bs.WHPX_FIX_MARK)
+            check("a QEMU with the reset fix alone keeps the named model, without XSAVE",
+                  qp.cpu_model("whpx") == qp.WHPX_NAMED and "-xsave" in qp.WHPX_NAMED and bs.has_whpx_reset_fix(exe)
+                  and not bs.has_whpx_xsave_fix(exe))
+            both = b"MZ " + bs.WHPX_FIX_MARK + b" " + bs.WHPX_XSAVE_MARK + b"%08lx"
+            exe.write_bytes(both + b" build 2")
+            check("with the XSAVE fix a WHPX machine gets the host's own processor; KVM and TCG are as they were",
+                  qp.cpu_model("whpx") == qp.WHPX_HOST == "host,hv-relaxed,hv-vapic,hv-time"
+                  and qp.cpu_model("tcg") == "max" and qp.cpu_model("kvm").startswith("host"))
+            src = Path(paths.APP_DIR / "winlab" / "prepare.py").read_text(encoding="utf-8")
+            check("the base is still installed on the named model", qp.WHPX_NAMED in src)
+
+            # An unpacked QEMU from before the fixed build is refitted when winlab starts.
+            calls = []
+            blob2 = pk.pack(exe, tmp / "c", []) if (tmp / "c").write_bytes(b"GPL") else b""
+            orig_dl = bs._download_to
+
+            def download(url, dest, sha, label=""):
+                calls.append(url)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(blob2)
+                return dest
+            bs._download_to = download
+            bs.is_linux = lambda: False
+            paths.qemu_ready = lambda: True
+            try:
+                (paths.RUNTIME / "manifest.txt").write_text(
+                    f"{bs.PREFIX}glib2\t2.90.1-1\tab\n{bs.PREFIX}qemu\t11.1.3-2\tcd\n", encoding="utf-8")
+                check("the unpacked package's version is read from the manifest", bs.packaged_qemu_version() == "11.1.3-2")
+                check("a QEMU with both fixes is left alone at start", bs.refit_whpx_fixes() == "has it" and not calls)
+                exe.write_bytes(b"MZ " + bs.WHPX_FIX_MARK + b" build 1")
+                check("one with the reset fix only (the first build) is given the second",
+                      bs.refit_whpx_fixes() == "fitted" and len(calls) == 1 and bs.has_whpx_xsave_fix(exe)
+                      and qp.cpu_model("whpx") == qp.WHPX_HOST)
+                exe.write_bytes(b"MZ stock")
+                paths.qemu_ready = lambda: False
+                check("a half-unpacked QEMU is not touched", bs.refit_whpx_fixes() == "not needed" and len(calls) == 1)
+                paths.qemu_ready = lambda: True
+                bs.is_linux = lambda: True
+                check("nor is a Linux host's own QEMU", bs.refit_whpx_fixes() == "not needed" and len(calls) == 1)
+                bs.is_linux = lambda: False
+
+                def offline(url, dest, sha, label=""):
+                    raise bs.BootstrapError("no network")
+                bs._download_to = offline
+                check("no network at start: it says so, the machines keep the named model, the next start tries again",
+                      "could not be fetched" in bs.refit_whpx_fixes() and qp.cpu_model("whpx") == qp.WHPX_NAMED)
+            finally:
+                bs._download_to = orig_dl
+
+            # A hibernated Windows wakes on the processor it went to sleep on.
+            cf = tmp / "cpu.txt"
+            argv = ["qemu", "-cpu", qp.WHPX_HOST, "-smp", "2"]
+            orchestrator.keep_cpu(argv, cf, False, "whpx")
+            check("a start notes the processor model beside the machine's disks",
+                  cf.read_text(encoding="utf-8") == qp.WHPX_HOST and argv[2] == qp.WHPX_HOST)
+            cf.write_text(qp.WHPX_NAMED, encoding="utf-8")
+            argv = ["qemu", "-cpu", qp.WHPX_HOST, "-smp", "2"]
+            orchestrator.keep_cpu(argv, cf, True, "whpx")
+            check("waking from hibernation keeps the model it slept on", argv[2] == qp.WHPX_NAMED)
+            argv = ["qemu", "-cpu", qp.WHPX_HOST]
+            orchestrator.keep_cpu(argv, cf, False, "whpx")
+            check("the next cold start moves to the host's processor", argv[2] == qp.WHPX_HOST
+                  and cf.read_text(encoding="utf-8") == qp.WHPX_HOST)
+            cf.unlink()
+            argv = ["qemu", "-cpu", qp.WHPX_HOST]
+            orchestrator.keep_cpu(argv, cf, True, "whpx")
+            check("a machine put to sleep by an older winlab wakes on the named model", argv[2] == qp.WHPX_NAMED)
+            cf.unlink()
+            argv = ["qemu", "-cpu", "host"]
+            orchestrator.keep_cpu(argv, cf, True, "kvm")
+            check("on KVM nothing changes", argv[2] == "host")
+        finally:
+            paths.qemu_exe, paths.qemu_ready, bs.is_linux, paths.RUNTIME = oexe, oready, olinux, orig
+    wsrc = Path(paths.APP_DIR / "winlab" / "webui.py").read_text(encoding="utf-8")
+    check("winlab refits the fixed QEMU when its desktop starts", "refit_whpx_fixes()" in wsrc)
+    bsrc = Path(paths.APP_DIR / "winlab" / "bootstrap.py").read_text(encoding="utf-8")
+    check("after the unpack is swapped into place, the fix goes to the program where it now is, not the staging folder's",
+          "fit_whpx_reset_fix(paths.qemu_exe(), version, say)" in bsrc)
+    lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
+    check("LICENSING.md says what the fixed QEMU is, where its source is and that it is fetched",
+          "QEMU with the WHPX reset fix" in lic and bs.WHPX_FIX_ASSET in lic and pk.SOURCE in lic
+          and bs.WHPX_FIX_COMMIT in lic and all(c in lic for c in bs.WHPX_FIX_ALSO))
+
+
+def test_setup_downloads_news_and_tray():
+    """Three things 1.0.7's first Setup showed (14 Nov 2026): the virtio-win
+    download died on a redirect through plain http, the screen said "no news"
+    through a fetch that was reporting all along, and minimizing had nowhere
+    to go but the taskbar."""
+    import urllib.request
+    from winlab import bootstrap as bs, nativewin as nw, paths
+
+    h = bs._StayOnHttps()
+    req = urllib.request.Request("https://mirror.example/virtio-win.iso", headers={"User-Agent": "winlab"})
+    got = h.redirect_request(req, None, 301, "Moved", {}, "http://mirror.example/archive/virtio-win-0.1.iso")
+    check("a download that began on https follows a redirect to http on https",
+          got is not None and got.full_url == "https://mirror.example/archive/virtio-win-0.1.iso")
+    got = h.redirect_request(req, None, 302, "Found", {}, "https://other.example/x.iso")
+    check("an https redirect is followed as it is", got.full_url == "https://other.example/x.iso")
+    plain = urllib.request.Request("http://mirror.example/a")
+    got = h.redirect_request(plain, None, 302, "Found", {}, "http://mirror.example/b")
+    check("a download that began on http is not changed", got.full_url == "http://mirror.example/b")
+    check("every download goes through that opener",
+          any(isinstance(x, bs._StayOnHttps) for x in bs._OPENER.handlers)
+          and "urllib.request.urlopen(" not in Path(paths.APP_DIR / "winlab" / "bootstrap.py").read_text(encoding="utf-8")
+          and "urllib.request.urlopen(" not in Path(paths.APP_DIR / "winlab" / "virtio.py").read_text(encoding="utf-8"))
+
+    heard = []
+    bs.set_progress_sink(heard.append)
+    try:
+        bs._say("[3/622] flite", " 50%")
+    finally:
+        bs.set_progress_sink(None)
+    wsrc = Path(paths.APP_DIR / "winlab" / "webui.py").read_text(encoding="utf-8")
+    at = wsrc.index("set_progress_sink(inner)")
+    check("Get everything ready hears the downloads of a step it runs itself, and lets go of them after",
+          heard == ["[3/622] flite:  50%"] and "runners[nxt[\"job\"]](nxt)(inner)" in wsrc[at:at + 200]
+          and "set_progress_sink(None)" in wsrc[at:at + 300])
+
+    nsrc = Path(paths.APP_DIR / "winlab" / "nativewin.py").read_text(encoding="utf-8")
+    check("minimizing the window puts it in the notification area; a click or Open brings it back, Quit closes it",
+          nw.SC_MINIMIZE == 0xF020 and nw.WM_SYSCOMMAND == 0x0112 and nw.WM_TRAY > 0x8000
+          and "(wp & 0xFFF0) == SC_MINIMIZE and to_tray(hwnd)" in nsrc and "Shell_NotifyIconW(NIM_ADD" in nsrc
+          and "from_tray(hwnd)" in nsrc and '"Open winlab"' in nsrc and '"Quit winlab"' in nsrc)
+    check("full screen tells the taskbar so (WebView2 holds the focus in its own process, so the shell does not notice), and tells it when it ends",
+          "mark_fullscreen(True)" in nsrc and "mark_fullscreen(False)" in nsrc and "MarkFullscreenWindow" in nsrc
+          and bytes(nw.IID_ITASKBARLIST2).hex() == "95492d603ab19b42a66e1935e44f4317")
+    check("the icon is taken away when the window closes, and a shell without a notification area minimizes as usual",
+          nsrc.index("if msg == WM_DESTROY:") < nsrc.index("Shell_NotifyIconW(NIM_DELETE", nsrc.index("if msg == WM_DESTROY:"))
+          and "return False   # no notification area" in nsrc)
+
+
+def test_windows_iso_is_not_refused_for_its_size():
+    """Microsoft's Windows Server 2025 evaluation ISO is 7.6 GiB; 1.0.7
+    refused it ("is only 7.6 GiB; ws2025 media is normally around 20 GiB")."""
+    import tempfile
+    from winlab import images
+    windows = [e for e in images.CATALOG.values() if e.kind in ("windows-server", "windows-client") and e.mode == images.IMPORT]
+    check("every Windows medium takes an ISO of 4 GiB and more",
+          windows and all(0 < e.min_gb * 0.5 <= 4.0 for e in windows), str({e.id: e.min_gb for e in windows}))
+    with tempfile.TemporaryDirectory() as tmp:
+        small = Path(tmp) / "truncated.iso"
+        small.write_bytes(b"\0" * 4096)
+        try:
+            images.import_media("ws2025", small)
+            said = ""
+        except images.ImageError as exc:
+            said = str(exc)
+        check("a download cut short is still asked about", "is this a full image" in said, said)
+
+
+def test_iso_reader_reads_udf_bridge_discs():
+    """Microsoft's newer Windows ISOs keep their files in UDF; the ISO 9660
+    side holds one README.TXT. The reader follows the UDF side then (14 Nov
+    2026: the Server 2025 evaluation ISO imported with no image list)."""
+    import struct
+    import tempfile
+    from winlab import iso9660
+
+    S = iso9660.SECTOR
+    PART = 300                                    # the UDF partition's first sector
+
+    def tag(ident: int, body: bytes) -> bytes:
+        return (struct.pack("<H", ident) + bytes(14) + body).ljust(S, b"\0")
+
+    def icb(file_type: int, alloc: int) -> bytes:
+        b = bytearray(20)
+        b[11] = file_type
+        struct.pack_into("<H", b, 18, alloc)
+        return bytes(b)
+
+    def file_entry(file_type: int, alloc: int, size: int, ads: bytes) -> bytes:
+        body = bytearray(176 - 16)
+        body[0:20] = icb(file_type, alloc)
+        struct.pack_into("<Q", body, 56 - 16, size)
+        struct.pack_into("<II", body, 168 - 16, 0, len(ads))
+        return tag(261, bytes(body) + ads)
+
+    def fid(name: str, lbn: int, flags: int = 0) -> bytes:
+        raw = (b"\x10" + name.encode("utf-16-be")) if name else b""
+        b = bytearray(38)
+        struct.pack_into("<H", b, 0, 257)
+        b[18], b[19] = flags, len(raw)
+        struct.pack_into("<II", b, 20, S, lbn)     # long_ad: length, block
+        out = bytes(b) + raw
+        return out.ljust((len(out) + 3) & ~3, b"\0")
+
+    big = bytes(range(256)) * 20                   # 5120 bytes: three sectors, in two extents
+    img = bytearray(S * (PART + 40))
+
+    def put(sector: int, data: bytes) -> None:
+        img[sector * S:sector * S + len(data)] = data
+
+    # ISO 9660 side: a primary descriptor whose root holds README.TXT only.
+    pvd = bytearray(S)
+    pvd[0], pvd[1:6], pvd[40:48] = 1, b"CD001", b"UDFTEST "
+    rootrec = bytearray(34)
+    struct.pack_into("<I", rootrec, 2, 20)
+    struct.pack_into("<I", rootrec, 10, S)
+    pvd[156:190] = rootrec
+    put(16, bytes(pvd))
+    term = bytearray(S)
+    term[0], term[1:6] = 255, b"CD001"
+    put(17, bytes(term))
+    for n, ident in ((18, b"BEA01"), (19, b"NSR02"), (20 + 1, b"TEA01")):
+        d = bytearray(S)
+        d[1:6] = ident
+        put(n, bytes(d))
+    rec = bytearray(33 + 12)
+    rec[0], rec[32], rec[33:45] = 46, 12, b"README.TXT;1"
+    struct.pack_into("<I", rec, 2, 22)
+    struct.pack_into("<I", rec, 10, 4)
+    put(20, bytes(rec).ljust(46, b"\0"))
+    put(22, b"UDF!")
+
+    # UDF side: anchor, partition, logical volume (one type 1 map), file set.
+    put(256, tag(2, struct.pack("<II", 4 * S, 260)))
+    pd = bytearray(S - 16)
+    struct.pack_into("<I", pd, 188 - 16, PART)
+    put(260, tag(5, bytes(pd)))
+    lvd = bytearray(S - 16)
+    struct.pack_into("<I", lvd, 212 - 16, S)
+    struct.pack_into("<II", lvd, 248 - 16, S, 0)   # the file set descriptor: partition block 0
+    struct.pack_into("<I", lvd, 268 - 16, 1)
+    lvd[440 - 16:440 - 16 + 6] = bytes([1, 6, 0, 0, 0, 0])
+    put(261, tag(6, bytes(lvd)))
+    put(262, tag(8, b""))
+    fsd = bytearray(S - 16)
+    struct.pack_into("<II", fsd, 400 - 16, S, 1)   # the root directory's entry: block 1
+    put(PART + 0, tag(256, bytes(fsd)))
+    # root (its listing embedded in the entry): sources/, setup.exe (embedded), a deleted name
+    root = fid("", 1, 0x0A) + fid("sources", 2, 0x02) + fid("setup.exe", 5) + fid("gone.txt", 5, 0x04)
+    put(PART + 1, file_entry(4, 3, len(root), root))
+    src = fid("", 1, 0x0A) + fid("install.wim", 4) + fid("Größe.txt", 5)
+    put(PART + 2, file_entry(4, 0, len(src), struct.pack("<II", len(src), 3)))   # short_ad -> block 3
+    put(PART + 3, src)
+    # install.wim: 4096 bytes at block 10, then 1024 at block 20
+    put(PART + 4, file_entry(5, 0, len(big), struct.pack("<IIII", 4096, 10, 1024, 20)))
+    put(PART + 10, big[:4096])
+    put(PART + 20, big[4096:])
+    put(PART + 5, file_entry(5, 3, 2, b"MZ"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "bridge.iso"
+        f.write_bytes(bytes(img))
+        with iso9660.Iso(f) as iso:
+            check("a disc whose ISO 9660 side is a README is read from its UDF side",
+                  iso.udf and [e.name for e in iso.listdir("")] == ["setup.exe", "sources"])
+            check("folders, Unicode names and deleted entries",
+                  [e.name for e in iso.listdir("sources")] == ["Größe.txt", "install.wim"]
+                  and iso.exists("SOURCES/Install.WIM") and not iso.exists("gone.txt"))
+            check("a file in several extents reads whole and in part",
+                  iso.read("sources/install.wim") == big and iso.entry("sources/install.wim").size == len(big)
+                  and iso.read_at("sources/install.wim", 4090, 12) == big[4090:4102])
+            check("a small file kept inside its own entry", iso.read("setup.exe") == b"MZ"
+                  and iso.read_at("setup.exe", 1, 1) == b"Z")
+            check("the label is still the disc's", iso.volume_id() == "UDFTEST")
+        # Without the UDF recognition the same bytes are the README disc they claim to be.
+        plain = bytearray(img)
+        plain[19 * S + 1:19 * S + 6] = b"XXXXX"
+        f.write_bytes(bytes(plain))
+        with iso9660.Iso(f) as iso:
+            check("no UDF on the disc: the ISO 9660 side as before",
+                  not iso.udf and [e.name for e in iso.listdir("")] == ["README.TXT"] and iso.read("README.TXT") == b"UDF!")
+        # A UDF 2.50 metadata partition is not followed: the ISO 9660 side stays.
+        meta = bytearray(img)
+        meta[261 * S + 440] = 2
+        f.write_bytes(bytes(meta))
+        with iso9660.Iso(f) as iso:
+            check("a partition map the reader does not follow leaves the ISO 9660 side in place",
+                  not iso.udf and [e.name for e in iso.listdir("")] == ["README.TXT"])
 
 
 if __name__ == "__main__":

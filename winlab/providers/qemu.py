@@ -269,6 +269,10 @@ HV_KVM = ("hv-relaxed,hv-vapic,hv-spinlocks=0x1fff,hv-vpindex,hv-runtime,hv-time
           "hv-synic,hv-stimer,hv-frequencies,hv-tlbflush,hv-ipi")
 
 
+WHPX_NAMED = "Skylake-Client-v4,-xsave,-xsaveopt,hv-relaxed,hv-vapic,hv-time"
+WHPX_HOST = "host,hv-relaxed,hv-vapic,hv-time"
+
+
 def cpu_model(accel: str, windows: bool = False) -> str:
     # WHPX (Windows' Hyper-V platform) crashes with `-cpu host` on some
     # hosts -- passing through the physical CPU's xsave/AVX state produces
@@ -276,10 +280,16 @@ def cpu_model(accel: str, windows: bool = False) -> str:
     # the guest. A named model exposes a stable, complete-enough feature set
     # (POPCNT/SSE4.2/AES that Server 2025 and Win11 require) without the
     # passthrough that trips WHPX. KVM and TCG are unaffected.
+    # The QEMU winlab fetches with upstream's XSAVE fix (bootstrap.py) reads
+    # that state properly: there the machine gets the host's own processor,
+    # AVX included.
     if accel == "tcg":
         return "max"
     if accel == "whpx":
-        return "Skylake-Client-v4,-xsave,-xsaveopt,hv-relaxed,hv-vapic,hv-time"
+        from ..bootstrap import has_whpx_xsave_fix
+        if has_whpx_xsave_fix(paths.qemu_exe()):
+            return WHPX_HOST
+        return WHPX_NAMED
     return f"host,{HV_KVM}" if windows else "host"
 
 

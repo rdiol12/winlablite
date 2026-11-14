@@ -1,4 +1,4 @@
-"""A read-only ISO 9660 reader, Joliet first, in the standard library.
+"""A read-only ISO 9660 and UDF reader, in the standard library.
 
 winlab pulls a handful of driver files out of the virtio-win ISO on the
 customer's PC. Mounting the image needs rights and a platform-specific
@@ -10,6 +10,16 @@ names; the primary descriptor is the fallback for images without it.
 Only what reading needs: volume descriptors, directory records, extents,
 and the multi-extent records a file over 4 GiB (a Windows install.wim) is
 split into. No path tables, no Rock Ridge, no interleaving.
+
+UDF. Microsoft's newer Windows ISOs are "UDF bridge" discs whose ISO 9660
+side holds one README.TXT ("this disc contains a UDF file system") and
+nothing else; the files are in the UDF side. When the ISO 9660 tree has no
+folder and the image carries UDF, the tree is read from UDF instead: the
+anchor at sector 256, the partition and logical volume descriptors, the
+file set, then file entries and file identifiers (ECMA-167, as UDF 1.02 to
+2.01 write them on a plain disc). Not the metadata partition of UDF 2.50
+(Blu-ray) and no virtual or sparable partitions: such a disc keeps its
+ISO 9660 side.
 """
 
 from __future__ import annotations
@@ -52,7 +62,17 @@ class Iso:
         self.path = Path(path)
         self._fh = self.path.open("rb")
         self.joliet = False
+        self.udf = False
+        self._part = 0                      # UDF: the partition's first sector
+        self._inline: dict[int, bytes] = {}  # UDF: files kept inside their file entry
         self._root = self._find_root()
+        if not any(e.is_dir for e in self._entries(self._root)):
+            try:
+                root = self._udf_root()
+            except (IsoError, struct.error, IndexError):
+                root = None
+            if root is not None:
+                self.udf, self._root = True, root
 
     def close(self) -> None:
         self._fh.close()
@@ -108,7 +128,130 @@ class Iso:
             name = name.split(";", 1)[0]
         return name.rstrip(".")
 
+    # ------------------------------------------------------------------- UDF
+    def _tag(self, lba: int, want: int) -> bytes:
+        blk = self._sector(lba)
+        if struct.unpack_from("<H", blk, 0)[0] != want:
+            raise IsoError(f"{self.path.name}: no UDF descriptor {want} at sector {lba}")
+        return blk
+
+    def _udf_root(self) -> Entry | None:
+        """The root directory of the UDF side, or None when there is none."""
+        recognised = False
+        for lba in range(16, 16 + 64):
+            ident = self._sector(lba)[1:6]
+            if ident in (b"NSR02", b"NSR03"):
+                recognised = True
+            if ident in (b"TEA01", b"\0\0\0\0\0"):
+                break
+        if not recognised:
+            return None
+        anchor = self._tag(256, 2)
+        length, start = struct.unpack_from("<II", anchor, 16)
+        part = fileset = None
+        for lba in range(start, start + length // SECTOR):
+            blk = self._sector(lba)
+            tag = struct.unpack_from("<H", blk, 0)[0]
+            if tag == 5 and part is None:           # partition descriptor
+                part = struct.unpack_from("<I", blk, 188)[0]
+            elif tag == 6:                          # logical volume descriptor
+                if struct.unpack_from("<I", blk, 212)[0] != SECTOR:
+                    raise IsoError(f"{self.path.name}: UDF blocks are not {SECTOR} bytes")
+                maps, pos = struct.unpack_from("<I", blk, 268)[0], 440
+                for _ in range(maps):
+                    if blk[pos] != 1:               # a metadata, virtual or sparable partition
+                        raise IsoError(f"{self.path.name}: a UDF partition map this reader does not follow")
+                    pos += blk[pos + 1]
+                fileset = struct.unpack_from("<I", blk, 252)[0]
+            elif tag == 8:                          # terminating descriptor
+                break
+        if part is None or fileset is None:
+            raise IsoError(f"{self.path.name}: the UDF volume has no partition or file set")
+        self._part = part
+        fsd = self._tag(part + fileset, 256)
+        root = struct.unpack_from("<I", fsd, 404)[0]
+        return self._udf_entry("", part + root)
+
+    def _udf_ads(self, blk: bytes, kind: int, pos: int, length: int) -> list[tuple[int, int]]:
+        """The (sector, bytes) pieces an allocation descriptor list names; a
+        sector of -1 is a hole (allocated or not, never written: zeros)."""
+        out: list[tuple[int, int]] = []
+        step = {0: 8, 1: 16}.get(kind)
+        if step is None:
+            raise IsoError(f"{self.path.name}: UDF allocation descriptors of type {kind}")
+        end = pos + length
+        while pos + step <= end:
+            raw, lbn = struct.unpack_from("<II", blk, pos)
+            pos += step
+            size, what = raw & 0x3FFFFFFF, raw >> 30
+            if size == 0:
+                break
+            if what == 3:                           # the list goes on in another block
+                blk = self._tag(self._part + lbn, 258)
+                pos, end = 24, 24 + struct.unpack_from("<I", blk, 20)[0]
+                continue
+            out.append((self._part + lbn if what == 0 else -1, size))
+        return out
+
+    def _udf_entry(self, name: str, lba: int) -> Entry:
+        blk = self._sector(lba)
+        tag = struct.unpack_from("<H", blk, 0)[0]
+        if tag == 261:                              # file entry
+            l_ea, l_ad, data = *struct.unpack_from("<II", blk, 168), 176
+        elif tag == 266:                            # extended file entry
+            l_ea, l_ad, data = *struct.unpack_from("<II", blk, 208), 216
+        else:
+            raise IsoError(f"{self.path.name}: no UDF file entry at sector {lba}")
+        is_dir = blk[16 + 11] == 4
+        kind = struct.unpack_from("<H", blk, 16 + 18)[0] & 7
+        size = struct.unpack_from("<Q", blk, 56)[0]
+        data += l_ea
+        if kind == 3:                               # the file is inside its own entry
+            self._inline[lba] = blk[data:data + l_ad][:size]
+            return Entry(name=name, is_dir=is_dir, lba=lba, size=size)
+        pieces, left = [], size
+        for sector, length in self._udf_ads(blk, kind, data, l_ad):
+            length = min(length, left)
+            if length:
+                pieces.append((sector, length))
+            left -= length
+        if left:
+            raise IsoError(f"{self.path.name}: {name or 'the root'} is {size} bytes, {left} of them not on the disc")
+        return Entry(name=name, is_dir=is_dir, lba=lba, size=size, extents=tuple(pieces))
+
+    def _udf_bytes(self, e: Entry) -> bytes:
+        if e.lba in self._inline:
+            return self._inline[e.lba]
+        out = bytearray()
+        for sector, length in e.pieces:
+            if sector < 0:
+                out += bytes(length)
+            else:
+                self._fh.seek(sector * SECTOR)
+                out += self._fh.read(length)
+        return bytes(out)
+
+    def _udf_entries(self, d: Entry) -> list[Entry]:
+        data = self._udf_bytes(d)
+        out: list[Entry] = []
+        pos = 0
+        while pos + 38 <= len(data):
+            if struct.unpack_from("<H", data, pos)[0] != 257:   # file identifier descriptor
+                break
+            flags, l_fi = data[pos + 18], data[pos + 19]
+            lbn = struct.unpack_from("<I", data, pos + 24)[0]
+            l_iu = struct.unpack_from("<H", data, pos + 36)[0]
+            raw = data[pos + 38 + l_iu:pos + 38 + l_iu + l_fi]
+            pos += (38 + l_iu + l_fi + 3) & ~3
+            if flags & 0x0C or not raw:             # deleted, or the parent
+                continue
+            name = raw[1:].decode("utf-16-be" if raw[0] == 16 else "latin-1", "replace")
+            out.append(self._udf_entry(name, self._part + lbn))
+        return out
+
     def _entries(self, d: Entry) -> list[Entry]:
+        if self.udf:
+            return self._udf_entries(d)
         sectors = (d.size + SECTOR - 1) // SECTOR
         data = self._sector(d.lba, sectors)[: d.size]
         out: list[Entry] = []
@@ -180,6 +323,8 @@ class Iso:
         if offset < 0 or size < 0 or offset + size > e.size:
             raise IsoError(f"{self.path.name}: {path} is {e.size} bytes; "
                            f"cannot read {size} at {offset}")
+        if self.udf and e.lba in self._inline:
+            return self._inline[e.lba][offset:offset + size]
         out = bytearray()
         start = 0
         for lba, length in e.pieces:
@@ -187,6 +332,10 @@ class Iso:
             if end > offset and start < offset + size and size:
                 lo = max(offset, start)
                 hi = min(offset + size, end)
+                if lba < 0:                         # a hole in a UDF file
+                    out += bytes(hi - lo)
+                    start = end
+                    continue
                 self._fh.seek(lba * SECTOR + (lo - start))
                 chunk = self._fh.read(hi - lo)
                 if len(chunk) != hi - lo:
@@ -196,5 +345,6 @@ class Iso:
         return bytes(out)
 
     def volume_id(self) -> str:
+        # The ISO 9660 label; a UDF bridge disc carries the same one there.
         vd = self._sector(16)
         return vd[40:72].decode("ascii", "replace").strip("\x00 ")

@@ -257,10 +257,11 @@ def _download(url: str, dest: Path, progress) -> tuple[Path, str]:
     job bar reads it); returns the file and the URL it finally came from."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".part")
+    from .bootstrap import urlopen
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     last = -5
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp, tmp.open("wb") as fh:
+        with urlopen(req, timeout=180) as resp, tmp.open("wb") as fh:
             final = resp.geturl()
             expect = int(resp.headers.get("Content-Length") or 0)
             done = 0

@@ -142,6 +142,14 @@ def qemu_exe() -> Path:
     return _exe("qemu-system-x86_64")
 
 
+def qemu_ready() -> bool:
+    """QEMU is set up: its exe is there and, on Windows, the unpack of every
+    package finished (bootstrap writes runtime/manifest.txt last)."""
+    if not qemu_exe().exists():
+        return False
+    return os.name != "nt" or (RUNTIME / "manifest.txt").exists()
+
+
 def qemu_img() -> Path:
     return _exe("qemu-img")
 

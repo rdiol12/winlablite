@@ -58,6 +58,10 @@ class Entry:
 MEDIA = "media"
 
 SERVER_EVAL = "Microsoft Evaluation EULA, 180 days, non-production"
+# Half of this is the least a Windows medium may weigh before winlab asks
+# whether it is whole. Microsoft's evaluation ISOs are 4.5 to 8 GiB (Server
+# 2025: 7.6); it was 20, the size of the VHD, and refused every ISO.
+WINDOWS_MIN_GB = 6.0
 CLIENT_EVAL = "Microsoft Evaluation EULA, 90 days, non-production"
 EVALCENTER = "https://www.microsoft.com/en-us/evalcenter/"
 
@@ -77,7 +81,7 @@ def _server(version: str, core: bool = False) -> Entry:
               else "download the 64-bit ISO or VHD yourself, then import it"),
         page=f"{EVALCENTER}evaluate-windows-server-{version}",
         accepts=(".iso", ".vhd", ".vhdx"),
-        min_gb=20.0,
+        min_gb=WINDOWS_MIN_GB,
     )
 
 
@@ -98,7 +102,7 @@ CATALOG: dict[str, Entry] = {
         note="download the 64-bit ISO yourself, then import it",
         page=f"{EVALCENTER}evaluate-windows-11-enterprise",
         accepts=(".iso", ".vhd", ".vhdx"),
-        min_gb=20.0,
+        min_gb=WINDOWS_MIN_GB,
     ),
     "win10": Entry(
         id="win10",
@@ -113,7 +117,7 @@ CATALOG: dict[str, Entry] = {
               "Visual Studio or volume-licence download)"),
         page=f"{EVALCENTER}evaluate-windows-10-enterprise",
         accepts=(".iso", ".vhd", ".vhdx"),
-        min_gb=20.0,
+        min_gb=WINDOWS_MIN_GB,
     ),
     # Installation media a role installs from inside a Windows machine: not
     # an operating system, so it never makes a base; the user downloads it,
