@@ -197,9 +197,9 @@ class Iso:
         blk = self._sector(lba)
         tag = struct.unpack_from("<H", blk, 0)[0]
         if tag == 261:                              # file entry
-            l_ea, l_ad, data = *struct.unpack_from("<II", blk, 168), 176
+            (l_ea, l_ad), data = struct.unpack_from("<II", blk, 168), 176
         elif tag == 266:                            # extended file entry
-            l_ea, l_ad, data = *struct.unpack_from("<II", blk, 208), 216
+            (l_ea, l_ad), data = struct.unpack_from("<II", blk, 208), 216
         else:
             raise IsoError(f"{self.path.name}: no UDF file entry at sector {lba}")
         is_dir = blk[16 + 11] == 4
