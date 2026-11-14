@@ -40,14 +40,20 @@ ROOT_PACKAGES = [
 # added (a release asset of rdiol12/winlablite, with the licence, the patch
 # and the build recipe; the source is beside it) and puts it in place of the
 # packaged one. A packaged QEMU that already has the fix is left alone.
+# The build also carries upstream's two small XSAVE fixes for WHPX (3e985595ce:
+# reading a processor's XSAVE state failed with "failed to get xsave state"
+# whenever the buffer was too small; b63d6420ad: CPUID leaf 0xD), so a machine
+# given the host's own processor model keeps its AVX state.
 WHPX_FIX_SERIES = "11.1."
 WHPX_FIX_BASE = "11.1.3"
 WHPX_FIX_COMMIT = "6275714a72"
+WHPX_FIX_ALSO = ("3e985595ce", "b63d6420ad")
+WHPX_FIX_BUILD = 2
 WHPX_FIX_MARK = b"WHPX: Failed to reset partition"
 WHPX_FIX_TAG = f"qemu-whpx-reset-{WHPX_FIX_BASE}"
-WHPX_FIX_ASSET = f"{WHPX_FIX_TAG}.tar.gz"
+WHPX_FIX_ASSET = f"{WHPX_FIX_TAG}-{WHPX_FIX_BUILD}.tar.gz"
 WHPX_FIX_RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{WHPX_FIX_TAG}"
-WHPX_FIX_SHA256 = "35b05520a157e6705183cbab798cae8485f51083a8992b52511c19266aeea900"   # of the asset
+WHPX_FIX_SHA256 = "d16d409e7d7119026f7ed0546fdb725b30f8bb435d10c0be3cd791c018582c21"   # of the asset
 WHPX_FIX_EXE = "qemu-whpx-reset/qemu-system-x86_64.exe"
 
 USER_AGENT = "winlab/0.1"

@@ -14357,7 +14357,8 @@ def test_qemu_whpx_reset_fix():
     check("the fixed build is pinned by its SHA-256 and comes from winlab's public release",
           len(bs.WHPX_FIX_SHA256) == 64 and bs.WHPX_FIX_RELEASE ==
           f"https://github.com/rdiol12/winlablite/releases/download/qemu-whpx-reset-{bs.WHPX_FIX_BASE}"
-          and bs.WHPX_FIX_BASE.startswith(bs.WHPX_FIX_SERIES))
+          and bs.WHPX_FIX_BASE.startswith(bs.WHPX_FIX_SERIES)
+          and bs.WHPX_FIX_ASSET == f"qemu-whpx-reset-{bs.WHPX_FIX_BASE}-{bs.WHPX_FIX_BUILD}.tar.gz")
     spec = importlib.util.spec_from_file_location("pack_qemu_whpx", paths.APP_DIR / "tools" / "pack_qemu_whpx.py")
     pk = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pk)
@@ -14370,15 +14371,16 @@ def test_qemu_whpx_reset_fix():
             (tmp / "fixed.exe").write_bytes(fixed)
             (tmp / "COPYING").write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 2")
             (tmp / "0001-fix.patch").write_bytes(b"diff")
-            blob = pk.pack(tmp / "fixed.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+            blob = pk.pack(tmp / "fixed.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
             check("the archive is reproducible and carries the program, the licence, the patch and a notice",
-                  blob == pk.pack(tmp / "fixed.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+                  blob == pk.pack(tmp / "fixed.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
                   and sorted(tarfile.open(fileobj=io.BytesIO(blob)).getnames()) ==
                   ["qemu-whpx-reset/0001-fix.patch", "qemu-whpx-reset/COPYING", "qemu-whpx-reset/NOTICE", bs.WHPX_FIX_EXE]
-                  and bs.WHPX_FIX_COMMIT.encode() in pk.notice() and pk.SOURCE.encode() in pk.notice())
+                  and bs.WHPX_FIX_COMMIT.encode() in pk.notice() and pk.SOURCE.encode() in pk.notice()
+                  and all(c.encode() in pk.notice() for c in bs.WHPX_FIX_ALSO))
             (tmp / "stock-in.exe").write_bytes(b"MZ stock")
             try:
-                pk.pack(tmp / "stock-in.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+                pk.pack(tmp / "stock-in.exe", tmp / "COPYING", [tmp / "0001-fix.patch"])
                 refused = False
             except SystemExit:
                 refused = True
@@ -14430,7 +14432,7 @@ def test_qemu_whpx_reset_fix():
     lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
     check("LICENSING.md says what the fixed QEMU is, where its source is and that it is fetched",
           "QEMU with the WHPX reset fix" in lic and bs.WHPX_FIX_ASSET in lic and pk.SOURCE in lic
-          and bs.WHPX_FIX_COMMIT in lic)
+          and bs.WHPX_FIX_COMMIT in lic and all(c in lic for c in bs.WHPX_FIX_ALSO))
 
 
 if __name__ == "__main__":
