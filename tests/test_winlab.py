@@ -14594,5 +14594,127 @@ def test_windows_iso_is_not_refused_for_its_size():
         check("a download cut short is still asked about", "is this a full image" in said, said)
 
 
+def test_iso_reader_reads_udf_bridge_discs():
+    """Microsoft's newer Windows ISOs keep their files in UDF; the ISO 9660
+    side holds one README.TXT. The reader follows the UDF side then (14 Nov
+    2026: the Server 2025 evaluation ISO imported with no image list)."""
+    import struct
+    import tempfile
+    from winlab import iso9660
+
+    S = iso9660.SECTOR
+    PART = 300                                    # the UDF partition's first sector
+
+    def tag(ident: int, body: bytes) -> bytes:
+        return (struct.pack("<H", ident) + bytes(14) + body).ljust(S, b"\0")
+
+    def icb(file_type: int, alloc: int) -> bytes:
+        b = bytearray(20)
+        b[11] = file_type
+        struct.pack_into("<H", b, 18, alloc)
+        return bytes(b)
+
+    def file_entry(file_type: int, alloc: int, size: int, ads: bytes) -> bytes:
+        body = bytearray(176 - 16)
+        body[0:20] = icb(file_type, alloc)
+        struct.pack_into("<Q", body, 56 - 16, size)
+        struct.pack_into("<II", body, 168 - 16, 0, len(ads))
+        return tag(261, bytes(body) + ads)
+
+    def fid(name: str, lbn: int, flags: int = 0) -> bytes:
+        raw = (b"\x10" + name.encode("utf-16-be")) if name else b""
+        b = bytearray(38)
+        struct.pack_into("<H", b, 0, 257)
+        b[18], b[19] = flags, len(raw)
+        struct.pack_into("<II", b, 20, S, lbn)     # long_ad: length, block
+        out = bytes(b) + raw
+        return out.ljust((len(out) + 3) & ~3, b"\0")
+
+    big = bytes(range(256)) * 20                   # 5120 bytes: three sectors, in two extents
+    img = bytearray(S * (PART + 40))
+
+    def put(sector: int, data: bytes) -> None:
+        img[sector * S:sector * S + len(data)] = data
+
+    # ISO 9660 side: a primary descriptor whose root holds README.TXT only.
+    pvd = bytearray(S)
+    pvd[0], pvd[1:6], pvd[40:48] = 1, b"CD001", b"UDFTEST "
+    rootrec = bytearray(34)
+    struct.pack_into("<I", rootrec, 2, 20)
+    struct.pack_into("<I", rootrec, 10, S)
+    pvd[156:190] = rootrec
+    put(16, bytes(pvd))
+    term = bytearray(S)
+    term[0], term[1:6] = 255, b"CD001"
+    put(17, bytes(term))
+    for n, ident in ((18, b"BEA01"), (19, b"NSR02"), (20 + 1, b"TEA01")):
+        d = bytearray(S)
+        d[1:6] = ident
+        put(n, bytes(d))
+    rec = bytearray(33 + 12)
+    rec[0], rec[32], rec[33:45] = 46, 12, b"README.TXT;1"
+    struct.pack_into("<I", rec, 2, 22)
+    struct.pack_into("<I", rec, 10, 4)
+    put(20, bytes(rec).ljust(46, b"\0"))
+    put(22, b"UDF!")
+
+    # UDF side: anchor, partition, logical volume (one type 1 map), file set.
+    put(256, tag(2, struct.pack("<II", 4 * S, 260)))
+    pd = bytearray(S - 16)
+    struct.pack_into("<I", pd, 188 - 16, PART)
+    put(260, tag(5, bytes(pd)))
+    lvd = bytearray(S - 16)
+    struct.pack_into("<I", lvd, 212 - 16, S)
+    struct.pack_into("<II", lvd, 248 - 16, S, 0)   # the file set descriptor: partition block 0
+    struct.pack_into("<I", lvd, 268 - 16, 1)
+    lvd[440 - 16:440 - 16 + 6] = bytes([1, 6, 0, 0, 0, 0])
+    put(261, tag(6, bytes(lvd)))
+    put(262, tag(8, b""))
+    fsd = bytearray(S - 16)
+    struct.pack_into("<II", fsd, 400 - 16, S, 1)   # the root directory's entry: block 1
+    put(PART + 0, tag(256, bytes(fsd)))
+    # root (its listing embedded in the entry): sources/, setup.exe (embedded), a deleted name
+    root = fid("", 1, 0x0A) + fid("sources", 2, 0x02) + fid("setup.exe", 5) + fid("gone.txt", 5, 0x04)
+    put(PART + 1, file_entry(4, 3, len(root), root))
+    src = fid("", 1, 0x0A) + fid("install.wim", 4) + fid("Größe.txt", 5)
+    put(PART + 2, file_entry(4, 0, len(src), struct.pack("<II", len(src), 3)))   # short_ad -> block 3
+    put(PART + 3, src)
+    # install.wim: 4096 bytes at block 10, then 1024 at block 20
+    put(PART + 4, file_entry(5, 0, len(big), struct.pack("<IIII", 4096, 10, 1024, 20)))
+    put(PART + 10, big[:4096])
+    put(PART + 20, big[4096:])
+    put(PART + 5, file_entry(5, 3, 2, b"MZ"))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        f = Path(tmp) / "bridge.iso"
+        f.write_bytes(bytes(img))
+        with iso9660.Iso(f) as iso:
+            check("a disc whose ISO 9660 side is a README is read from its UDF side",
+                  iso.udf and [e.name for e in iso.listdir("")] == ["setup.exe", "sources"])
+            check("folders, Unicode names and deleted entries",
+                  [e.name for e in iso.listdir("sources")] == ["Größe.txt", "install.wim"]
+                  and iso.exists("SOURCES/Install.WIM") and not iso.exists("gone.txt"))
+            check("a file in several extents reads whole and in part",
+                  iso.read("sources/install.wim") == big and iso.entry("sources/install.wim").size == len(big)
+                  and iso.read_at("sources/install.wim", 4090, 12) == big[4090:4102])
+            check("a small file kept inside its own entry", iso.read("setup.exe") == b"MZ"
+                  and iso.read_at("setup.exe", 1, 1) == b"Z")
+            check("the label is still the disc's", iso.volume_id() == "UDFTEST")
+        # Without the UDF recognition the same bytes are the README disc they claim to be.
+        plain = bytearray(img)
+        plain[19 * S + 1:19 * S + 6] = b"XXXXX"
+        f.write_bytes(bytes(plain))
+        with iso9660.Iso(f) as iso:
+            check("no UDF on the disc: the ISO 9660 side as before",
+                  not iso.udf and [e.name for e in iso.listdir("")] == ["README.TXT"] and iso.read("README.TXT") == b"UDF!")
+        # A UDF 2.50 metadata partition is not followed: the ISO 9660 side stays.
+        meta = bytearray(img)
+        meta[261 * S + 440] = 2
+        f.write_bytes(bytes(meta))
+        with iso9660.Iso(f) as iso:
+            check("a partition map the reader does not follow leaves the ISO 9660 side in place",
+                  not iso.udf and [e.name for e in iso.listdir("")] == ["README.TXT"])
+
+
 if __name__ == "__main__":
     sys.exit(main())
