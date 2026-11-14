@@ -76,10 +76,31 @@ class BootstrapError(Exception):
     pass
 
 
+class _StayOnHttps(urllib.request.HTTPRedirectHandler):
+    """A download that began on https follows a redirect to http on https
+    instead. Some mirrors redirect through a plain-http address (Fedora's
+    virtio-win: https, then http, then https again), and that hop is where a
+    proxy or the server itself drops urllib's request ("Remote end closed
+    connection without response"); it is also the one hop nothing protects."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if req.full_url.lower().startswith("https://") and newurl.lower().startswith("http://"):
+            newurl = "https://" + newurl[len("http://"):]
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_StayOnHttps)
+
+
+def urlopen(req, timeout: float = 120):
+    """urllib's urlopen for every download winlab makes (_StayOnHttps)."""
+    return _OPENER.open(req, timeout=timeout)
+
+
 def _get(url: str, timeout: int = 120) -> bytes:
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urlopen(req, timeout=timeout) as resp:
             return resp.read()
     except (urllib.error.URLError, OSError) as exc:
         raise BootstrapError(f"cannot reach {url}: {exc}") from exc
@@ -139,7 +160,7 @@ def _open_resuming(url: str, tmp: Path):
     if have:
         headers["Range"] = f"bytes={have}-"
     try:
-        resp = urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=180)
+        resp = urlopen(urllib.request.Request(url, headers=headers), timeout=180)
     except urllib.error.HTTPError as exc:
         if exc.code != 416 or not have:
             raise

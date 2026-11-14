@@ -14527,5 +14527,50 @@ def test_qemu_whpx_reset_fix():
           and bs.WHPX_FIX_COMMIT in lic and all(c in lic for c in bs.WHPX_FIX_ALSO))
 
 
+def test_setup_downloads_news_and_tray():
+    """Three things 1.0.7's first Setup showed (14 Nov 2026): the virtio-win
+    download died on a redirect through plain http, the screen said "no news"
+    through a fetch that was reporting all along, and minimizing had nowhere
+    to go but the taskbar."""
+    import urllib.request
+    from winlab import bootstrap as bs, nativewin as nw, paths
+
+    h = bs._StayOnHttps()
+    req = urllib.request.Request("https://mirror.example/virtio-win.iso", headers={"User-Agent": "winlab"})
+    got = h.redirect_request(req, None, 301, "Moved", {}, "http://mirror.example/archive/virtio-win-0.1.iso")
+    check("a download that began on https follows a redirect to http on https",
+          got is not None and got.full_url == "https://mirror.example/archive/virtio-win-0.1.iso")
+    got = h.redirect_request(req, None, 302, "Found", {}, "https://other.example/x.iso")
+    check("an https redirect is followed as it is", got.full_url == "https://other.example/x.iso")
+    plain = urllib.request.Request("http://mirror.example/a")
+    got = h.redirect_request(plain, None, 302, "Found", {}, "http://mirror.example/b")
+    check("a download that began on http is not changed", got.full_url == "http://mirror.example/b")
+    check("every download goes through that opener",
+          any(isinstance(x, bs._StayOnHttps) for x in bs._OPENER.handlers)
+          and "urllib.request.urlopen(" not in Path(paths.APP_DIR / "winlab" / "bootstrap.py").read_text(encoding="utf-8")
+          and "urllib.request.urlopen(" not in Path(paths.APP_DIR / "winlab" / "virtio.py").read_text(encoding="utf-8"))
+
+    heard = []
+    bs.set_progress_sink(heard.append)
+    try:
+        bs._say("[3/622] flite", " 50%")
+    finally:
+        bs.set_progress_sink(None)
+    wsrc = Path(paths.APP_DIR / "winlab" / "webui.py").read_text(encoding="utf-8")
+    at = wsrc.index("set_progress_sink(inner)")
+    check("Get everything ready hears the downloads of a step it runs itself, and lets go of them after",
+          heard == ["[3/622] flite:  50%"] and "runners[nxt[\"job\"]](nxt)(inner)" in wsrc[at:at + 200]
+          and "set_progress_sink(None)" in wsrc[at:at + 300])
+
+    nsrc = Path(paths.APP_DIR / "winlab" / "nativewin.py").read_text(encoding="utf-8")
+    check("minimizing the window puts it in the notification area; a click or Open brings it back, Quit closes it",
+          nw.SC_MINIMIZE == 0xF020 and nw.WM_SYSCOMMAND == 0x0112 and nw.WM_TRAY > 0x8000
+          and "(wp & 0xFFF0) == SC_MINIMIZE and to_tray(hwnd)" in nsrc and "Shell_NotifyIconW(NIM_ADD" in nsrc
+          and "from_tray(hwnd)" in nsrc and '"Open winlab"' in nsrc and '"Quit winlab"' in nsrc)
+    check("the icon is taken away when the window closes, and a shell without a notification area minimizes as usual",
+          nsrc.index("if msg == WM_DESTROY:") < nsrc.index("Shell_NotifyIconW(NIM_DELETE", nsrc.index("if msg == WM_DESTROY:"))
+          and "return False   # no notification area" in nsrc)
+
+
 if __name__ == "__main__":
     sys.exit(main())

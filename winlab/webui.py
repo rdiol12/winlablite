@@ -2998,7 +2998,16 @@ class Dashboard:
                 if own is not None:
                     self._follow(own, inner)
                 else:
-                    runners[nxt["job"]](nxt)(inner)
+                    # Run here, not as a job of its own: its downloads report
+                    # per thread (bootstrap._say), so without this they went
+                    # to the log only and the screen said "no news" for the
+                    # whole of a long fetch.
+                    from .bootstrap import set_progress_sink
+                    set_progress_sink(inner)
+                    try:
+                        runners[nxt["job"]](nxt)(inner)
+                    finally:
+                        set_progress_sink(None)
                 plan["job"] = None
                 done.append(nxt)
                 publish(None, [st for st in todo() if st["id"] not in tried])
