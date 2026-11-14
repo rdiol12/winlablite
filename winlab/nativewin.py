@@ -367,6 +367,15 @@ WM_TRAY = 0x8000 + 1   # WM_APP + 1: the notification-area icon talks back with 
 NIM_ADD, NIM_DELETE = 0, 2
 NIF_MESSAGE, NIF_ICON, NIF_TIP, NIF_INFO = 0x1, 0x2, 0x4, 0x10
 TRAY_OPEN, TRAY_QUIT = 1, 2
+
+
+def _guid(text: str) -> GUID:
+    import uuid
+    return GUID.from_buffer_copy(uuid.UUID(text).bytes_le)
+
+
+CLSID_TASKBARLIST = _guid("56FDF344-FD6D-11D0-958A-006097C9A090")
+IID_ITASKBARLIST2 = _guid("602D4995-B13A-429B-A66E-1935E44F4317")
 TRAY_TIP = "winlab"
 TRAY_HINT = "winlab is still running here. Click to open it."
 IMAGE_ICON = 1
@@ -570,6 +579,26 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
         if out:
             ole32.CoTaskMemFree(ctypes.cast(out, ctypes.c_void_p))
 
+    def mark_fullscreen(on: bool) -> None:
+        """Tells the taskbar the window is (no longer) full screen. Covering
+        the monitor is not enough here: the keyboard focus sits in WebView2's
+        own child process, so the shell does not see a full-screen foreground
+        window by itself and keeps the taskbar on top of it."""
+        try:
+            if st.get("taskbar") is None:
+                tb = ctypes.c_void_p()
+                hr = ole32.CoCreateInstance(ctypes.byref(CLSID_TASKBARLIST), None, 1,
+                                            ctypes.byref(IID_ITASKBARLIST2), ctypes.byref(tb))
+                if hr < 0 or not tb.value:
+                    st["taskbar"] = 0
+                    return
+                vcall(tb.value, 3, [])   # HrInit
+                st["taskbar"] = tb.value
+            if st["taskbar"]:
+                vcall(st["taskbar"], 8, [W.HWND, W.BOOL], hwnd, on)   # MarkFullscreenWindow
+        except (NativeWindowError, OSError):
+            pass   # the window is still full size; only the taskbar may stay in front
+
     def on_fullscreen(sender, args):
         full = ctypes.c_int()
         vcall(st["webview"], WV_GET_CONTAINS_FULLSCREEN, [ctypes.POINTER(ctypes.c_int)], ctypes.byref(full))
@@ -585,8 +614,10 @@ def _run_windows(url: str, profile: Path, title: str) -> int:
             user32.SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE)
             user32.SetWindowPos(hwnd, None, m.left, m.top, m.right - m.left, m.bottom - m.top,
                                 SWP_FRAMECHANGED | SWP_NOOWNERZORDER)
+            mark_fullscreen(True)
         elif not full.value and st["full"]:
             st["full"] = False
+            mark_fullscreen(False)
             style, rc, zoomed = st["placement"]
             user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style)
             user32.SetWindowPos(hwnd, None, rc.left, rc.top, rc.right - rc.left, rc.bottom - rc.top,

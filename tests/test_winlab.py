@@ -14567,6 +14567,9 @@ def test_setup_downloads_news_and_tray():
           nw.SC_MINIMIZE == 0xF020 and nw.WM_SYSCOMMAND == 0x0112 and nw.WM_TRAY > 0x8000
           and "(wp & 0xFFF0) == SC_MINIMIZE and to_tray(hwnd)" in nsrc and "Shell_NotifyIconW(NIM_ADD" in nsrc
           and "from_tray(hwnd)" in nsrc and '"Open winlab"' in nsrc and '"Quit winlab"' in nsrc)
+    check("full screen tells the taskbar so (WebView2 holds the focus in its own process, so the shell does not notice), and tells it when it ends",
+          "mark_fullscreen(True)" in nsrc and "mark_fullscreen(False)" in nsrc and "MarkFullscreenWindow" in nsrc
+          and bytes(nw.IID_ITASKBARLIST2).hex() == "95492d603ab19b42a66e1935e44f4317")
     check("the icon is taken away when the window closes, and a shell without a notification area minimizes as usual",
           nsrc.index("if msg == WM_DESTROY:") < nsrc.index("Shell_NotifyIconW(NIM_DELETE", nsrc.index("if msg == WM_DESTROY:"))
           and "return False   # no notification area" in nsrc)
