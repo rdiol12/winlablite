@@ -7,6 +7,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -28,6 +29,26 @@ ROOT_PACKAGES = [
     f"{PREFIX}qemu-image-util",
     f"{PREFIX}qemu-guest-agent",
 ]
+
+# WHPX and a machine's reset. QEMU up to 11.1.x never puts the secondary
+# processors back into wait-for-SIPI when a WHPX machine resets, so a Windows
+# machine with more than one processor triple-faults at its first reboot
+# ("WHPX: Unexpected VP exit code 4"). Upstream fixed it after 11.1 (commit
+# 6275714a72, "target/i386/whpx: handle processor reset"); MSYS2's 11.1 does
+# not carry it. Until a QEMU with the fix is packaged, winlab fetches
+# qemu-system-x86_64.exe built from the same release with that one commit
+# added (a release asset of rdiol12/winlablite, with the licence, the patch
+# and the build recipe; the source is beside it) and puts it in place of the
+# packaged one. A packaged QEMU that already has the fix is left alone.
+WHPX_FIX_SERIES = "11.1."
+WHPX_FIX_BASE = "11.1.3"
+WHPX_FIX_COMMIT = "6275714a72"
+WHPX_FIX_MARK = b"WHPX: Failed to reset partition"
+WHPX_FIX_TAG = f"qemu-whpx-reset-{WHPX_FIX_BASE}"
+WHPX_FIX_ASSET = f"{WHPX_FIX_TAG}.tar.gz"
+WHPX_FIX_RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{WHPX_FIX_TAG}"
+WHPX_FIX_SHA256 = "35b05520a157e6705183cbab798cae8485f51083a8992b52511c19266aeea900"   # of the asset
+WHPX_FIX_EXE = "qemu-whpx-reset/qemu-system-x86_64.exe"
 
 USER_AGENT = "winlab/0.1"
 RETRIES = 4
@@ -457,6 +478,47 @@ def _fetch_windows_qemu(refresh: bool, keep_downloads: bool, say) -> None:
     write_manifest(closure)
     if not keep_downloads:
         shutil.rmtree(cache, ignore_errors=True)
+
+    version = next((p.version for p in closure if p.name == f"{PREFIX}qemu"), "")
+    try:
+        did = fit_whpx_reset_fix(exe, version, say)
+    except (BootstrapError, OSError, KeyError, tarfile.TarError) as exc:
+        did = f"could not be fetched ({exc})"
+    if did not in ("has it", "fitted"):
+        print(f"  WHPX reset fix: {did}; a Windows machine with more than one processor "
+              f"may stop at its first reboot", file=sys.stderr)
+
+
+def has_whpx_reset_fix(exe: Path) -> bool:
+    try:
+        return WHPX_FIX_MARK in exe.read_bytes()
+    except OSError:
+        return False
+
+
+def fit_whpx_reset_fix(exe: Path, version: str, say, download=None) -> str:
+    """Puts the QEMU with the reset fix in place of a packaged one that lacks
+    it. Returns what it did: "has it", "fitted", or why not."""
+    import io
+    if has_whpx_reset_fix(exe):
+        return "has it"
+    if not version.startswith(WHPX_FIX_SERIES):
+        return f"QEMU {version} is not the {WHPX_FIX_SERIES}x the fixed build was made for"
+    if len(WHPX_FIX_SHA256) != 64:
+        return "no fixed build is published yet"
+    say(f"QEMU {version} lacks the WHPX reset fix; fetching the fixed build")
+    archive = (download or _download_to)(f"{WHPX_FIX_RELEASE}/{WHPX_FIX_ASSET}",
+                                         paths.RUNTIME / "cache" / WHPX_FIX_ASSET, WHPX_FIX_SHA256, "QEMU reset fix")
+    with tarfile.open(fileobj=io.BytesIO(archive.read_bytes()), mode="r:gz") as tar:
+        member = tar.extractfile(WHPX_FIX_EXE)
+        data = member.read() if member else b""
+    if WHPX_FIX_MARK not in data:
+        raise BootstrapError(f"{WHPX_FIX_ASSET} does not hold a QEMU with the reset fix")
+    tmp = exe.with_name(exe.name + ".new")
+    tmp.write_bytes(data)
+    tmp.replace(exe)
+    archive.unlink(missing_ok=True)
+    return "fitted"
 
 
 def bootstrap(refresh: bool = False, keep_downloads: bool = False, progress=None) -> Path:

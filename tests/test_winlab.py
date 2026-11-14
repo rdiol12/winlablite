@@ -14344,5 +14344,94 @@ _TOFU_LESSONS = {   # lesson -> (lab, exercise)
 
 
 
+def test_qemu_whpx_reset_fix():
+    """A packaged QEMU 11.1 lacks the WHPX reset fix: bootstrap fetches the
+    program built with it, checked by its SHA-256, and puts it in place; a
+    QEMU that has the fix, or another series, is left alone."""
+    import importlib.util
+    import io
+    import tarfile
+    import tempfile
+    from winlab import bootstrap as bs, paths
+
+    check("the fixed build is pinned by its SHA-256 and comes from winlab's public release",
+          len(bs.WHPX_FIX_SHA256) == 64 and bs.WHPX_FIX_RELEASE ==
+          f"https://github.com/rdiol12/winlablite/releases/download/qemu-whpx-reset-{bs.WHPX_FIX_BASE}"
+          and bs.WHPX_FIX_BASE.startswith(bs.WHPX_FIX_SERIES))
+    spec = importlib.util.spec_from_file_location("pack_qemu_whpx", paths.APP_DIR / "tools" / "pack_qemu_whpx.py")
+    pk = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pk)
+    orig = paths.RUNTIME
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        paths.RUNTIME = tmp / "runtime"
+        try:
+            fixed = b"MZ fixed " + bs.WHPX_FIX_MARK + b" end"
+            (tmp / "fixed.exe").write_bytes(fixed)
+            (tmp / "COPYING").write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 2")
+            (tmp / "0001-fix.patch").write_bytes(b"diff")
+            blob = pk.pack(tmp / "fixed.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+            check("the archive is reproducible and carries the program, the licence, the patch and a notice",
+                  blob == pk.pack(tmp / "fixed.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+                  and sorted(tarfile.open(fileobj=io.BytesIO(blob)).getnames()) ==
+                  ["qemu-whpx-reset/0001-fix.patch", "qemu-whpx-reset/COPYING", "qemu-whpx-reset/NOTICE", bs.WHPX_FIX_EXE]
+                  and bs.WHPX_FIX_COMMIT.encode() in pk.notice() and pk.SOURCE.encode() in pk.notice())
+            (tmp / "stock-in.exe").write_bytes(b"MZ stock")
+            try:
+                pk.pack(tmp / "stock-in.exe", tmp / "COPYING", tmp / "0001-fix.patch")
+                refused = False
+            except SystemExit:
+                refused = True
+            check("a program without the fix is never packed", refused)
+            calls = []
+
+            def download(url, dest, sha, label=""):
+                calls.append((url, sha))
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(blob)
+                return dest
+            said = []
+            exe = tmp / "qemu-system-x86_64.exe"
+            exe.write_bytes(b"MZ stock")
+            check("a stock program is told from a fixed one by the fix's own message",
+                  not bs.has_whpx_reset_fix(exe) and bs.has_whpx_reset_fix(tmp / "fixed.exe")
+                  and not bs.has_whpx_reset_fix(tmp / "missing.exe"))
+            did = bs.fit_whpx_reset_fix(exe, "11.1.3-2", said.append, download)
+            check("a packaged 11.1 without the fix gets the fixed program, fetched against the pinned SHA-256",
+                  did == "fitted" and exe.read_bytes() == fixed and said
+                  and calls == [(f"{bs.WHPX_FIX_RELEASE}/{bs.WHPX_FIX_ASSET}", bs.WHPX_FIX_SHA256)]
+                  and not (paths.RUNTIME / "cache" / bs.WHPX_FIX_ASSET).exists(), did)
+            check("a QEMU that has the fix is left alone and nothing is fetched",
+                  bs.fit_whpx_reset_fix(exe, "11.1.3-2", said.append, download) == "has it" and len(calls) == 1)
+            exe.write_bytes(b"MZ stock 12")
+            did = bs.fit_whpx_reset_fix(exe, "12.0.0-1", said.append, download)
+            check("another series is never given an 11.1 program", did not in ("fitted", "has it")
+                  and exe.read_bytes() == b"MZ stock 12" and len(calls) == 1, did)
+
+            def wrong(url, dest, sha, label=""):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                raw = io.BytesIO()
+                with tarfile.open(fileobj=raw, mode="w:gz") as tar:
+                    ti = tarfile.TarInfo(bs.WHPX_FIX_EXE)
+                    ti.size = 8
+                    tar.addfile(ti, io.BytesIO(b"MZ stock"))
+                dest.write_bytes(raw.getvalue())
+                return dest
+            exe.write_bytes(b"MZ stock")
+            try:
+                bs.fit_whpx_reset_fix(exe, "11.1.4-1", said.append, wrong)
+                refused = False
+            except bs.BootstrapError:
+                refused = True
+            check("an archive whose program lacks the fix is refused and the packaged one stays",
+                  refused and exe.read_bytes() == b"MZ stock")
+        finally:
+            paths.RUNTIME = orig
+    lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
+    check("LICENSING.md says what the fixed QEMU is, where its source is and that it is fetched",
+          "QEMU with the WHPX reset fix" in lic and bs.WHPX_FIX_ASSET in lic and pk.SOURCE in lic
+          and bs.WHPX_FIX_COMMIT in lic)
+
+
 if __name__ == "__main__":
     sys.exit(main())
