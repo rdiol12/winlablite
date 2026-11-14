@@ -14517,6 +14517,10 @@ def test_qemu_whpx_reset_fix():
             paths.qemu_exe, paths.qemu_ready, bs.is_linux, paths.RUNTIME = oexe, oready, olinux, orig
     wsrc = Path(paths.APP_DIR / "winlab" / "webui.py").read_text(encoding="utf-8")
     check("winlab refits the fixed QEMU when its desktop starts", "refit_whpx_fixes()" in wsrc)
+    bsrc = Path(paths.APP_DIR / "winlab" / "bootstrap.py").read_text(encoding="utf-8")
+    check("after the unpack is swapped into place, the fix goes to the program where it now is, not the staging folder's",
+          "fit_whpx_reset_fix(paths.qemu_exe(), version, say)" in bsrc
+          and bsrc.index("_swap_in(target, final)") < bsrc.index("fit_whpx_reset_fix(paths.qemu_exe(), version, say)"))
     lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
     check("LICENSING.md says what the fixed QEMU is, where its source is and that it is fetched",
           "QEMU with the WHPX reset fix" in lic and bs.WHPX_FIX_ASSET in lic and pk.SOURCE in lic

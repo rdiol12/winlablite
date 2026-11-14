@@ -488,7 +488,7 @@ def _fetch_windows_qemu(refresh: bool, keep_downloads: bool, say) -> None:
 
     version = next((p.version for p in closure if p.name == f"{PREFIX}qemu"), "")
     try:
-        did = fit_whpx_reset_fix(exe, version, say)
+        did = fit_whpx_reset_fix(paths.qemu_exe(), version, say)   # exe is the staging folder's, gone since the swap
     except (BootstrapError, OSError, KeyError, tarfile.TarError) as exc:
         did = f"could not be fetched ({exc})"
     if did not in ("has it", "fitted"):
