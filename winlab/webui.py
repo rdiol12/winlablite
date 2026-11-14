@@ -4213,6 +4213,10 @@ def _clean_leftovers() -> None:
     from .bootstrap import clean_leftovers
     for f in clean_leftovers():
         print(f"removed a leftover half file: {f}", file=sys.stderr)
+    from .bootstrap import refit_whpx_fixes
+    did = refit_whpx_fixes()
+    if did not in ("has it", "not needed"):
+        print(f"QEMU's WHPX fixes: {did}", file=sys.stderr)
 
 
 def serve(target: str = "", port: int = 8780, accel: str = "", open_browser: bool = True) -> None:

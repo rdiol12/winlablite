@@ -14367,7 +14367,7 @@ def test_qemu_whpx_reset_fix():
         tmp = Path(tmp)
         paths.RUNTIME = tmp / "runtime"
         try:
-            fixed = b"MZ fixed " + bs.WHPX_FIX_MARK + b" end"
+            fixed = b"MZ fixed " + bs.WHPX_FIX_MARK + b" " + bs.WHPX_XSAVE_MARK + b" end"
             (tmp / "fixed.exe").write_bytes(fixed)
             (tmp / "COPYING").write_bytes(b"GNU GENERAL PUBLIC LICENSE Version 2")
             (tmp / "0001-fix.patch").write_bytes(b"diff")
@@ -14429,6 +14429,94 @@ def test_qemu_whpx_reset_fix():
                   refused and exe.read_bytes() == b"MZ stock")
         finally:
             paths.RUNTIME = orig
+    # The host's own processor for a WHPX machine, only on a QEMU with the XSAVE fix.
+    from winlab import orchestrator
+    from winlab.providers import qemu as qp
+    oexe, oready, olinux = paths.qemu_exe, paths.qemu_ready, bs.is_linux
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        paths.RUNTIME = tmp / "runtime"
+        paths.RUNTIME.mkdir()
+        exe = tmp / "qemu-system-x86_64.exe"
+        paths.qemu_exe = lambda: exe
+        try:
+            check("no QEMU yet: the named model", qp.cpu_model("whpx") == qp.WHPX_NAMED)
+            exe.write_bytes(b"MZ " + bs.WHPX_FIX_MARK)
+            check("a QEMU with the reset fix alone keeps the named model, without XSAVE",
+                  qp.cpu_model("whpx") == qp.WHPX_NAMED and "-xsave" in qp.WHPX_NAMED and bs.has_whpx_reset_fix(exe)
+                  and not bs.has_whpx_xsave_fix(exe))
+            both = b"MZ " + bs.WHPX_FIX_MARK + b" " + bs.WHPX_XSAVE_MARK + b"%08lx"
+            exe.write_bytes(both + b" build 2")
+            check("with the XSAVE fix a WHPX machine gets the host's own processor; KVM and TCG are as they were",
+                  qp.cpu_model("whpx") == qp.WHPX_HOST == "host,hv-relaxed,hv-vapic,hv-time"
+                  and qp.cpu_model("tcg") == "max" and qp.cpu_model("kvm").startswith("host"))
+            src = Path(paths.APP_DIR / "winlab" / "prepare.py").read_text(encoding="utf-8")
+            check("the base is still installed on the named model", qp.WHPX_NAMED in src)
+
+            # An unpacked QEMU from before the fixed build is refitted when winlab starts.
+            calls = []
+            blob2 = pk.pack(exe, tmp / "c", []) if (tmp / "c").write_bytes(b"GPL") else b""
+            orig_dl = bs._download_to
+
+            def download(url, dest, sha, label=""):
+                calls.append(url)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_bytes(blob2)
+                return dest
+            bs._download_to = download
+            bs.is_linux = lambda: False
+            paths.qemu_ready = lambda: True
+            try:
+                (paths.RUNTIME / "manifest.txt").write_text(
+                    f"{bs.PREFIX}glib2\t2.90.1-1\tab\n{bs.PREFIX}qemu\t11.1.3-2\tcd\n", encoding="utf-8")
+                check("the unpacked package's version is read from the manifest", bs.packaged_qemu_version() == "11.1.3-2")
+                check("a QEMU with both fixes is left alone at start", bs.refit_whpx_fixes() == "has it" and not calls)
+                exe.write_bytes(b"MZ " + bs.WHPX_FIX_MARK + b" build 1")
+                check("one with the reset fix only (the first build) is given the second",
+                      bs.refit_whpx_fixes() == "fitted" and len(calls) == 1 and bs.has_whpx_xsave_fix(exe)
+                      and qp.cpu_model("whpx") == qp.WHPX_HOST)
+                exe.write_bytes(b"MZ stock")
+                paths.qemu_ready = lambda: False
+                check("a half-unpacked QEMU is not touched", bs.refit_whpx_fixes() == "not needed" and len(calls) == 1)
+                paths.qemu_ready = lambda: True
+                bs.is_linux = lambda: True
+                check("nor is a Linux host's own QEMU", bs.refit_whpx_fixes() == "not needed" and len(calls) == 1)
+                bs.is_linux = lambda: False
+
+                def offline(url, dest, sha, label=""):
+                    raise bs.BootstrapError("no network")
+                bs._download_to = offline
+                check("no network at start: it says so, the machines keep the named model, the next start tries again",
+                      "could not be fetched" in bs.refit_whpx_fixes() and qp.cpu_model("whpx") == qp.WHPX_NAMED)
+            finally:
+                bs._download_to = orig_dl
+
+            # A hibernated Windows wakes on the processor it went to sleep on.
+            cf = tmp / "cpu.txt"
+            argv = ["qemu", "-cpu", qp.WHPX_HOST, "-smp", "2"]
+            orchestrator.keep_cpu(argv, cf, False, "whpx")
+            check("a start notes the processor model beside the machine's disks",
+                  cf.read_text(encoding="utf-8") == qp.WHPX_HOST and argv[2] == qp.WHPX_HOST)
+            cf.write_text(qp.WHPX_NAMED, encoding="utf-8")
+            argv = ["qemu", "-cpu", qp.WHPX_HOST, "-smp", "2"]
+            orchestrator.keep_cpu(argv, cf, True, "whpx")
+            check("waking from hibernation keeps the model it slept on", argv[2] == qp.WHPX_NAMED)
+            argv = ["qemu", "-cpu", qp.WHPX_HOST]
+            orchestrator.keep_cpu(argv, cf, False, "whpx")
+            check("the next cold start moves to the host's processor", argv[2] == qp.WHPX_HOST
+                  and cf.read_text(encoding="utf-8") == qp.WHPX_HOST)
+            cf.unlink()
+            argv = ["qemu", "-cpu", qp.WHPX_HOST]
+            orchestrator.keep_cpu(argv, cf, True, "whpx")
+            check("a machine put to sleep by an older winlab wakes on the named model", argv[2] == qp.WHPX_NAMED)
+            cf.unlink()
+            argv = ["qemu", "-cpu", "host"]
+            orchestrator.keep_cpu(argv, cf, True, "kvm")
+            check("on KVM nothing changes", argv[2] == "host")
+        finally:
+            paths.qemu_exe, paths.qemu_ready, bs.is_linux, paths.RUNTIME = oexe, oready, olinux, orig
+    wsrc = Path(paths.APP_DIR / "winlab" / "webui.py").read_text(encoding="utf-8")
+    check("winlab refits the fixed QEMU when its desktop starts", "refit_whpx_fixes()" in wsrc)
     lic = (paths.APP_DIR / "LICENSING.md").read_text(encoding="utf-8")
     check("LICENSING.md says what the fixed QEMU is, where its source is and that it is fetched",
           "QEMU with the WHPX reset fix" in lic and bs.WHPX_FIX_ASSET in lic and pk.SOURCE in lic

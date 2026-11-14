@@ -50,6 +50,7 @@ WHPX_FIX_COMMIT = "6275714a72"
 WHPX_FIX_ALSO = ("3e985595ce", "b63d6420ad")
 WHPX_FIX_BUILD = 2
 WHPX_FIX_MARK = b"WHPX: Failed to reset partition"
+WHPX_XSAVE_MARK = b"WHPX: Failed to get xsave state, hr="
 WHPX_FIX_TAG = f"qemu-whpx-reset-{WHPX_FIX_BASE}"
 WHPX_FIX_ASSET = f"{WHPX_FIX_TAG}-{WHPX_FIX_BUILD}.tar.gz"
 WHPX_FIX_RELEASE = f"https://github.com/rdiol12/winlablite/releases/download/{WHPX_FIX_TAG}"
@@ -495,18 +496,63 @@ def _fetch_windows_qemu(refresh: bool, keep_downloads: bool, say) -> None:
               f"may stop at its first reboot", file=sys.stderr)
 
 
-def has_whpx_reset_fix(exe: Path) -> bool:
+_marks: dict[tuple, tuple[bool, bool]] = {}
+
+
+def _whpx_marks(exe: Path) -> tuple[bool, bool]:
+    """(reset fix, XSAVE fix) of a QEMU program, read once per file as it is."""
     try:
-        return WHPX_FIX_MARK in exe.read_bytes()
+        st = exe.stat()
+        key = (str(exe), st.st_size, st.st_mtime_ns)
+        if key not in _marks:
+            data = exe.read_bytes()
+            _marks.clear()
+            _marks[key] = (WHPX_FIX_MARK in data, WHPX_XSAVE_MARK in data)
+        return _marks[key]
     except OSError:
-        return False
+        return False, False
+
+
+def has_whpx_reset_fix(exe: Path) -> bool:
+    return _whpx_marks(exe)[0]
+
+
+def has_whpx_xsave_fix(exe: Path) -> bool:
+    """A WHPX machine on this QEMU can be given the host's own processor."""
+    return _whpx_marks(exe)[1]
+
+
+def packaged_qemu_version() -> str:
+    """The version of MSYS2's QEMU package that was unpacked (the manifest)."""
+    try:
+        for line in (paths.RUNTIME / "manifest.txt").read_text(encoding="utf-8").splitlines():
+            name, _, rest = line.partition("\t")
+            if name == f"{PREFIX}qemu":
+                return rest.split("\t")[0]
+    except OSError:
+        pass
+    return ""
+
+
+def refit_whpx_fixes(say=None) -> str:
+    """A QEMU unpacked before the fixed build existed (or before its second
+    build) gets it when winlab starts. Nothing happens on Linux, without a
+    finished unpack, or while a machine holds the program open: the next
+    start tries again."""
+    if is_linux() or not paths.qemu_ready():
+        return "not needed"
+    exe = paths.qemu_exe()
+    try:
+        return fit_whpx_reset_fix(exe, packaged_qemu_version(), say or (lambda _m: None))
+    except (BootstrapError, OSError, KeyError, tarfile.TarError) as exc:
+        return f"could not be fetched ({exc})"
 
 
 def fit_whpx_reset_fix(exe: Path, version: str, say, download=None) -> str:
     """Puts the QEMU with the reset fix in place of a packaged one that lacks
     it. Returns what it did: "has it", "fitted", or why not."""
     import io
-    if has_whpx_reset_fix(exe):
+    if has_whpx_reset_fix(exe) and has_whpx_xsave_fix(exe):
         return "has it"
     if not version.startswith(WHPX_FIX_SERIES):
         return f"QEMU {version} is not the {WHPX_FIX_SERIES}x the fixed build was made for"
@@ -518,7 +564,7 @@ def fit_whpx_reset_fix(exe: Path, version: str, say, download=None) -> str:
     with tarfile.open(fileobj=io.BytesIO(archive.read_bytes()), mode="r:gz") as tar:
         member = tar.extractfile(WHPX_FIX_EXE)
         data = member.read() if member else b""
-    if WHPX_FIX_MARK not in data:
+    if WHPX_FIX_MARK not in data or WHPX_XSAVE_MARK not in data:
         raise BootstrapError(f"{WHPX_FIX_ASSET} does not hold a QEMU with the reset fix")
     tmp = exe.with_name(exe.name + ".new")
     tmp.write_bytes(data)

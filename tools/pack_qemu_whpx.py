@@ -84,7 +84,7 @@ def notice() -> bytes:
 
 def pack(exe: Path, license_file: Path, patches: list[Path]) -> bytes:
     data = exe.read_bytes()
-    if bs.WHPX_FIX_MARK not in data:
+    if bs.WHPX_FIX_MARK not in data or bs.WHPX_XSAVE_MARK not in data:
         raise SystemExit(f"{exe} is not a QEMU with the reset fix")
     files = {
         f"{TOP}/COPYING": (license_file.read_bytes(), 0o644),

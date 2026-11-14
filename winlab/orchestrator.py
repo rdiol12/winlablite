@@ -40,6 +40,28 @@ class OrchestratorError(Exception):
     pass
 
 
+def keep_cpu(argv: list[str], cpu_file: Path, waking: bool, accel: str) -> None:
+    """A hibernated Windows wakes on the processor it went to sleep on: its
+    memory image holds that processor's features. The model a machine starts
+    with is noted beside its disks; one put to sleep before winlab noted it
+    slept on WHPX's named model."""
+    if "-cpu" not in argv:
+        return
+    at = argv.index("-cpu") + 1
+    if waking:
+        try:
+            was = cpu_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            from .providers.qemu import WHPX_NAMED
+            was = WHPX_NAMED if accel == "whpx" else ""
+        if was:
+            argv[at] = was
+    try:
+        cpu_file.write_text(argv[at], encoding="utf-8")
+    except OSError:
+        pass
+
+
 @dataclass
 class BootReport:
     lab: str
@@ -839,6 +861,7 @@ class Orchestrator:
             restoring = saved.exists() and node_id in resumed and not iso
             if saved.exists() and not restoring:
                 saved.unlink(missing_ok=True)
+            keep_cpu(argv, self.provider.node_dir(node_id) / "cpu.txt", node_id in resumed, self.accel)
             qlog = self.provider.node_dir(node_id) / "qemu.log"
             log_at = qlog.stat().st_size if qlog.exists() else 0
             if restoring and "-S" in argv:
