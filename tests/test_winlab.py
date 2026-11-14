@@ -1270,7 +1270,7 @@ def test_base_trim_and_seal():
                 except prepare.PrepareError as exc:
                     check("prepare after retire explains the missing ISO", "removed after" in str(exc), str(exc))
             finally:
-                images.CATALOG["ws2025"].min_gb = 20.0
+                images.CATALOG["ws2025"].min_gb = images.WINDOWS_MIN_GB
         finally:
             images._run_img = real_run
             os.environ.pop("WINLAB_IMAGES", None)
@@ -2689,7 +2689,7 @@ def test_windows_versions():
             check("machine tiles name the version", nodes["dc01"]["os"] == "Windows Server 2022"
                   and nodes["fs01"]["os"] == "Windows Server 2022 Core" and nodes["pc01"]["os"] == "Windows 10")
         finally:
-            images.CATALOG["ws2022"].min_gb = images.CATALOG["ws2019"].min_gb = 20.0
+            images.CATALOG["ws2022"].min_gb = images.CATALOG["ws2019"].min_gb = images.WINDOWS_MIN_GB
             os.environ.pop("WINLAB_IMAGES", None)
 
 
@@ -14573,6 +14573,25 @@ def test_setup_downloads_news_and_tray():
     check("the icon is taken away when the window closes, and a shell without a notification area minimizes as usual",
           nsrc.index("if msg == WM_DESTROY:") < nsrc.index("Shell_NotifyIconW(NIM_DELETE", nsrc.index("if msg == WM_DESTROY:"))
           and "return False   # no notification area" in nsrc)
+
+
+def test_windows_iso_is_not_refused_for_its_size():
+    """Microsoft's Windows Server 2025 evaluation ISO is 7.6 GiB; 1.0.7
+    refused it ("is only 7.6 GiB; ws2025 media is normally around 20 GiB")."""
+    import tempfile
+    from winlab import images
+    windows = [e for e in images.CATALOG.values() if e.kind in ("windows-server", "windows-client") and e.mode == images.IMPORT]
+    check("every Windows medium takes an ISO of 4 GiB and more",
+          windows and all(0 < e.min_gb * 0.5 <= 4.0 for e in windows), str({e.id: e.min_gb for e in windows}))
+    with tempfile.TemporaryDirectory() as tmp:
+        small = Path(tmp) / "truncated.iso"
+        small.write_bytes(b"\0" * 4096)
+        try:
+            images.import_media("ws2025", small)
+            said = ""
+        except images.ImageError as exc:
+            said = str(exc)
+        check("a download cut short is still asked about", "is this a full image" in said, said)
 
 
 if __name__ == "__main__":
